@@ -1,0 +1,79 @@
+:root {
+  --navy: #292C5D;
+  --navy-dark: #1B1F4A;
+  --gold: #F5C842;
+  --gold-dim: #C9A227;
+  --gray: #6C6F94;
+  --bg: #0B0D22;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 40px 24px 80px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: var(--gold);
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+h1 { margin: 0; font-size: 28px; }
+
+.status-pill {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 14px;
+  border-radius: 20px;
+}
+.status-pill.online { background: rgba(124, 215, 156, 0.15); color: #7CD79C; }
+.status-pill.offline { background: rgba(232, 131, 127, 0.15); color: #E8837F; }
+
+.card {
+  background: var(--navy-dark);
+  border: 1px solid rgba(245, 200, 66, 0.18);
+  border-radius: 14px;
+  padding: 24px 28px;
+}
+
+.muted { color: var(--gray); font-size: 14px; line-height: 1.6; }
+.error { color: #E8837F; font-size: 14px; }
+
+code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+th, td { text-align: left; padding: 10px 8px; font-size: 13px; border-top: 1px solid rgba(255,255,255,0.08); }
+th { color: var(--gold-dim); text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
+
+.footer {
+  margin-top: 40px;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--gray);
+}

@@ -1,0 +1,21 @@
+# --- Python / backend ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.env
+
+# --- Node / frontend ---
+node_modules/
+dist/
+.env.local
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+*.log
+
+# --- Dados baixados localmente (PGFN, etc.) ---
+backend/data/

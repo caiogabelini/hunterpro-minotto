@@ -1,0 +1,31 @@
+# --- Web framework ---
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+
+# --- Banco de dados ---
+sqlalchemy==2.0.35
+alembic==1.13.2
+psycopg2-binary==2.9.9
+
+# --- Fila / tarefas assíncronas ---
+celery==5.4.0
+redis==5.0.8
+
+# --- Configuração e validação ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+python-dotenv==1.0.1
+
+# --- Auth (JWT) ---
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# --- HTTP / integrações externas ---
+httpx==0.27.2
+beautifulsoup4==4.12.3
+dnspython==2.6.1
+
+# --- Utilidades ---
+python-multipart==0.0.9
+pandas==2.2.2
+openpyxl==3.1.5
