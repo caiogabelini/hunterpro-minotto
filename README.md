@@ -50,6 +50,14 @@ interno do Docker.
   garantindo que a soma sempre bate 100
 - ✅ Lookup de **Zona Franca/ALC** (`app/scoring/zona_franca.py`) — já
   funcional, sem dependência externa
+- ✅ **Parser dos Dados Abertos da PGFN** (`app/services/pgfn.py`) —
+  lê o CSV trimestral, filtra pessoa jurídica e inscrições realmente
+  ativas, indexa por CNPJ. Separado em duas etapas: `refresh_pgfn_index`
+  (pesado, roda quando o arquivo trimestral atualiza) e
+  `enrich_pgfn_divida_ativa` (consulta rápida via Redis, por lead).
+  Testado com CSV sintético + Redis real rodando de ponta a ponta.
+  **Retorna a contagem de inscrições, não os pontos** — a fórmula de
+  conversão pra score ainda depende de confirmação com o cliente.
 - ✅ API FastAPI com endpoint de listagem de leads (`/api/leads`) e
   health check (`/health`)
 - ✅ Alembic configurado (migrations)
@@ -57,16 +65,17 @@ interno do Docker.
   pipeline de enriquecimento
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 7 testes automatizados passando (`pytest`)
+- ✅ 25 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
 Em ordem de prioridade combinada com o cliente:
 
 1. **Fórmula da dívida ativa PGFN** — confirmar com o Douglas a
-   interpretação de "0 a 6, peso 40" antes de implementar
-   `enrich_pgfn_divida_ativa`
-2. Parser do CSV trimestral da PGFN (dados abertos)
+   interpretação de "0 a 6, peso 40" (hoje peso 20) antes de converter
+   `qtd_inscricoes_ativas` em pontos de score. Pergunta já enviada via
+   WhatsApp, aguardando resposta.
+2. ~~Parser do CSV trimestral da PGFN~~ ✅ feito — falta só a fórmula acima
 3. Integração com a API do CNES
 4. Busca inicial via Google Places (`search_google_places`)
 5. Enriquecimento via Receita Federal (mesmo padrão do projeto SR)
@@ -75,6 +84,12 @@ Em ordem de prioridade combinada com o cliente:
 8. `compute_lead_score` — aplicar `app/scoring/rules.py` de fato
 9. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
    exportação CSV/Excel pedida pela Sulamita)
+
+**Nota operacional:** o download do CSV trimestral da PGFN em si (via
+navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
+arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar
+`refresh_pgfn_index`. Automação desse download fica para uma sessão
+futura, se valer a pena frente ao volume (atualiza só 1x por trimestre).
 
 ---
 

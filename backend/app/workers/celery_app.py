@@ -52,16 +52,58 @@ def enrich_receita_federal(cnpj: str) -> dict:
     raise NotImplementedError("Implementar na próxima sessão.")
 
 
+@celery_app.task(name="refresh_pgfn_index")
+def refresh_pgfn_index() -> dict:
+    """
+    Reconstrói o índice CNPJ → dívida ativa a partir dos CSVs baixados
+    em `settings.PGFN_DADOS_ABERTOS_DIR`, e salva no Redis.
+
+    Roda quando o arquivo trimestral da PGFN é atualizado — NÃO por
+    lead. Ver `enrich_pgfn_divida_ativa` para a consulta por lead.
+    """
+    import redis as redis_lib
+
+    from app.services.pgfn import build_pgfn_index, find_pgfn_csv_files, save_index_to_redis
+
+    csv_paths = find_pgfn_csv_files(settings.PGFN_DADOS_ABERTOS_DIR)
+    if not csv_paths:
+        return {"status": "sem_arquivos", "dir": settings.PGFN_DADOS_ABERTOS_DIR}
+
+    index = build_pgfn_index(csv_paths)
+    redis_client = redis_lib.from_url(settings.REDIS_URL)
+    total = save_index_to_redis(index, redis_client)
+
+    return {"status": "ok", "cnpjs_indexados": total, "arquivos_processados": [str(p) for p in csv_paths]}
+
+
 @celery_app.task(name="enrich_pgfn_divida_ativa")
 def enrich_pgfn_divida_ativa(cnpj: str) -> dict:
     """
-    TODO: cruzar CNPJ com o CSV trimestral de dados abertos da PGFN.
+    Consulta rápida (Redis) do CNPJ do lead contra o índice da PGFN.
 
-    Retorna nº de inscrições ativas (não retorna contato — ver
-    app/scoring/rules.py para a fórmula de pontuação, ainda a validar
-    com o cliente).
+    Retorna a QUANTIDADE de inscrições ativas — não converte em pontos
+    (a fórmula ainda não foi confirmada com o cliente, ver
+    app/scoring/rules.py) e não retorna contato nenhum (a PGFN não tem
+    esse dado; contato vem de outras etapas do pipeline, cruzado pelo
+    mesmo CNPJ).
     """
-    raise NotImplementedError("Implementar na próxima sessão.")
+    import redis as redis_lib
+
+    from app.services.pgfn import lookup_debt_from_redis, normalize_cnpj
+
+    redis_client = redis_lib.from_url(settings.REDIS_URL)
+    normalized_cnpj = normalize_cnpj(cnpj) or cnpj
+    summary = lookup_debt_from_redis(cnpj, redis_client)
+
+    if summary is None:
+        return {"cnpj": normalized_cnpj, "qtd_inscricoes_ativas": 0, "valor_total": 0.0, "algum_ajuizado": False}
+
+    return {
+        "cnpj": summary.cnpj,
+        "qtd_inscricoes_ativas": summary.qtd_inscricoes_ativas,
+        "valor_total": summary.valor_total,
+        "algum_ajuizado": summary.algum_ajuizado,
+    }
 
 
 @celery_app.task(name="enrich_zona_franca")
