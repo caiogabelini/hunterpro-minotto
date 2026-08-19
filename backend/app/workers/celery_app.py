@@ -9,7 +9,9 @@ apresentado no kickoff (documento 03_Fluxo_Execucao.html):
   2. enrich_receita_federal    → CNAE, sócios, porte, anos de mercado
   3. enrich_pgfn_divida_ativa  → cruzamento por CNPJ (sem contato, só sinal)
   4. enrich_zona_franca        → lookup estático de município (sem custo externo)
-  5. enrich_cnes               → especialidade oficial de saúde
+  5. enrich_cnes               → cruzamento por CNPJ (confirma unidade de
+                                  saúde registrada; API não expõe especialidade,
+                                  ver app/services/cnes.py)
   6. enrich_site_firecrawl     → varredura de site + IA (serviços, RQE inferido)
   7. enrich_instagram          → localizado a partir do site
   8. enrich_linkedin           → busca por razão social/decisor
@@ -117,9 +119,35 @@ def enrich_zona_franca(municipio: str, uf: str) -> bool:
 
 
 @celery_app.task(name="enrich_cnes")
-def enrich_cnes(cnpj: str) -> dict:
-    """TODO: consultar API do CNES para especialidade oficial de saúde."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+def enrich_cnes(cnpj: str, codigo_municipio: int) -> dict:
+    """
+    Cruza o CNPJ do lead contra os estabelecimentos de saúde cadastrados
+    no CNES para o município informado (código IBGE de 6 dígitos — precisa
+    vir de uma etapa anterior do pipeline, ex.: enrich_receita_federal).
+
+    A API do CNES não tem filtro por CNPJ nem retorna especialidade médica
+    (ver app/services/cnes.py para as limitações confirmadas) — este
+    enriquecimento só confirma se o CNPJ tem unidade registrada no CNES.
+    Isso reforça (não substitui) a inferência de RQE via IA feita em
+    `enrich_site_firecrawl`; a decisão de como combinar os dois no score
+    do critério `rqe_especialista` ainda não foi confirmada com o cliente.
+    """
+    from app.services.cnes import fetch_estabelecimentos_por_municipio, find_estabelecimento_by_cnpj
+    from app.services.pgfn import normalize_cnpj
+
+    estabelecimentos = fetch_estabelecimentos_por_municipio(codigo_municipio)
+    encontrado = find_estabelecimento_by_cnpj(estabelecimentos, cnpj)
+    normalized_cnpj = normalize_cnpj(cnpj) or cnpj
+
+    if encontrado is None:
+        return {"cnpj": normalized_cnpj, "encontrado_cnes": False}
+
+    return {
+        "cnpj": encontrado.numero_cnpj,
+        "encontrado_cnes": True,
+        "cnes_codigo": encontrado.codigo_cnes,
+        "codigo_tipo_unidade": encontrado.codigo_tipo_unidade,
+    }
 
 
 @celery_app.task(name="enrich_site_firecrawl")

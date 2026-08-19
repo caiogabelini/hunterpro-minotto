@@ -43,7 +43,10 @@ class Settings(BaseSettings):
     # após download manual/agendado. Ver app/scoring/pgfn.py (próxima sessão).
     PGFN_DADOS_ABERTOS_DIR: str = "./data/pgfn"
 
-    # Base URL da API pública do CNES (a confirmar endpoint exato na próxima sessão)
+    # Base URL da API pública do CNES. Endpoint confirmado em 19/08/2026
+    # (GET {base}/cnes/estabelecimentos) — ver app/services/cnes.py para as
+    # limitações da API já validadas (sem filtro por CNPJ, paginação com
+    # página menor que o `limit` pedido, sem campo de especialidade).
     CNES_API_BASE_URL: str = "https://apidadosabertos.saude.gov.br"
 
     # --- CORS ---
