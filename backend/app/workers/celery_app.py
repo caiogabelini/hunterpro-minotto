@@ -81,28 +81,30 @@ def enrich_pgfn_divida_ativa(cnpj: str) -> dict:
     """
     Consulta rápida (Redis) do CNPJ do lead contra o índice da PGFN.
 
-    Retorna a QUANTIDADE de inscrições ativas — não converte em pontos
-    (a fórmula ainda não foi confirmada com o cliente, ver
-    app/scoring/rules.py) e não retorna contato nenhum (a PGFN não tem
-    esse dado; contato vem de outras etapas do pipeline, cruzado pelo
-    mesmo CNPJ).
+    Retorna a quantidade de inscrições ativas E os pontos já calculados
+    pra esse critério do score (fórmula confirmada com o Douglas em
+    19/08/2026 — ver app/scoring/rules.py::pgfn_points).
+
+    Não retorna contato nenhum (a PGFN não tem esse dado; contato vem
+    de outras etapas do pipeline, cruzado pelo mesmo CNPJ).
     """
     import redis as redis_lib
 
+    from app.scoring.rules import pgfn_points
     from app.services.pgfn import lookup_debt_from_redis, normalize_cnpj
 
     redis_client = redis_lib.from_url(settings.REDIS_URL)
     normalized_cnpj = normalize_cnpj(cnpj) or cnpj
     summary = lookup_debt_from_redis(cnpj, redis_client)
 
-    if summary is None:
-        return {"cnpj": normalized_cnpj, "qtd_inscricoes_ativas": 0, "valor_total": 0.0, "algum_ajuizado": False}
+    qtd = summary.qtd_inscricoes_ativas if summary else 0
 
     return {
-        "cnpj": summary.cnpj,
-        "qtd_inscricoes_ativas": summary.qtd_inscricoes_ativas,
-        "valor_total": summary.valor_total,
-        "algum_ajuizado": summary.algum_ajuizado,
+        "cnpj": normalized_cnpj,
+        "qtd_inscricoes_ativas": qtd,
+        "valor_total": summary.valor_total if summary else 0.0,
+        "algum_ajuizado": summary.algum_ajuizado if summary else False,
+        "pontos_score": pgfn_points(qtd),
     }
 
 

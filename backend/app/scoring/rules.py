@@ -6,13 +6,10 @@ Pesos definidos ao vivo com o Douglas Minotto na sessão de 10/08/2026.
 Total: 100 pontos. Nicho: clínicas e consultórios médicos (qualquer
 especialidade com RQE), abrangência nacional.
 
-⚠️ IMPORTANTE — pontos ainda em aberto pra próxima sessão:
-  - A fórmula exata da Dívida Ativa PGFN (nº de inscrições → pontos)
-    foi proposta mas não re-confirmada com o Douglas. Validar antes
-    de rodar em produção.
-  - A implementação de cada critério (de onde o dado vem, como é
-    calculado) é o próximo passo — este arquivo só formaliza os PESOS
-    já fechados, não a lógica de cálculo ainda.
+✅ Fórmula da Dívida Ativa PGFN CONFIRMADA com o Douglas (19/08/2026,
+via WhatsApp): "sim, era isso mesmo" — 0 a 6 inscrições ativas, pontos
+proporcionais até o teto do peso do critério. Ver `pgfn_points()`
+abaixo e `compute_pgfn_criterion_score()` para a implementação.
 
 Cada critério é representado por um `ScoringCriterion`, com o peso
 máximo que ele pode contribuir e a "camada" de confiabilidade
@@ -53,7 +50,7 @@ SCORING_CRITERIA: list[ScoringCriterion] = [
         layer=SignalLayer.ESTRUTURADO,
         source="Dados abertos PGFN (dadosabertos.pgfn.gov.br) — CSV trimestral, cruzado por CNPJ",
         notes=(
-            "Fórmula proposta (NÃO reconfirmada com o cliente): "
+            "Fórmula CONFIRMADA com o Douglas em 19/08/2026: "
             "pontos = min(nº inscrições ativas, 6) × (peso ÷ 6). "
             "Reduzido de 40 → 20 na sessão de pesos para abrir espaço para o critério Zona Franca."
         ),
@@ -133,6 +130,35 @@ def total_weight() -> int:
 
 def get_criterion(key: str) -> ScoringCriterion | None:
     return next((c for c in SCORING_CRITERIA if c.key == key), None)
+
+
+# ---------------------------------------------------------------------------
+# Fórmula da Dívida Ativa PGFN — CONFIRMADA com o Douglas em 19/08/2026
+# ---------------------------------------------------------------------------
+PGFN_TETO_INSCRICOES = 6
+
+
+def pgfn_points(qtd_inscricoes_ativas: int, weight: int | None = None) -> float:
+    """
+    Converte nº de inscrições ativas na PGFN em pontos do critério
+    'divida_ativa_pgfn'.
+
+    Fórmula confirmada com o Douglas: pontos sobem proporcionalmente
+    até 6 inscrições, onde bate o peso máximo do critério.
+
+        pontos = min(qtd_inscricoes_ativas, 6) × (peso ÷ 6)
+
+    `weight` é opcional — por padrão usa o peso atual configurado em
+    SCORING_CRITERIA (20), mas pode ser sobrescrito (por exemplo, se o
+    Douglas pedir pra voltar ao peso original de 40 no futuro, sem
+    precisar mudar a fórmula).
+    """
+    if weight is None:
+        criterion = get_criterion("divida_ativa_pgfn")
+        weight = criterion.weight if criterion else 0
+
+    qtd_efetiva = min(max(qtd_inscricoes_ativas, 0), PGFN_TETO_INSCRICOES)
+    return qtd_efetiva * (weight / PGFN_TETO_INSCRICOES)
 
 
 # Sanity check — roda no import, quebra cedo se alguém mudar peso e esquecer de ajustar o total

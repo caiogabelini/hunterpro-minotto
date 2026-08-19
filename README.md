@@ -56,8 +56,10 @@ interno do Docker.
   (pesado, roda quando o arquivo trimestral atualiza) e
   `enrich_pgfn_divida_ativa` (consulta rápida via Redis, por lead).
   Testado com CSV sintético + Redis real rodando de ponta a ponta.
-  **Retorna a contagem de inscrições, não os pontos** — a fórmula de
-  conversão pra score ainda depende de confirmação com o cliente.
+- ✅ **Fórmula da dívida ativa PGFN confirmada e implementada**
+  (`app/scoring/rules.py::pgfn_points`) — Douglas validou por WhatsApp
+  em 19/08/2026 ("sim, era isso mesmo"). `enrich_pgfn_divida_ativa` já
+  retorna `pontos_score` calculado, não só a contagem bruta.
 - ✅ API FastAPI com endpoint de listagem de leads (`/api/leads`) e
   health check (`/health`)
 - ✅ Alembic configurado (migrations)
@@ -65,23 +67,22 @@ interno do Docker.
   pipeline de enriquecimento
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 25 testes automatizados passando (`pytest`)
+- ✅ 34 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
 Em ordem de prioridade combinada com o cliente:
 
-1. **Fórmula da dívida ativa PGFN** — confirmar com o Douglas a
-   interpretação de "0 a 6, peso 40" (hoje peso 20) antes de converter
-   `qtd_inscricoes_ativas` em pontos de score. Pergunta já enviada via
-   WhatsApp, aguardando resposta.
-2. ~~Parser do CSV trimestral da PGFN~~ ✅ feito — falta só a fórmula acima
+1. ~~Fórmula da dívida ativa PGFN~~ ✅ confirmada com o Douglas em
+   19/08/2026 e implementada (`pgfn_points`)
+2. ~~Parser do CSV trimestral da PGFN~~ ✅ feito
 3. Integração com a API do CNES
 4. Busca inicial via Google Places (`search_google_places`)
 5. Enriquecimento via Receita Federal (mesmo padrão do projeto SR)
 6. Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)
 7. Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)
-8. `compute_lead_score` — aplicar `app/scoring/rules.py` de fato
+8. `compute_lead_score` — juntar os pontos de todos os critérios (a
+   PGFN já calcula os dela; falta fazer o mesmo pros outros 8 e somar)
 9. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
    exportação CSV/Excel pedida pela Sulamita)
 
