@@ -36,20 +36,45 @@
   color: #f0938e;
 }
 
-/* Cabeçalho -- fixo no topo, fora das abas (reestruturação desta
-   sessão). Virou um bloco de coluna única (nome, linha secundária,
-   linha de resumo, status do Kanban + datas) -- o número de score
-   "hero" que ficava aqui numa coluna à direita se mudou pra dentro da
-   aba "Análise IA" (ver `.dossier-analise-score` mais abaixo), porque a
-   linha de resumo já mostra "Score: X" como texto -- ter os dois (texto
-   compacto aqui + número gigante do lado) seria redundante. */
+/* Cabeçalho -- fixo no topo, fora das abas. Duas colunas: à esquerda
+   `.dossier-header-principal` (nome, linha secundária, linha de resumo,
+   status do Kanban + datas); à direita `.dossier-header-score`, o
+   número de score "hero" com brilho dourado.
+   ⚠️ Histórico rápido, pra quem for mexer aqui de novo: a sessão da
+   reestruturação em abas (mesmo dia) tinha tirado esse número gigante
+   daqui e colocado dentro da aba "Análise IA", achando que duplicava a
+   linha de resumo. Feedback visual real do usuário pediu de volta --
+   o número no canto é o elemento mais importante da tela e precisa
+   ficar visível em toda aba, não só numa. A linha de resumo perdeu o
+   item "Score: X" (texto) especificamente pra não duplicar o número
+   grande que voltou aqui do lado -- ver comentário em `.dossier-resumo`
+   mais abaixo. Não repita esse ciclo: o número gigante fica no
+   cabeçalho, não em nenhuma aba. */
 .dossier-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-6);
   background: var(--navy-dark);
   border: 1px solid rgba(245, 200, 66, 0.18);
   border-radius: 16px;
   padding: var(--space-6) var(--space-8);
   margin-bottom: var(--space-4);
   box-shadow: var(--shadow-md);
+}
+
+.dossier-header-principal {
+  min-width: 0;
+  flex: 1;
+}
+
+.dossier-header-score {
+  text-align: right;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
 }
 
 .dossier-eyebrow {
@@ -93,11 +118,18 @@
   color: var(--gray);
 }
 
-/* Linha de resumo: "Score: X · Classificação: ... · Prioridade: ... ·
-   Canal: ...". Cada pedaço já vem de um campo que existe (score_total,
-   prioridade mapeada pra um rótulo, canal preferido derivado de
-   whatsapp_ativo/email_validado) -- nenhum dado novo, só reagrupado
-   numa linha compacta em vez de um bloco de número gigante. */
+/* Linha de resumo: "Classificação: ... · Prioridade: ... · Canal: ...
+   [· RQE: ...]". Cada pedaço já vem de um campo que existe (prioridade
+   mapeada pra um rótulo, canal preferido derivado de
+   whatsapp_ativo/email_validado, RQE de rqe_confirmado/rqe_fonte) --
+   nenhum dado novo. "Score: X" NÃO está mais aqui de propósito -- o
+   número grande no canto do cabeçalho (`.dossier-header-score`) já
+   mostra o mesmo dado com muito mais destaque; manter os dois lado a
+   lado seria redundante. RQE (`.dossier-resumo-rqe`, via
+   RqeResumoBadge no .tsx) é o último item, condicional -- só aparece
+   quando `rqe_confirmado` é verdadeiro, e já vem com seu próprio
+   separador embutido (ver RqeResumoBadge), então nunca sobra um "·"
+   solto quando ele não renderiza. */
 .dossier-resumo {
   display: flex;
   flex-wrap: wrap;
@@ -115,6 +147,20 @@
 
 .dossier-resumo-sep {
   color: rgba(255, 255, 255, 0.15);
+}
+
+/* Badge de RQE inline na linha de resumo -- mesma cor de
+   `.rqe-alta-confianca`/`.rqe-inferencia` (definidas mais abaixo, cor
+   verde de alta confiança / dourada de inferência), mas com formato
+   pill menor pra caber junto do texto plano da linha de resumo, em vez
+   do badge maior que o antigo card isolado "RQE / Especialidade"
+   usava. */
+.dossier-resumo-rqe {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 10px;
 }
 
 .dossier-header-footer {
@@ -451,14 +497,13 @@
   color: var(--gold);
 }
 
-.dossier-rqe-badge {
-  display: inline-block;
-  font-size: 13px;
-  font-weight: 700;
-  border-radius: 999px;
-  padding: 8px 16px;
-}
-
+/* rqe-alta-confianca/rqe-inferencia: cor compartilhada entre o badge de
+   RQE da linha de resumo (`.dossier-resumo-rqe`, ver mais acima) --
+   único lugar que usa essas classes desde que o card isolado "RQE /
+   Especialidade" foi removido nesta sessão (existia um terceiro estado,
+   "rqe-desconhecido"/"RQE não confirmado", que não existe mais -- o
+   badge de resumo agora simplesmente não renderiza nesse caso, ver
+   RqeResumoBadge no .tsx). */
 .rqe-alta-confianca {
   background: rgba(124, 215, 156, 0.18);
   color: #8ee6ab;
@@ -469,12 +514,6 @@
   background: rgba(245, 200, 66, 0.16);
   color: var(--gold);
   border: 1px solid rgba(245, 200, 66, 0.35);
-}
-
-.rqe-desconhecido {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--gray);
-  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 /* Aba "Contatos" -- lista de cards de pessoa (hoje só o decisor, mas a
@@ -537,21 +576,6 @@
   border-color: var(--gold);
   color: var(--gold);
   background: rgba(245, 200, 66, 0.08);
-}
-
-/* Aba "Análise IA" -- o bloco "hero" (badge de prioridade + número de
-   score + label) que antes vivia no cabeçalho da página, agora dentro
-   desta aba (ver comentário em `.dossier-header` acima pro porquê).
-   Reaproveita `.dossier-score-total`/`.dossier-score-label` como estão
-   (mesmo brilho dourado, mesmo tamanho -- só o container mudou). */
-.dossier-analise-score {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding-bottom: var(--space-5);
-  margin-bottom: var(--space-5);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Subtítulo dentro da aba "Análise IA" -- um nível abaixo de

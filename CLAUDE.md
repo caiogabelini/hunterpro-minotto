@@ -1634,6 +1634,78 @@ misjudged (tab styling, header line order, chip placement), that's the
 first thing to check against the real screen, not a sign the
 implementation is fundamentally wrong.
 
+**Follow-up fixes from real visual feedback (same day, 2026-08-20)** —
+exactly the kind of correction the caveat above anticipated; the tabbed
+restructure's own judgment calls turned out to need a real look after
+all:
+
+1. **The standalone "RQE / Especialidade" card is gone.** It used to
+   sit as the 4th card in the Dados tab's `.dossier-grid` (3 cards fit
+   the grid's `repeat(auto-fit, minmax(260px, 1fr))` evenly, a 4th one
+   left alone on its own row — visually orphaned, per the report). RQE
+   is a strategic ICP-fit signal (confirms the lead is actually a
+   medical practice), so it moved to the **fixed header's resumo line**
+   instead of living inside one tab — same reasoning that already put
+   PGFN debt at the top of the Dados tab and the hero score in the
+   header itself: information that shapes whether to pursue the lead at
+   all shouldn't be one click away.
+
+   `RqeResumoBadge` (new, replaces the deleted `SecaoRqe`) renders
+   **nothing** (`return null`) when `rqe_confirmado` is falsy — this is
+   a deliberate behavior change from the old card, which always
+   rendered a third state ("RQE não confirmado", `.rqe-desconhecido`).
+   The explicit ask was to omit the badge entirely in that case, not
+   show an empty/negative state permanently in the header. `.rqe-desconhecido`
+   and the old base-sizing class `.dossier-rqe-badge` were removed from
+   the CSS as dead code; `.rqe-alta-confianca`/`.rqe-inferencia` (the
+   green/gold color classes) survive unchanged and are now the *only*
+   thing `RqeResumoBadge` reaches for — same colors the client had
+   already seen on the old card, just relocated. The badge carries its
+   own leading `·` separator inside the same conditional (`return null`
+   for the whole `<><span className="dossier-resumo-sep">·</span>...</>`
+   fragment, not just the pill) specifically so an absent badge never
+   leaves a dangling separator with nothing after it.
+
+2. **The hero score number is back in the header's top-right corner**,
+   exactly where it lived before the tabbed restructure:
+   `PriorityBadge size="lg"` above, the 60px gold-glow `.dossier-score-total`
+   number, `.dossier-score-label` ("pontos de score") below. `.dossier-header`
+   is a two-column flex row again (`.dossier-header-principal` on the
+   left holding everything that used to be the header's only column,
+   `.dossier-header-score` on the right, unchanged CSS from before the
+   restructure — just re-added). **This reverses a judgment call from
+   the tabbed-restructure session** that guessed the hero number would
+   be redundant next to the resumo line's "Score: X" text and moved it
+   into the Análise IA tab instead — wrong guess, confirmed by the
+   user: the number needs to be visible on *every* tab, not hidden
+   behind a tab click. `AbaAnalise` no longer renders any score-hero
+   block at all (the `.dossier-analise-score` CSS rule was deleted) —
+   it now goes straight from the card's top into "Sinais positivos"/
+   "Breakdown do score"; its own `scoreTotal`/`prioridade` props were
+   dropped for the same reason (`noUnusedParameters` in
+   `tsconfig.app.json` would otherwise fail the build on an unused prop
+   — this project's TS config catches that class of dead code by
+   construction, worth remembering next time a prop's only consumer
+   gets deleted).
+
+   The resumo line's own "Score: X" text item, by contrast, **was**
+   removed — the user's judgment call, explicitly delegated ("use seu
+   julgamento pra não ficar redundante"): once the giant glowing number
+   sits two inches away in the same header card, a second plain-text
+   restatement of the identical number serves no purpose the way
+   "Classificação"/"Canal" (which have no other visual representation
+   anywhere on the page) still do. If this reads as *too* sparse once
+   seen for real, adding "Score: X" back to the resumo line is a
+   one-line JSX change, not a structural one.
+
+**Lesson for whoever touches this header next**: don't move the hero
+score number out of `.dossier-header` again without a specific request
+naming that change — it went `header → Análise IA tab → header` in the
+span of two sessions the same day, purely from guessing at redundancy
+rather than being told to move it. The resumo line is the part that's
+actually still open to editorial judgment (add/remove text items as
+requested); the corner score block is not.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

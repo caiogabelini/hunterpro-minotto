@@ -17,7 +17,6 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
-  Stethoscope,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -102,7 +101,7 @@ export function LeadDossierPage() {
           {abaAtiva === "contatos" && <AbaContatos lead={lead} />}
 
           {abaAtiva === "analise" && (
-            <AbaAnalise scoreTotal={lead.score_total} prioridade={lead.prioridade} scoreDetalhes={lead.score_detalhes} />
+            <AbaAnalise scoreDetalhes={lead.score_detalhes} />
           )}
 
           {abaAtiva === "mensagens" && (
@@ -153,36 +152,52 @@ function DossierHeader({ lead }: { lead: Lead }) {
 
   return (
     <header className="dossier-header">
-      <div className="dossier-eyebrow">Dossiê do lead</div>
-      <h1 className="dossier-razao">{lead.razao_social}</h1>
-      {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
-      <p className="dossier-cnpj">{lead.cnpj}</p>
+      <div className="dossier-header-principal">
+        <div className="dossier-eyebrow">Dossiê do lead</div>
+        <h1 className="dossier-razao">{lead.razao_social}</h1>
+        {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
+        <p className="dossier-cnpj">{lead.cnpj}</p>
 
-      <p className="dossier-secundaria">
-        {lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : "Localização não informada"} · {NICHO_FIXO}
-      </p>
+        <p className="dossier-secundaria">
+          {lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : "Localização não informada"} · {NICHO_FIXO}
+        </p>
 
-      <div className="dossier-resumo">
-        <span>
-          Score: <strong>{lead.score_total ?? "—"}</strong>
-        </span>
-        <span className="dossier-resumo-sep">·</span>
-        <span>
-          Classificação: <strong>{classificacao}</strong>
-        </span>
-        <span className="dossier-resumo-sep">·</span>
-        <span>Prioridade: {lead.prioridade ? <PriorityBadge prioridade={lead.prioridade} /> : <strong>—</strong>}</span>
-        <span className="dossier-resumo-sep">·</span>
-        <span>
-          Canal: <strong>{canalPreferido(lead)}</strong>
-        </span>
+        {/* "Score:" saiu daqui -- o número grande no canto (dossier-header-score,
+            à direita) já mostra o mesmo dado com muito mais destaque
+            visual; manter os dois seria redundante (julgamento pedido
+            explicitamente pelo usuário nesta sessão). */}
+        <div className="dossier-resumo">
+          <span>
+            Classificação: <strong>{classificacao}</strong>
+          </span>
+          <span className="dossier-resumo-sep">·</span>
+          <span>Prioridade: {lead.prioridade ? <PriorityBadge prioridade={lead.prioridade} /> : <strong>—</strong>}</span>
+          <span className="dossier-resumo-sep">·</span>
+          <span>
+            Canal: <strong>{canalPreferido(lead)}</strong>
+          </span>
+          <RqeResumoBadge confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
+        </div>
+
+        <div className="dossier-header-footer">
+          <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
+          <p className="dossier-datas">
+            Encontrado em {formatDate(lead.created_at)} · Atualizado {formatRelative(lead.updated_at)}
+          </p>
+        </div>
       </div>
 
-      <div className="dossier-header-footer">
-        <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
-        <p className="dossier-datas">
-          Encontrado em {formatDate(lead.created_at)} · Atualizado {formatRelative(lead.updated_at)}
-        </p>
+      {/* Número de score "hero" -- de volta no canto superior direito
+          do cabeçalho, do jeito que já existia antes da reestruturação
+          em abas (badge de prioridade grande acima, número gigante com
+          brilho dourado, label embaixo). A aba "Análise IA" não repete
+          mais esse bloco (ver AbaAnalise) -- repetir seria redundante,
+          já que agora ele fica visível o tempo todo aqui no cabeçalho,
+          em toda aba, não só na Análise IA. */}
+      <div className="dossier-header-score">
+        <PriorityBadge prioridade={lead.prioridade} size="lg" />
+        <div className="dossier-score-total">{lead.score_total ?? "—"}</div>
+        <div className="dossier-score-label">pontos de score</div>
       </div>
     </header>
   );
@@ -222,10 +237,14 @@ function AbaNav({ ativa, onChange }: { ativa: Aba; onChange: (aba: Aba) => void 
 }
 
 // --- Aba "Dados" ---------------------------------------------------------
-// Mesmos 3 cards (Dados cadastrais/Contato/Presença digital) + RQE que já
+// Mesmos 3 cards (Dados cadastrais/Contato/Presença digital) que já
 // existiam antes das abas -- só reagrupados aqui, campos inalterados.
 // Dívida ativa PGFN fica no topo da aba, antes dos cards, por ser a
-// informação mais crítica (pedido explícito).
+// informação mais crítica (pedido explícito). O card "RQE / Especialidade"
+// que ficava aqui como 4º card foi removido nesta sessão (sobrava
+// sozinho na última linha do grid) -- RQE virou um badge condicional na
+// linha de resumo do cabeçalho fixo (ver RqeResumoBadge), não uma seção
+// desta aba.
 
 function AbaDados({ lead }: { lead: Lead }) {
   return (
@@ -272,8 +291,6 @@ function AbaDados({ lead }: { lead: Lead }) {
             <Campo label="Serviços" valor={lead.servicos} />
           </dl>
         </section>
-
-        <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
       </div>
     </>
   );
@@ -322,26 +339,37 @@ function SecaoPgfn({
   );
 }
 
-function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: string | null }) {
-  let texto: string;
-  let classe: string;
+/**
+ * Badge de RQE pra linha de resumo do cabeçalho -- substitui o antigo
+ * card isolado "RQE / Especialidade" (removido nesta sessão por
+ * feedback visual: sobrava sozinho na última linha da aba Dados). RQE
+ * é um sinal estratégico de ICP (ajuda a confirmar que o lead é
+ * médico/clínica de verdade), por isso precisa estar sempre visível no
+ * cabeçalho, não escondido numa aba -- diferente do antigo card, que só
+ * aparecia na aba "Dados".
+ *
+ * Omite o badge inteiramente (devolve `null`) quando `confirmado` é
+ * `null`/`false`/`undefined` -- pedido explícito: só mostrar RQE quando
+ * há algo de fato confirmado ou inferido pra destacar, não um estado
+ * "não confirmado" ocupando espaço permanente no cabeçalho (diferente
+ * do antigo card, que tinha um terceiro estado "RQE não confirmado").
+ * Reaproveita as mesmas classes de cor `rqe-alta-confianca`/
+ * `rqe-inferencia` que o card antigo já usava (mesma cor verde de alta
+ * confiança / dourada de inferência) -- só o `.dossier-resumo-rqe` de
+ * tamanho/formato é novo, ajustado pra caber inline na linha de resumo
+ * em vez do badge maior que o card isolado usava.
+ */
+function RqeResumoBadge({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: string | null }) {
+  if (!confirmado) return null;
 
-  if (confirmado && fonte === "cnes") {
-    texto = "RQE confirmado via CNES";
-    classe = "rqe-alta-confianca";
-  } else if (confirmado) {
-    texto = "RQE mencionado no site (não confirmado via CNES)";
-    classe = "rqe-inferencia";
-  } else {
-    texto = "RQE não confirmado";
-    classe = "rqe-desconhecido";
-  }
-
+  const viaCnes = fonte === "cnes";
   return (
-    <section className="dossier-card">
-      <SectionHeading icon={Stethoscope}>RQE / Especialidade</SectionHeading>
-      <span className={`dossier-rqe-badge ${classe}`}>{texto}</span>
-    </section>
+    <>
+      <span className="dossier-resumo-sep">·</span>
+      <span className={`dossier-resumo-rqe ${viaCnes ? "rqe-alta-confianca" : "rqe-inferencia"}`}>
+        RQE: {viaCnes ? "Confirmado via CNES" : "Inferido (site)"}
+      </span>
+    </>
   );
 }
 
@@ -409,21 +437,15 @@ function AbaContatos({ lead }: { lead: Lead }) {
 }
 
 // --- Aba "Análise IA" --------------------------------------------------
-// Score total + badge de prioridade com o mesmo destaque visual que já
-// existia no cabeçalho antes desta reestruturação (brilho dourado,
-// número grande) -- só mudou de lugar, não de tratamento. "Sinais
-// positivos" é derivado do próprio breakdown, não é uma chamada de IA
-// nova: qualquer critério que bateu o peso máximo dele vira um chip.
+// O bloco "hero" de score (badge de prioridade grande + número gigante
+// + brilho dourado) voltou pro cabeçalho fixo (ver DossierHeader) nesta
+// sessão -- não repetido aqui pra não duplicar o mesmo elemento visual
+// em todo lugar. Esta aba foca no que só ela tem: o breakdown dos 9
+// critérios e os "Sinais positivos" derivados dele. "Sinais positivos"
+// é reorganização do próprio breakdown, não é uma chamada de IA nova:
+// qualquer critério que bateu o peso máximo dele vira um chip.
 
-function AbaAnalise({
-  scoreTotal,
-  prioridade,
-  scoreDetalhes,
-}: {
-  scoreTotal?: number | null;
-  prioridade?: string | null;
-  scoreDetalhes: unknown;
-}) {
+function AbaAnalise({ scoreDetalhes }: { scoreDetalhes: unknown }) {
   const breakdown = getScoreBreakdown(scoreDetalhes);
   // weight > 0 exclui rating_google (peso zerado a pedido do cliente --
   // nunca deveria aparecer como "sinal positivo" de nada, mesmo que
@@ -434,12 +456,6 @@ function AbaAnalise({
 
   return (
     <section className="dossier-card dossier-analise">
-      <div className="dossier-analise-score">
-        <PriorityBadge prioridade={prioridade} size="lg" />
-        <div className="dossier-score-total">{scoreTotal ?? "—"}</div>
-        <div className="dossier-score-label">pontos de score</div>
-      </div>
-
       {sinaisPositivos.length > 0 && (
         <div className="dossier-sinais-positivos">
           <h3 className="dossier-subheading">

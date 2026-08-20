@@ -569,15 +569,34 @@ interno do Docker.
   não é IA nova, é reorganização do mesmo dado); **Mensagens** (a seção
   de Abordagem Sugerida de sempre, geração/regeneração/mailto/wa.me
   sem nenhuma mudança de lógica). O número de score "hero" com brilho
-  dourado que ficava no cabeçalho se mudou pra dentro da aba Análise
-  IA — decisão da sessão pra não duplicar o número (a linha de resumo já
-  mostra "Score: X" como texto), documentada em detalhe no CLAUDE.md
-  "Dossier tabbed restructure" caso precise ser revista depois de ver a
-  tela de verdade. Painel lateral de "Insights da IA" **não** foi
+  dourado que ficava no cabeçalho tinha se mudado pra dentro da aba
+  Análise IA nesta sessão (achando que duplicava a linha de resumo) —
+  **revertido no mesmo dia, ver bullet abaixo**, feedback visual real
+  pediu de volta. Painel lateral de "Insights da IA" **não** foi
   adicionado nesta sessão, de propósito — fica pra uma sessão futura
   dedicada, já alinhado com o cliente. `npm run build`/`npm run lint`/
   `npm run test` limpos; sem validação visual real, mesma ressalva de
   sempre.
+- ✅ **Dois ajustes no Dossiê a partir de feedback visual real** — a
+  primeira vez nesta sequência de sessões que um retorno olhando a tela
+  de verdade corrigiu uma decisão tomada só "no escuro" (sandbox sem
+  navegador). (1) O card isolado "RQE / Especialidade" — que sobrava
+  sozinho numa última linha da aba Dados (3 cards cabem certinho no
+  grid, o 4º ficava torto) — foi removido; RQE virou um badge
+  condicional na linha de resumo do cabeçalho fixo ("RQE: Confirmado via
+  CNES", verde, ou "RQE: Inferido (site)", dourado — mesmas cores do
+  card antigo), omitido inteiramente quando `rqe_confirmado` é
+  null/false, já que é sinal estratégico de ICP e precisa estar sempre
+  visível, não escondido numa aba. (2) O número de score "hero" (badge
+  de prioridade grande + número gigante com brilho dourado + label)
+  voltou pro canto superior direito do cabeçalho, de onde tinha saído
+  na sessão da reestruturação em abas — a aba Análise IA não repete
+  mais esse bloco. A linha de resumo perdeu o item de texto "Score: X"
+  (julgamento pedido explicitamente pelo usuário, pra não duplicar o
+  número grande do lado). Ver CLAUDE.md "Dossier tabbed restructure"
+  (seção de acréscimo no final) pro relato completo, inclusive um aviso
+  pra sessões futuras não repetirem esse vaivém. `npm run build`/`npm
+  run lint`/`npm run test` limpos.
 - ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 
@@ -680,11 +699,13 @@ Em ordem de prioridade combinada com o cliente:
       (Radar Comercial) que o cliente compartilhou, mas explicitamente
       combinado como fora de escopo desta sessão. Fica pra uma sessão
       futura dedicada.
-    - **Validação visual real** — mesma ressalva do item 14: todo o
-      trabalho desta sessão (reposicionar o número de score/badge de
-      prioridade pra dentro da aba Análise IA, o layout das abas em si,
-      os chips da aba Contatos) foi validado só tecnicamente, nunca
-      visto numa tela de verdade.
+    - **Validação visual real** — mesma ressalva do item 14: o layout
+      das abas em si e os chips da aba Contatos foram validados só
+      tecnicamente, nunca vistos numa tela de verdade. (O reposicionamento
+      do número de score pra dentro da aba Análise IA especificamente
+      **já foi corrigido no mesmo dia** a partir de feedback visual real
+      — ver bullet "Dois ajustes no Dossiê a partir de feedback visual
+      real" acima; o número voltou pro cabeçalho.)
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
