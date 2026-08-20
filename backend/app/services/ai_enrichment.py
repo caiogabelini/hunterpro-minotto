@@ -18,6 +18,16 @@ Modelo: `claude-haiku-4-5-20251001` — o mais barato da linha atual,
 adequado pra esse tipo de classificação/extração de texto curto (não
 precisa de raciocínio complexo).
 
+⚠️ Ainda **NÃO testado contra a API real**, apesar de a
+`ANTHROPIC_API_KEY` já estar preenchida no `.env` desde 20/08/2026 — o
+contrato acima veio de fonte oficial (não foi inventado), mas o sandbox
+desta sessão não permite chamada de rede autenticada (POST + header
+customizado) por nenhuma ferramenta disponível (`curl` bloqueado,
+`WebFetch` só faz GET simples). Mesma ressalva documentada em
+app/services/site_scraping.py e app/services/google_places.py — o
+usuário optou explicitamente por não contornar essa limitação nesta
+sessão.
+
 O QUE ESTE MÓDULO FAZ:
   - `inferir_dados_site` manda o texto do site (já extraído por
     app/services/site_scraping.py) num prompt pedindo resposta em JSON:
@@ -32,9 +42,10 @@ O QUE ESTE MÓDULO FAZ:
 
 O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
   - Não calcula pontos de score — devolve o sinal bruto; a conversão pro
-    critério `rqe_especialista` (rules.py) fica pro `compute_lead_score`,
-    ainda não implementado. Ver também app/services/cnes.py, que reforça
-    (não substitui) esse mesmo sinal.
+    critério `rqe_especialista` é feita em
+    app/scoring/compute_lead_score.py::rqe_especialista_points, que
+    cruza esse sinal com o do CNES (app/services/cnes.py reforça, não
+    substitui, esse mesmo sinal).
   - Não trunca de forma inteligente — só corta o texto do site em
     `MAX_CARACTERES_TEXTO_SITE` caracteres antes de mandar pro modelo,
     pra não estourar o prompt com uma página gigante. Sites reais raramente

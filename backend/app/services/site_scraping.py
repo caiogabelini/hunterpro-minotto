@@ -11,22 +11,37 @@ etc. Mesmo serviço já usado no projeto SR Contábil pra essa etapa
 
 ⚠️ ENDPOINT E SCHEMA CONFIRMADOS CONTRA O OPENAPI.JSON OFICIAL DO
 FIRECRAWL (github.com/firecrawl/firecrawl/blob/main/apps/api/openapi.json,
-verificado em 19/08/2026) — mas NÃO testados contra a API real: não há
-FIRECRAWL_API_KEY disponível nesta sessão pra bater no endpoint de
-verdade, diferente do CNES/IBGE (públicos, sem chave, dava pra confirmar
-batendo direto). Existe também uma v2 da API
-(api.firecrawl.dev/v2, mais formatos disponíveis) que a documentação
-renderizada do site já promove como atual, mas só a v1 pôde ser
-confirmada contra o schema bruto (a doc v2 é uma SPA que não expõe
-exemplos por scraping simples, mesmo problema já visto no Swagger do
-CNES). Ficou nesta v1, confirmada; validar contra uma chave real antes de
-produção e considerar migrar pra v2 se fizer sentido depois:
+verificado em 19/08/2026 e novamente em 20/08/2026) — implementado
+contra a documentação oficial, mas **ainda NÃO testado contra a API
+real**, apesar de a `FIRECRAWL_API_KEY` já estar preenchida no `.env`
+desde 20/08/2026: o sandbox desta sessão não permite chamada de rede
+autenticada (POST + header customizado) por nenhuma ferramenta
+disponível (`curl` via Bash bloqueado pela política do ambiente,
+`WebFetch` só faz GET simples sem headers customizados). O usuário
+optou explicitamente por não contornar essa limitação (a única forma
+factível teria exposto a chave num lugar visível, o que já aconteceu
+sem querer com a GOOGLE_API_KEY nesta mesma sessão — ver
+app/services/google_places.py). Pendente de validação com uma chamada
+real numa sessão/ambiente que permita, não por falta de tentativa.
 
   POST https://api.firecrawl.dev/v1/scrape
   Header: Authorization: Bearer {FIRECRAWL_API_KEY}
   Body:   {"url": "<url>", "formats": ["markdown"]}
   Resposta (sucesso): {"success": true, "data": {"markdown": "...", "metadata": {...}}}
   Resposta (falha reportada pelo Firecrawl, não erro HTTP): {"success": false, ...}
+
+⚠️ v1 vs v2: checado de novo em 20/08/2026, como pedido — o repositório
+oficial (github.com/firecrawl/firecrawl) só tem `v1-openapi.json` e
+`openapi.json` (este último também v1.0.0, `servers` apontando pra
+`/v1`); não existe nenhum `v2-openapi.json` commitado no repo, apesar de
+a documentação renderizada do site promover a v2 como atual. Decisão:
+continuar na v1 — é a única versão com contrato verificável a partir de
+uma fonte primária (o spec bruto do próprio repositório), não só da SPA
+de documentação (que não expõe exemplos por scraping simples, mesmo
+problema do Swagger do CNES). Migrar pra v2 sem um spec confiável pra
+conferir seria inventar schema, o que este projeto evita de propósito.
+Reconsiderar quando houver um jeito de verificar a v2 com a mesma
+confiança (spec bruto publicado, ou uma chamada real de teste).
 
 O QUE ESTE MÓDULO FAZ:
   - `scrape_site` busca o markdown de uma URL via Firecrawl

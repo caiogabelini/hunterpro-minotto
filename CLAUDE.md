@@ -69,7 +69,7 @@ backend/app/
   scoring/        lead-score rules and niche-specific structured-data sources
   services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
                   parsers, CNES/Receita Federal/IBGE/Evolution/Hunter.io/ZeroBounce/
-                  Firecrawl/Anthropic HTTP clients)
+                  Firecrawl/Anthropic/Google Places HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
 backend/tests/    pytest suite, one file per module under test
@@ -158,24 +158,47 @@ block right before the task:
 - `enrich_zona_franca` and `enrich_cnes` are skipped (not attempted) if
   `enrich_receita_federal` failed or didn't find the CNPJ — there's
   nothing to pass them.
+- `search_google_places` (real since 2026-08-20, see the "Google Places"
+  section above) runs next, searched by whatever name is available
+  (explicit `razao_social` param, or `enrich_receita_federal`'s
+  `razao_social`/`nome_fantasia`) + UF if known. Skipped only when no
+  name is available at all — that's the one case that never even
+  attempts the call. Its `site` result becomes `site_url_efetivo`
+  when the caller didn't pass `site_url` explicitly (explicit always
+  wins) — this is the actual, automatic source for the gap the next
+  bullet used to describe as unresolved.
 - `enrich_site_firecrawl(site_url)` and `validate_whatsapp(telefone)`
-  need `site_url`/`telefone` that **no implemented pipeline stage
-  produces yet** (would come from `search_google_places`, still
-  `NotImplementedError`) — `process_lead_pipeline` accepts both as
-  optional params for a caller who already knows them; without them,
-  those stages are skipped with a logged reason, same treatment as a
-  missing API key.
+  need `site_url`/`telefone`. `site_url` now usually comes from
+  `search_google_places` (previous bullet); `telefone` still has **no
+  implemented source anywhere in the pipeline** — `process_lead_pipeline`
+  still accepts it as an optional param for a caller who already knows
+  it. Without either, the corresponding stage is skipped with a logged
+  reason, same treatment as a missing API key.
 - `enrich_email(dominio, decisor_nome)`: **`decisor_nome` is optional,
   not a hard dependency** — `enrich_email` already accepts `None` (falls
   back to a domain-only Hunter.io search). Getting this distinction wrong
   is an easy trap: an earlier draft of this task treated it as required
   and a test caught the bug — see the comment block in `celery_app.py`
-  for the corrected graph. Only `dominio` (parsed from `site_url` via
-  `_extrair_dominio`) actually gates the step.
-- `search_google_places` is unconditionally skipped with a log warning —
-  never attempted at all, since it's guaranteed to raise. `enrich_site_firecrawl`
-  is skipped if `site_url` is missing OR `settings.FIRECRAWL_API_KEY` is
-  empty (checked separately, distinct log reasons).
+  for the corrected graph. Only `dominio` (parsed from `site_url_efetivo`
+  via `_extrair_dominio`) actually gates the step.
+- `enrich_site_firecrawl` is skipped if `site_url_efetivo` ends up empty
+  (no Google Places result and none passed explicitly) OR
+  `settings.FIRECRAWL_API_KEY` is empty (checked separately, distinct
+  log reasons).
+
+**Test hygiene trap, worth knowing before touching this file**:
+`test_process_lead_pipeline.py` has an `autouse` fixture
+(`_protege_contra_chamada_real_ao_google_places`) that monkeypatches
+`search_google_places` to a safe "not found" fake for *every* test in
+that file by default — added after a test that mocked everything else
+but `search_google_places` ended up making a real, ~21-second call to
+Google using the live `GOOGLE_API_KEY` from `.env`. Any test that wants
+to exercise the real integration path overrides it explicitly within
+the test body (`monkeypatch.setattr(celery_app, "search_google_places", ...)`
+after the fixture already ran — last write wins, same `monkeypatch`
+instance). If you add a new sibling stage that becomes a real call in
+the future, add the same kind of autouse safety net rather than relying
+on every test author to remember to mock it.
 
 Each stage runs through `_rodar_etapa()`, which catches any exception,
 logs it, and returns `None` — one stage failing never stops the rest of
@@ -371,17 +394,21 @@ URL and a single client (real or injected) serves both.
 `site_scraping.py` calls Firecrawl (`POST api.firecrawl.dev/v1/scrape`,
 `Authorization: Bearer {FIRECRAWL_API_KEY}`, body `{"url", "formats": ["markdown"]}`,
 response `{"success", "data": {"markdown", "metadata"}}`). **Confirmed
-against Firecrawl's own `openapi.json` on GitHub, not against a live
-call** — no `FIRECRAWL_API_KEY` was available this session, unlike
-CNES/IBGE/BrasilAPI which are free/no-auth and got hit directly. A v2 API
-exists (`api.firecrawl.dev/v2`) that the docs site promotes as current,
-but its docs page is a JS SPA that doesn't render examples for scraping
-(same problem as the CNES Swagger UI) — v1 is what's grounded in the raw
-spec file, so that's what's implemented; validate against a real key
-before production and reconsider v2 then. `extrair_instagram()` is pure
-regex (no AI), matching `instagram\.com/([A-Za-z0-9_.]{2,30})` and
-discarding non-profile paths (`p`, `reel`, `reels`, `stories`, `explore`,
-`accounts`, `share`).
+against Firecrawl's own `openapi.json` on GitHub — still not against a
+live call**, even though `FIRECRAWL_API_KEY` has been in `.env` since
+2026-08-20 (see "Network access from Bash is blocked" below for why).
+v1-vs-v2 was rechecked on 2026-08-20 as requested: the canonical repo
+(`github.com/firecrawl/firecrawl`) only has `v1-openapi.json` — no
+`v2-openapi.json` exists there, and even the unversioned `openapi.json`
+in that repo is itself `"version": "1.0.0"` with `servers` pointing at
+`/v1`. The docs *website* promotes v2, but that's a rendered SPA with no
+scrapable examples (same problem as CNES's Swagger UI) — there's no
+verifiable v2 contract anywhere, so migrating would mean guessing a
+schema, which this project avoids on principle. Staying on v1;
+reconsider only if a v2 spec becomes independently verifiable.
+`extrair_instagram()` is pure regex (no AI), matching
+`instagram\.com/([A-Za-z0-9_.]{2,30})` and discarding non-profile paths
+(`p`, `reel`, `reels`, `stories`, `explore`, `accounts`, `share`).
 
 `ai_enrichment.py` calls the Anthropic Messages API via **raw HTTP with
 `httpx`, not the `anthropic` SDK** — a deliberate deviation from the
@@ -397,19 +424,81 @@ enough in practice that `_extrair_json()` needs to try a few fallbacks
 (raw parse, ```json fenced block, first `{...}` substring) before giving
 up; on total failure it returns empty/null fields, never raises. If a
 future session wants schema-guaranteed output, that's `output_config.format`
-on the Messages API — a bigger change than this session's scope.
+on the Messages API — a bigger change than this session's scope. Also
+still not live-tested despite `ANTHROPIC_API_KEY` being available now —
+same environment limitation.
+
+### Google Places (`app/services/google_places.py`)
+
+Implemented 2026-08-20, resolving `search_google_places`'s
+`NotImplementedError`. Uses **Places API (New)** Text Search only
+(`POST places.googleapis.com/v1/places:searchText`, headers
+`X-Goog-Api-Key` + `X-Goog-FieldMask`, no default field list — you must
+name every field you want) — **not** the legacy Places API, and **not**
+a separate Place Details call: confirmed against Google's own docs that
+Text Search (New) already returns `websiteUri`/`rating`/`userRatingCount`
+directly when they're in the field mask, so one call per establishment
+suffices (also cheaper — those three fields are the "Enterprise" SKU
+tier). Contract confirmed against `developers.google.com/maps/documentation/places/web-service/{text-search,place-details}`,
+**not against a live call** — same environment limitation as
+Firecrawl/Anthropic (see below), plus the legacy API's key-in-URL
+alternative was explicitly declined by the user after an accidental key
+exposure earlier in this session (see below).
+
+`search_google_places` (the Celery task) takes the seed's list shape
+(`cnpj`/`razao_social`/`nome_fantasia`/`uf` dicts) and returns the same
+list with `google_place_id`/`site`/`rating`/`avaliacoes`/`telefone_google`
+merged in — a per-item HTTP failure is caught and logged, never takes
+down the whole batch. `process_lead_pipeline` calls it with a one-item
+list for its single CNPJ and unwraps `[0]`; the returned `site` becomes
+the automatic `site_url` source for `enrich_site_firecrawl`/`enrich_email`
+when the caller didn't pass one explicitly (explicit `site_url` still
+wins) — this is what actually closes the "no automatic `site_url` source"
+gap noted in earlier sessions, now that this stage is real.
+
+### Network access from Bash is blocked in this sandbox
+
+Confirmed 2026-08-20: `curl` (or any outbound network command) via the
+Bash tool is denied by this environment's permission policy — tested and
+denied even for a bare `curl https://www.google.com`. `WebFetch` still
+works but only does simple GET with no custom headers and no POST body,
+so it cannot authenticate against any API that needs `POST` + a header
+(Firecrawl, Anthropic Messages, Places API New) — only GET-with-key-in-
+query-string APIs (like the *legacy* Places API) are technically
+reachable through it. Curiously, outbound HTTPS from `httpx` running
+*inside* a Python process launched via Bash did seem to reach the
+network in one accidental case (a test that forgot to mock
+`search_google_places` took ~21s instead of ~5s) — this was never
+deliberately verified or exploited, since the user had already declined
+live validation by the time it was noticed, but it's worth someone
+checking directly in a future session before assuming curl-level
+blocking applies there too.
+
+**Incident, for context:** while probing whether the legacy
+(GET+query-string) Places API was viable, a shell command that
+constructed the search URL was run in a way that printed the full URL —
+**including the live `GOOGLE_API_KEY`** — into the visible conversation
+output. The user was told immediately; they chose not to expose it
+further (declined the GET-based workaround for the same reason) and did
+not ask for a rotation on the spot, but flagged it as something to
+consider. **Lesson: never build a URL containing a secret and pass it to
+any tool whose invocation or output is visible** — not `Bash` echoing a
+`curl`, not a printed `python -c` result, and not `WebFetch`'s `url`
+parameter either, since that's just as visible. If a query-string-
+authenticated API must be exercised for real, get the user's explicit
+go-ahead first (as eventually happened here, after the fact) — don't
+assume "it's just their own conversation" makes it fine by default.
 
 ### Celery pipeline (`app/workers/celery_app.py`)
 
 As of 2026-08-19 the pipeline no longer starts with a free-form Google
 Places search — it starts with `gerar_semente_leads` (ETAPA 0, not part of
 the per-lead flow below), which filters CNPJs from the RFB bulk files and
-joins in razão social. Tasks per lead: `search_google_places` (now an
-*enrichment* step over the already-known CNPJs from the seed — searches
-Google Places by `nome_busca_google_places()`'s pick, razão social
-preferred over nome_fantasia; the actual Places API call is still
-`NotImplementedError`, blocked on a real `GOOGLE_API_KEY` to validate
-against, unlike the free/no-auth CNES/IBGE/BrasilAPI sources) → Receita
+joins in razão social. Tasks per lead: `search_google_places` (real
+since 2026-08-20 — an *enrichment* step over the already-known CNPJs
+from the seed, one Text Search per CNPJ by `nome_busca_google_places()`'s
+pick, razão social preferred over nome_fantasia; see the "Google Places"
+section above — not live-tested, but no longer a stub) → Receita
 Federal → PGFN → Zona Franca → CNES → `enrich_site_firecrawl` (also
 covers what would've been a separate `enrich_instagram` step — the
 Instagram link comes out of the same scrape, no extra task needed) →
@@ -420,15 +509,15 @@ the actual entry point for running this whole sequence for one CNPJ —
 it calls the individual stage functions itself, in real dependency
 order, not the fixed ETAPA list order shown here (that list is the
 kickoff-doc reference ordering, not an execution contract).
-Implemented so far: `gerar_semente_leads`, `enrich_receita_federal`,
-`enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
-`refresh_pgfn_index`), `enrich_cnes`, `enrich_site_firecrawl`,
-`validate_whatsapp`, `enrich_email`, `compute_lead_score`,
-`process_lead_pipeline`. Only `search_google_places` raises
-`NotImplementedError` at this point — `enrich_linkedin` doesn't exist as
-a task at all yet (never even got a placeholder), unlike every other
-pipeline stage; it needs to be created from scratch, not just filled in,
-when picked up (and then wired into `process_lead_pipeline` too).
+Implemented so far: `gerar_semente_leads`, `search_google_places`,
+`enrich_receita_federal`, `enrich_zona_franca`, `enrich_pgfn_divida_ativa`
+(plus its prerequisite `refresh_pgfn_index`), `enrich_cnes`,
+`enrich_site_firecrawl`, `validate_whatsapp`, `enrich_email`,
+`compute_lead_score`, `process_lead_pipeline` — every task in the file
+now has a real implementation. `enrich_linkedin` doesn't exist as a task
+at all yet (never even got a placeholder), unlike every other pipeline
+stage; it needs to be created from scratch, not just filled in, when
+picked up (and then wired into `process_lead_pipeline` too).
 
 ### `.env.example` is inaccessible in this sandbox
 

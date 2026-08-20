@@ -7,6 +7,7 @@ substituída por um fake via monkeypatch, direto no namespace do módulo
 (a persistência usa uma sessão SQLAlchemy em SQLite em memória, injetada
 via `db=`, mesmo padrão de client injetável do resto do projeto).
 """
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -78,6 +79,27 @@ def _fake_email(dominio, decisor_nome):
     }
 
 
+def _fake_google_places(estabelecimentos):
+    return [
+        {
+            **e,
+            "google_place_id": "ChIJfake123",
+            "site": "https://clinicateste.com.br",
+            "rating": 4.5,
+            "avaliacoes": 87,
+            "telefone_google": "(11) 98888-7777",
+        }
+        for e in estabelecimentos
+    ]
+
+
+def _fake_google_places_nao_encontrado(estabelecimentos):
+    return [
+        {**e, "google_place_id": None, "site": None, "rating": None, "avaliacoes": None, "telefone_google": None}
+        for e in estabelecimentos
+    ]
+
+
 def _fake_site_firecrawl(site_url):
     return {
         "site_url": site_url,
@@ -95,10 +117,27 @@ def _patch_todas_as_etapas(monkeypatch):
     monkeypatch.setattr(celery_app, "enrich_pgfn_divida_ativa", _fake_pgfn)
     monkeypatch.setattr(celery_app, "enrich_zona_franca", _fake_zona_franca)
     monkeypatch.setattr(celery_app, "enrich_cnes", _fake_cnes)
+    monkeypatch.setattr(celery_app, "search_google_places", _fake_google_places)
     monkeypatch.setattr(celery_app, "validate_whatsapp", _fake_whatsapp)
     monkeypatch.setattr(celery_app, "enrich_email", _fake_email)
     monkeypatch.setattr(celery_app, "enrich_site_firecrawl", _fake_site_firecrawl)
     monkeypatch.setattr(celery_app.settings, "FIRECRAWL_API_KEY", "chave-de-teste")
+
+
+@pytest.fixture(autouse=True)
+def _protege_contra_chamada_real_ao_google_places(monkeypatch):
+    """
+    Autouse: `search_google_places` agora é uma chamada real (ver
+    app/services/google_places.py) — sem essa proteção, qualquer teste
+    que não mocke explicitamente as etapas anteriores (e por isso acabe
+    fornecendo uma razão social/nome fantasia) bateria de verdade na API
+    do Google usando a GOOGLE_API_KEY real do .env. Por padrão devolve
+    "não encontrado"; testes que querem exercitar o caminho feliz
+    sobrescrevem com `monkeypatch.setattr(celery_app, "search_google_places", ...)`
+    depois -- a sobrescrita no corpo do teste vale, já que é o mesmo
+    fixture `monkeypatch` por trás dos dois.
+    """
+    monkeypatch.setattr(celery_app, "search_google_places", _fake_google_places_nao_encontrado)
 
 
 # --- ordem de execução respeitando dependências ---
@@ -209,12 +248,13 @@ def test_pipeline_completo_score_e_etapas(monkeypatch):
         "enrich_pgfn_divida_ativa",
         "enrich_zona_franca",
         "enrich_cnes",
+        "search_google_places",
         "enrich_site_firecrawl",
         "validate_whatsapp",
         "enrich_email",
     }
     assert set(resultado["etapas_executadas"]) == etapas_esperadas
-    assert "search_google_places" in resultado["etapas_puladas"]  # task não implementada, sempre pulada
+    assert resultado["etapas_puladas"] == {}  # nada pulado -- todas as etapas tinham o que precisavam
 
     assert resultado["score_total"] > 0
     assert len(resultado["breakdown"]) == 9  # os 9 critérios de SCORING_CRITERIA
@@ -227,6 +267,7 @@ def test_pipeline_completo_score_e_etapas(monkeypatch):
     assert pontos["email_validado"] == 10.0
     assert pontos["decisor_identificavel"] == 10.0
     assert pontos["unidade_cnpj_ativo"] == 5.0
+    assert pontos["rating_google"] == 0.0  # peso confirmado em 0 -- rating 4.5 não muda nada
 
 
 # --- comportamento quando uma etapa falha ---
@@ -333,11 +374,69 @@ def test_etapa_pulada_por_falta_de_firecrawl_api_key(monkeypatch):
     assert "FIRECRAWL_API_KEY" in resultado["etapas_puladas"]["enrich_site_firecrawl"]
 
 
-def test_google_places_sempre_pulada():
-    """search_google_places ainda não está implementada -- sempre
-    pulada, independente dos parâmetros."""
+def test_google_places_pulada_sem_nome_disponivel(monkeypatch):
+    """Sem razão social/nome fantasia disponíveis (nem por parâmetro, nem
+    de enrich_receita_federal) -- não dá pra buscar; pulada sem sequer
+    tentar (nunca bate na API)."""
+    def receita_federal_sem_nome(cnpj):
+        return {"cnpj": cnpj, "encontrado": False}
+
+    def google_places_nao_deveria_ser_chamado(estabelecimentos):
+        raise AssertionError("search_google_places não deveria ser chamada sem nome disponível")
+
+    monkeypatch.setattr(celery_app, "enrich_receita_federal", receita_federal_sem_nome)
+    monkeypatch.setattr(celery_app, "enrich_pgfn_divida_ativa", _fake_pgfn)
+    monkeypatch.setattr(celery_app, "search_google_places", google_places_nao_deveria_ser_chamado)
+
     resultado = celery_app.process_lead_pipeline(cnpj=CNPJ, db=_db_session_sqlite())
+
     assert "search_google_places" in resultado["etapas_puladas"]
+    assert "nome" in resultado["etapas_puladas"]["search_google_places"]
+
+
+def test_google_places_e_fonte_automatica_de_site_url(monkeypatch):
+    """Quando site_url não é passado explicitamente, o site devolvido
+    pelo Google Places (ETAPA 5) alimenta a ETAPA 6 (Firecrawl) -- fecha
+    parte do gap de site_url que antes só dava pra contornar passando o
+    parâmetro na mão."""
+    monkeypatch.setattr(celery_app, "enrich_receita_federal", _fake_receita_federal)
+    monkeypatch.setattr(celery_app, "enrich_pgfn_divida_ativa", _fake_pgfn)
+    monkeypatch.setattr(celery_app, "enrich_zona_franca", _fake_zona_franca)
+    monkeypatch.setattr(celery_app, "enrich_cnes", _fake_cnes)
+    monkeypatch.setattr(celery_app, "search_google_places", _fake_google_places)
+    monkeypatch.setattr(celery_app, "enrich_site_firecrawl", _fake_site_firecrawl)
+    monkeypatch.setattr(celery_app.settings, "FIRECRAWL_API_KEY", "chave-de-teste")
+
+    resultado = celery_app.process_lead_pipeline(cnpj=CNPJ, db=_db_session_sqlite())  # sem site_url
+
+    assert "search_google_places" in resultado["etapas_executadas"]
+    assert "enrich_site_firecrawl" in resultado["etapas_executadas"]  # só rodou pq ganhou site_url do Google Places
+
+
+def test_site_url_explicito_tem_prioridade_sobre_google_places(monkeypatch):
+    site_recebido = {}
+
+    def google_places_com_site_diferente(estabelecimentos):
+        return [
+            {**e, "google_place_id": "x", "site": "https://site-errado.com.br", "rating": None, "avaliacoes": None, "telefone_google": None}
+            for e in estabelecimentos
+        ]
+
+    def firecrawl_capturado(site_url):
+        site_recebido["url"] = site_url
+        return _fake_site_firecrawl(site_url)
+
+    monkeypatch.setattr(celery_app, "enrich_receita_federal", _fake_receita_federal)
+    monkeypatch.setattr(celery_app, "enrich_pgfn_divida_ativa", _fake_pgfn)
+    monkeypatch.setattr(celery_app, "enrich_zona_franca", _fake_zona_franca)
+    monkeypatch.setattr(celery_app, "enrich_cnes", _fake_cnes)
+    monkeypatch.setattr(celery_app, "search_google_places", google_places_com_site_diferente)
+    monkeypatch.setattr(celery_app, "enrich_site_firecrawl", firecrawl_capturado)
+    monkeypatch.setattr(celery_app.settings, "FIRECRAWL_API_KEY", "chave-de-teste")
+
+    celery_app.process_lead_pipeline(cnpj=CNPJ, site_url="https://site-explicito.com.br", db=_db_session_sqlite())
+
+    assert site_recebido["url"] == "https://site-explicito.com.br"
 
 
 # --- persistência no banco ---
@@ -368,7 +467,9 @@ def test_persiste_lead_com_dados_de_todas_as_etapas(monkeypatch):
     assert lead.cnes_codigo == "9629866"
     assert lead.rqe_confirmado is True
     assert lead.rqe_fonte == "inferencia_ia"
-    assert lead.site == "https://clinicateste.com.br"
+    assert lead.google_rating == 4.5
+    assert lead.google_avaliacoes == 87
+    assert lead.site == "https://clinicateste.com.br"  # site_url explícito, não o do Google Places
     assert lead.instagram == "clinicateste"
     assert lead.servicos == "Cardiologia"
     assert lead.whatsapp_ativo is True

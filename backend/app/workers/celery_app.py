@@ -187,18 +187,47 @@ def search_google_places(estabelecimentos: list[dict]) -> list[dict]:
     por `gerar_semente_leads`: cnpj, razao_social, nome_fantasia, uf, ...)
     e busca cada um no Google Places pelo nome escolhido por
     `nome_busca_google_places` (razão social, com fallback pra
-    nome_fantasia), pra trazer site, rating e nº de avaliações.
+    nome_fantasia), pra trazer site, rating e nº de avaliações — um só
+    Text Search por estabelecimento, sem Place Details (a API New já
+    devolve site/rating/avaliações no Text Search, ver
+    app/services/google_places.py).
 
-    TODO: implementar a chamada real à Places API (Text Search pelo nome
-    de `nome_busca_google_places` + UF, depois Place Details pro
-    site/rating/avaliações). Ainda não dá pra confirmar o formato de
-    resposta contra a API real nesta sessão — diferente do
-    CNES/IBGE/BrasilAPI (públicas, sem chave), a Places API exige uma
-    GOOGLE_API_KEY válida pra testar, que não está configurada.
+    Contrato implementado contra a documentação oficial do Google em
+    20/08/2026 — NÃO validado contra a API real (limitação de ambiente
+    desta sessão: sem chamada de rede autenticada disponível via
+    nenhuma ferramenta; ver ressalva completa em
+    app/services/google_places.py).
+
+    Estabelecimentos sem nome pra buscar (razão social e nome fantasia
+    ambos vazios) ou cuja busca falhar/não achar nada entram no
+    resultado com site/rating/avaliações como None — não quebra o lote
+    inteiro por causa de um estabelecimento.
     """
-    raise NotImplementedError(
-        "Implementar a chamada à Places API numa sessão com GOOGLE_API_KEY configurada."
-    )
+    from app.services.google_places import buscar_estabelecimento
+
+    resultado = []
+    for estabelecimento in estabelecimentos:
+        nome_busca = nome_busca_google_places(estabelecimento)
+        lugar = None
+        if nome_busca:
+            try:
+                lugar = buscar_estabelecimento(nome_busca, estabelecimento.get("uf"))
+            except Exception:
+                logger.exception(
+                    "Busca no Google Places falhou pro CNPJ %s -- seguindo sem esse sinal.",
+                    estabelecimento.get("cnpj"),
+                )
+
+        resultado.append({
+            **estabelecimento,
+            "google_place_id": lugar.place_id if lugar else None,
+            "site": lugar.site if lugar else None,
+            "rating": lugar.rating if lugar else None,
+            "avaliacoes": lugar.avaliacoes if lugar else None,
+            "telefone_google": lugar.telefone if lugar else None,
+        })
+
+    return resultado
 
 
 @celery_app.task(name="enrich_receita_federal")
@@ -570,6 +599,7 @@ def _persistir_enriquecimento_lead(
     pgfn: dict | None,
     zona_franca: bool | None,
     cnes: dict | None,
+    google_places: dict | None,
     site_firecrawl: dict | None,
     site_url: str | None,
     whatsapp: dict | None,
@@ -635,8 +665,17 @@ def _persistir_enriquecimento_lead(
     if cnes is not None:
         lead.cnes_codigo = cnes.get("cnes_codigo")
 
-    if site_firecrawl is not None:
+    if google_places is not None:
+        lead.google_rating = google_places.get("rating")
+        lead.google_avaliacoes = google_places.get("avaliacoes")
+
+    if site_url is not None:
+        # Independente de site_firecrawl ter rodado -- site_url pode ter
+        # vindo só do Google Places (ex.: Firecrawl pulado por falta de
+        # FIRECRAWL_API_KEY, mas o site em si já é conhecido).
         lead.site = site_url
+
+    if site_firecrawl is not None:
         lead.instagram = site_firecrawl.get("instagram")
         servicos = site_firecrawl.get("servicos") or []
         lead.servicos = ", ".join(servicos) if servicos else None
@@ -733,18 +772,41 @@ def process_lead_pipeline(
         logger.warning("Pulando enrich_cnes pro CNPJ %s: %s", cnpj, motivo)
         etapas_puladas["enrich_cnes"] = motivo
 
-    # ETAPA 5 -- Google Places: task ainda não implementada (falta
-    # GOOGLE_API_KEY validada contra a API real, ver search_google_places).
-    # Seria a fonte de site_url e rating -- por isso as duas etapas
-    # seguintes dependem do que for passado explicitamente pra essa task.
-    motivo_google = "task search_google_places ainda não implementada (falta validar contra uma GOOGLE_API_KEY real)"
-    logger.warning("Pulando search_google_places pro CNPJ %s: %s", cnpj, motivo_google)
-    etapas_puladas["search_google_places"] = motivo_google
+    # ETAPA 5 -- Google Places: implementada em 20/08/2026 (ver
+    # search_google_places acima e app/services/google_places.py). Busca
+    # pelo nome que já tivermos (razão social preferida, com fallback pra
+    # nome_fantasia -- mesma lógica de nome_busca_google_places) + UF, se
+    # a Receita Federal já resolveu. Como o resultado inclui `site`, essa
+    # etapa também é a fonte automática de `site_url` pras etapas
+    # seguintes quando o chamador não passou uma explicitamente -- fecha
+    # parte do gap que antes só dava pra contornar passando o parâmetro
+    # na mão.
+    site_url_efetivo = site_url
+    estabelecimento_busca = {
+        "cnpj": cnpj,
+        "razao_social": razao_social or (receita_federal or {}).get("razao_social"),
+        "nome_fantasia": (receita_federal or {}).get("nome_fantasia"),
+        "uf": (receita_federal or {}).get("uf"),
+    }
+    nome_busca = nome_busca_google_places(estabelecimento_busca)
+    if nome_busca:
+        google_places_resultado = _rodar_etapa(
+            "search_google_places",
+            lambda: search_google_places([estabelecimento_busca])[0],
+        )
+        if google_places_resultado is not None:
+            enriquecimentos["search_google_places"] = google_places_resultado
+            if not site_url_efetivo and google_places_resultado.get("site"):
+                site_url_efetivo = google_places_resultado["site"]
+    else:
+        motivo = "sem nome (razão social/nome fantasia) pra buscar no Google Places"
+        logger.warning("Pulando search_google_places pro CNPJ %s: %s", cnpj, motivo)
+        etapas_puladas["search_google_places"] = motivo
 
-    # ETAPA 6 -- Firecrawl + IA: precisa de site_url (ver ressalva acima)
-    # e de FIRECRAWL_API_KEY configurada.
-    if not site_url:
-        motivo = "sem site_url (normalmente viria de search_google_places, não implementada; passe site_url explicitamente se já for conhecida)"
+    # ETAPA 6 -- Firecrawl + IA: precisa de site_url (da ETAPA 5 ou
+    # passada explicitamente) e de FIRECRAWL_API_KEY configurada.
+    if not site_url_efetivo:
+        motivo = "sem site_url (nem do Google Places, nem passada explicitamente)"
         logger.warning("Pulando enrich_site_firecrawl pro CNPJ %s: %s", cnpj, motivo)
         etapas_puladas["enrich_site_firecrawl"] = motivo
         site_firecrawl = None
@@ -754,7 +816,7 @@ def process_lead_pipeline(
         etapas_puladas["enrich_site_firecrawl"] = motivo
         site_firecrawl = None
     else:
-        site_firecrawl = _rodar_etapa("enrich_site_firecrawl", lambda: enrich_site_firecrawl(site_url))
+        site_firecrawl = _rodar_etapa("enrich_site_firecrawl", lambda: enrich_site_firecrawl(site_url_efetivo))
         if site_firecrawl is not None:
             enriquecimentos["enrich_site_firecrawl"] = site_firecrawl
 
@@ -768,11 +830,11 @@ def process_lead_pipeline(
         if whatsapp is not None:
             enriquecimentos["validate_whatsapp"] = whatsapp
 
-    # ETAPA 8 -- E-mail: precisa do domínio (extraído de site_url).
+    # ETAPA 8 -- E-mail: precisa do domínio (extraído de site_url_efetivo).
     # decisor_nome (da Receita Federal, ETAPA 1) é opcional -- enrich_email
     # já aceita None (busca só por domínio nesse caso), então essa etapa
     # não é pulada por falta de decisor, só por falta de domínio.
-    dominio = _extrair_dominio(site_url) if site_url else None
+    dominio = _extrair_dominio(site_url_efetivo) if site_url_efetivo else None
     decisor_nome = (receita_federal or {}).get("decisor_nome")
     if not dominio:
         motivo = "sem domínio (depende de site_url, que não está disponível)"
@@ -794,8 +856,9 @@ def process_lead_pipeline(
             pgfn=enriquecimentos.get("enrich_pgfn_divida_ativa"),
             zona_franca=enriquecimentos.get("enrich_zona_franca"),
             cnes=enriquecimentos.get("enrich_cnes"),
+            google_places=enriquecimentos.get("search_google_places"),
             site_firecrawl=enriquecimentos.get("enrich_site_firecrawl"),
-            site_url=site_url,
+            site_url=site_url_efetivo,
             whatsapp=enriquecimentos.get("validate_whatsapp"),
             email=enriquecimentos.get("enrich_email"),
         )
