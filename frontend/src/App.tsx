@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { KanbanPage } from "./pages/KanbanPage";
+import { LeadDossierPage } from "./pages/LeadDossierPage";
 import { LoginPage } from "./pages/LoginPage";
 
 function App() {
@@ -15,6 +16,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <KanbanPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/leads/:id"
+            element={
+              <ProtectedRoute>
+                <LeadDossierPage />
               </ProtectedRoute>
             }
           />

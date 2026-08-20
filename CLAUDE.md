@@ -78,12 +78,13 @@ backend/scripts/  one-off CLI scripts (create_user.py — the only way to create
 backend/tests/    pytest suite, one file per module under test
 
 frontend/src/
-  api.ts               typed HTTP client to the backend (health, login, leads, PATCH status)
+  api.ts               typed HTTP client to the backend (health, login, leads, lead detail, PATCH status)
   context/AuthContext.tsx  JWT held only in memory (React Context) — see "Frontend: Login + Kanban" below
   components/          ProtectedRoute, KanbanColumn, KanbanCard, LossReasonModal, PriorityBadge
-  pages/                LoginPage, KanbanPage (+ co-located .css)
+  pages/                LoginPage, KanbanPage, LeadDossierPage (+ co-located .css)
   kanbanStatuses.ts     column order/labels, mirrors app/models/lead.py::KanbanStatus
-  App.tsx               React Router root (/login public, / protected)
+  scoreLayers.ts         SignalLayer label lookup, mirrors app/scoring/rules.py::SignalLayer
+  App.tsx               React Router root (/login public, / and /leads/:id protected)
 ```
 
 ### Lead scoring engine (`app/scoring/rules.py`)
@@ -636,6 +637,17 @@ PERDIDO else None`, never leaves a stale reason from a previous loss).
 same pattern as `prioridade`/`zona_franca`. Tests in
 `tests/test_leads_routes.py` (9 new).
 
+`GET /api/leads/{lead_id}` (added 2026-08-20, alongside the lead dossier
+screen — see below) is a separate route from both of the above: single-
+lead detail, same `get_current_user` protection. Added because
+`LeadRead` — and by extension `list_leads`'s response — didn't expose
+most of the model's fields (`cnae_principal`, `anos_mercado`,
+`simples_nacional`, `situacao_cadastral`, `telefone`, `site`,
+`instagram`, `linkedin_empresa`, `linkedin_decisor`, `google_rating`,
+`google_avaliacoes`, `servicos`) — the Kanban board never needed them,
+but the dossier screen does, so `LeadRead` was expanded to include all
+of them rather than adding a second, dossier-specific schema.
+
 Migration `a3f7c1d92b4e_adiciona_kanban_status_e_motivo_perda.py`
 chains after `6102ef9fc509` (users, the head at the time) — also
 hand-written, same reason as the other two (`settings.DATABASE_URL`
@@ -716,6 +728,51 @@ what a given session asks for, even if it looks fast.
   access, exercising the actual login → drag → drop-into-Perdido flow
   is the natural next validation step before trusting this UI in
   front of the client.
+
+### Frontend: Lead dossier (`frontend/src/pages/LeadDossierPage.tsx`)
+
+Added 2026-08-20 — the **second** frontend screen, same one-at-a-time,
+validate-before-next approach as the Kanban screen (see above). Scoped
+deliberately to read-only display; see README "O que falta" item 13 for
+what was left out on purpose: editing lead data from this screen, a
+status-change history/audit log, CSV/Excel export.
+
+- **Route**: `/leads/:id`, wrapped in the same `ProtectedRoute` as `/`.
+  `KanbanCard` (`components/KanbanCard.tsx`) got an `onClick` that calls
+  `navigate(`/leads/${lead.id}`)` — this coexists with the card's
+  `@dnd-kit` drag handlers without extra guarding because `PointerSensor`
+  in `KanbanPage.tsx` already has `activationConstraint: { distance: 6 }`;
+  a plain click (no pointer movement past that threshold) never triggers
+  drag-start, so the browser's normal click event still fires on the
+  same element.
+- **Data**: `fetchLead(token, id)` in `api.ts` hits the new `GET
+  /api/leads/{lead_id}` (see "Kanban" section above for why `LeadRead`
+  needed expanding first). `Lead` in `api.ts` grew a matching
+  `ScoreDetalhes`/`ScoreBreakdownItem` pair of interfaces for
+  `score_detalhes.breakdown` — the shape `compute_lead_score`
+  (`app/workers/celery_app.py`) actually serializes (`key`, `label`,
+  `weight`, `layer`, `points` per criterion), not a generic `dict`.
+- **Layout**: header (razão social/nome fantasia/CNPJ/priority
+  badge/`score_total`) → a dedicated, visually-flagged PGFN section
+  (green "no pendency" vs. red with the inscription count — **never**
+  blank, per explicit instruction: absence of debt is still information
+  worth stating) → a 3-column responsive grid (dados cadastrais /
+  contato / presença digital, each a `<dl>` of label-value pairs, with a
+  small `CampoIndicador` helper for the two boolean-with-unknown-state
+  fields — WhatsApp ativo, e-mail validado) → the score breakdown, one
+  row per `SCORING_CRITERIA` entry showing `points/weight pts` and a
+  colored left-border tag for `SignalLayer` (green=estruturado,
+  gold=inferência, blue=validação — `scoreLayers.ts` holds the
+  label lookup, mirroring `app/scoring/rules.py::SignalLayer`'s three
+  values verbatim, not a new vocabulary).
+- **Shared styling**: `PriorityBadge`'s CSS (`.priority-badge`,
+  `.priority-a/b/c`) moved from `KanbanPage.css` to the global
+  `index.css` in this session, since the component is now used from two
+  pages — if a third page ever reuses it, no further move needed.
+- **Not tested in an actual browser** — same standing sandbox limitation
+  as the Kanban screen (see above); validated via `tsc -b`, `npm run
+  build`, `npm run lint` (only the same pre-existing `AuthContext.tsx`
+  fast-refresh warning), and code review.
 
 ### Migrations (`backend/alembic/`)
 

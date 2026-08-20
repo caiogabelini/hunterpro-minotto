@@ -257,7 +257,35 @@ interno do Docker.
   (`useDraggable`/`useDroppable`/`DndContext`) é pequena o bastante pra
   um board de 9 colunas sem precisar de virtualização ou reordenação
   dentro da mesma coluna (não pedido nesta tela).
-- ✅ 228 testes automatizados passando (`pytest`)
+- ✅ **Segunda tela do frontend: Dossiê do lead** (`/leads/:id`,
+  protegida, mesmo padrão do Kanban) — cada card do Kanban agora é
+  clicável (`onClick` no `KanbanCard`, convive sem conflito com o
+  drag-and-drop do `@dnd-kit` porque o `PointerSensor` só ativa o drag
+  depois de um deslocamento mínimo de 6px; um clique sem arrastar dispara
+  o `onClick` normalmente) e navega pro dossiê. Backend ganhou `GET
+  /api/leads/{lead_id}` (protegida, mesmo padrão do resto) e `LeadRead`
+  foi expandido com os campos que `list_leads` não precisava (CNAE, anos
+  de mercado, Simples Nacional, situação cadastral, telefone, site,
+  Instagram, LinkedIn empresa/decisor, rating/avaliações do Google,
+  serviços) — 3 testes novos em `tests/test_leads_routes.py`. A tela
+  mostra: cabeçalho (razão social, nome fantasia, CNPJ, badge de
+  prioridade, score total em destaque); seção separada e destacada pra
+  dívida ativa PGFN (verde "nenhuma pendência" ou vermelho com o número
+  de inscrições — nunca em branco); dados cadastrais; contato (com
+  indicador visual pra WhatsApp ativo/e-mail validado); presença digital
+  (site/Instagram/LinkedIn como links, rating Google, serviços); e o
+  breakdown do score — os 9 critérios de `SCORING_CRITERIA`, cada um com
+  pontos/peso máximo (ex. "RQE / especialista: 10/15 pts") e uma
+  cor/etiqueta de camada de confiabilidade (estruturado/inferência/
+  validação, mesmo vocabulário de `app/scoring/rules.py::SignalLayer`,
+  serializado em `Lead.score_detalhes.breakdown` por `compute_lead_score`
+  — ver `app/scoring/compute_lead_score.py`). Botão de voltar pro Kanban.
+  Mesma paleta/tipografia da tela anterior; o badge de prioridade virou
+  estilo compartilhado (`src/index.css`) já que agora é usado em duas
+  telas. `npm run build`/`npm run lint` limpos; mesma ressalva de sempre
+  — não testado num navegador de verdade (sandbox sem acesso de
+  rede/browser).
+- ✅ 234 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -309,14 +337,22 @@ Em ordem de prioridade combinada com o cliente:
       mas não protege nenhuma rota ainda — nenhuma rota admin-only
       foi criada nesta sessão.
 12. ~~Primeira tela do frontend (Login + Kanban)~~ ✅ feito
+    (20/08/2026) — ver acima.
+13. ~~Segunda tela do frontend (Dossiê do lead, `/leads/:id`)~~ ✅ feito
     (20/08/2026) — ver acima. Deliberadamente fora de escopo **desta**
     sessão, não esquecido (telas seguintes, uma por sessão, validando
     cada uma antes da próxima):
     - **Exportação CSV/Excel** (pedida pela Sulamita) — nenhuma tela
       nem endpoint de export existe ainda.
-    - **Dossiê detalhado do lead** — hoje o card do Kanban só mostra
-      razão social/prioridade/score; não há tela de detalhe por lead
-      (breakdown do score, histórico de enriquecimento, etc.).
+    - **Edição de dados do lead pelo dossiê** — a tela de dossiê é
+      só leitura; não há formulário nem endpoint `PUT`/`PATCH` pra
+      editar os dados cadastrais/contato/presença digital de um lead
+      (só `kanban_status`/`motivo_perda`, via o Kanban).
+    - **Histórico de mudanças de status** — o dossiê mostra o
+      `kanban_status` atual e o `motivo_perda` (quando houver), mas não
+      existe um log de quando/quem moveu o lead entre colunas ao longo
+      do tempo; precisaria de uma tabela nova (ex. `lead_status_history`)
+      pra registrar isso, que não existe ainda.
     - **Cadastro de usuário pelo frontend** — continua só via
       `scripts/create_user.py` (ver item 11 acima); nenhuma tela de
       admin foi criada.

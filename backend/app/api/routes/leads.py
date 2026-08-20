@@ -45,6 +45,24 @@ def list_leads(
     return db.execute(stmt).scalars().all()
 
 
+@router.get("/{lead_id}", response_model=LeadRead)
+def get_lead(
+    lead_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Detalhe de um lead (dossiê) — todos os campos, inclusive os que
+    `list_leads` não usa pra montar o Kanban (dados cadastrais, contato,
+    presença digital, breakdown do score). Requer autenticação (qualquer
+    papel), mesma proteção de `GET /api/leads`.
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+    return lead
+
+
 @router.patch("/{lead_id}/status", response_model=LeadRead)
 def update_lead_status(
     lead_id: str,

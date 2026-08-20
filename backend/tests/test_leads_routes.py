@@ -1,6 +1,6 @@
 """
-Testes de integração de GET /api/leads (filtro por kanban_status) e
-PATCH /api/leads/{lead_id}/status.
+Testes de integração de GET /api/leads (filtro por kanban_status),
+GET /api/leads/{lead_id} (dossiê) e PATCH /api/leads/{lead_id}/status.
 
 Mesmo padrão de fixtures de test_auth_routes.py: SQLite em memória
 (StaticPool + check_same_thread=False, ver docstring lá pro porquê),
@@ -67,6 +67,60 @@ def _criar_lead(db_session, **overrides) -> Lead:
     db_session.commit()
     db_session.refresh(lead)
     return lead
+
+
+# --- GET /api/leads/{lead_id} ---
+
+
+def test_get_lead_traz_todos_os_campos_do_dossie(client, db_session, token):
+    lead = _criar_lead(
+        db_session,
+        cnae_principal="8630-5/03",
+        anos_mercado=7,
+        simples_nacional=True,
+        situacao_cadastral="ATIVA",
+        telefone="47999998888",
+        site="https://clinicaexemplo.com.br",
+        instagram="clinicaexemplo",
+        linkedin_empresa="https://linkedin.com/company/clinicaexemplo",
+        linkedin_decisor="https://linkedin.com/in/decisor",
+        google_rating=4.7,
+        google_avaliacoes=132,
+        servicos="Cardiologia, Check-up",
+        divida_ativa_qtd_inscricoes=2,
+        score_total=63.5,
+        score_detalhes={"breakdown": [{"key": "divida_ativa_pgfn", "label": "Dívida ativa PGFN", "weight": 20, "layer": "estruturado", "points": 6.67}]},
+    )
+
+    resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["cnae_principal"] == "8630-5/03"
+    assert corpo["anos_mercado"] == 7
+    assert corpo["simples_nacional"] is True
+    assert corpo["situacao_cadastral"] == "ATIVA"
+    assert corpo["telefone"] == "47999998888"
+    assert corpo["site"] == "https://clinicaexemplo.com.br"
+    assert corpo["instagram"] == "clinicaexemplo"
+    assert corpo["linkedin_empresa"] == "https://linkedin.com/company/clinicaexemplo"
+    assert corpo["linkedin_decisor"] == "https://linkedin.com/in/decisor"
+    assert corpo["google_rating"] == 4.7
+    assert corpo["google_avaliacoes"] == 132
+    assert corpo["servicos"] == "Cardiologia, Check-up"
+    assert corpo["divida_ativa_qtd_inscricoes"] == 2
+    assert corpo["score_detalhes"]["breakdown"][0]["key"] == "divida_ativa_pgfn"
+
+
+def test_get_lead_inexistente_retorna_404(client, token):
+    resp = client.get("/api/leads/id-que-nao-existe", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+
+
+def test_get_lead_sem_token_retorna_401(client, db_session):
+    lead = _criar_lead(db_session)
+    resp = client.get(f"/api/leads/{lead.id}")
+    assert resp.status_code == 401
 
 
 # --- PATCH /api/leads/{lead_id}/status ---

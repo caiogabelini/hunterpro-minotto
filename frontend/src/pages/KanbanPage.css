@@ -142,17 +142,6 @@
   line-height: 1.4;
 }
 
-.priority-badge {
-  font-size: 11px;
-  font-weight: 700;
-  border-radius: 6px;
-  padding: 2px 7px;
-}
-
-.priority-a { background: rgba(124, 215, 156, 0.18); color: #7cd79c; }
-.priority-b { background: rgba(245, 200, 66, 0.18); color: var(--gold); }
-.priority-c { background: rgba(232, 131, 127, 0.18); color: #e8837f; }
-
 .modal-backdrop {
   position: fixed;
   inset: 0;
