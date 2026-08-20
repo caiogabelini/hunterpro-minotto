@@ -551,6 +551,33 @@ interno do Docker.
   (o campo do modal de "motivo da perda" é um `<textarea>`, não afetado
   por esse comportamento de autofill). Ver CLAUDE.md "Visual polish
   pass" pro detalhe completo do porquê de cada peça da correção.
+- ✅ **Dossiê reestruturado em abas** — inspirado numa referência visual
+  (Radar Comercial) compartilhada pelo cliente, mas usando só dado que
+  já existia no dossiê (nenhum campo novo, nenhuma chamada de IA nova).
+  Cabeçalho fixo (razão social, linha "município/UF · nicho" — nicho é
+  texto fixo "Clínica Médica", já que todo lead deste projeto já é
+  filtrado pra esse nicho desde a semente — e uma linha de resumo
+  "Score: X · Classificação: [A/B/C mapeado pra Excelente/Bom/Regular]
+  · Prioridade: [badge] · Canal: [WhatsApp ou E-mail, o que estiver
+  confirmado]") + 4 abas em pills: **Dados** (os mesmos 3 cards +
+  RQE de antes, só reagrupados, com a dívida ativa PGFN no topo);
+  **Contatos** (novo — o decisor como card de pessoa com WhatsApp/
+  E-mail/LinkedIn em chips clicáveis, estruturado como lista pra
+  comportar mais contatos no futuro); **Análise IA** (o breakdown do
+  score de sempre, mais uma lista nova "Sinais positivos" — derivada
+  automaticamente dos critérios do breakdown que bateram o peso máximo,
+  não é IA nova, é reorganização do mesmo dado); **Mensagens** (a seção
+  de Abordagem Sugerida de sempre, geração/regeneração/mailto/wa.me
+  sem nenhuma mudança de lógica). O número de score "hero" com brilho
+  dourado que ficava no cabeçalho se mudou pra dentro da aba Análise
+  IA — decisão da sessão pra não duplicar o número (a linha de resumo já
+  mostra "Score: X" como texto), documentada em detalhe no CLAUDE.md
+  "Dossier tabbed restructure" caso precise ser revista depois de ver a
+  tela de verdade. Painel lateral de "Insights da IA" **não** foi
+  adicionado nesta sessão, de propósito — fica pra uma sessão futura
+  dedicada, já alinhado com o cliente. `npm run build`/`npm run lint`/
+  `npm run test` limpos; sem validação visual real, mesma ressalva de
+  sempre.
 - ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 
@@ -647,6 +674,17 @@ Em ordem de prioridade combinada com o cliente:
     - **"Busca de Leads" e "Dashboard"** continuam só itens reservados
       na sidebar ("em breve", desabilitados) — nenhuma dessas telas
       existe, de propósito (não inventar rota falsa).
+15. ~~Dossiê reestruturado em abas (Dados/Contatos/Análise IA/Mensagens)~~
+    ✅ feito (20/08/2026) — ver acima. Pendência deixada de propósito:
+    - **Painel lateral "Insights da IA"** — parte da referência visual
+      (Radar Comercial) que o cliente compartilhou, mas explicitamente
+      combinado como fora de escopo desta sessão. Fica pra uma sessão
+      futura dedicada.
+    - **Validação visual real** — mesma ressalva do item 14: todo o
+      trabalho desta sessão (reposicionar o número de score/badge de
+      prioridade pra dentro da aba Análise IA, o layout das abas em si,
+      os chips da aba Contatos) foi validado só tecnicamente, nunca
+      visto numa tela de verdade.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

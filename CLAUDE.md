@@ -1473,6 +1473,167 @@ CSS is set. Fixed:
   `<textarea>`, not subject to browser autofill styling the same way,
   and wasn't part of the report).
 
+### Dossier tabbed restructure (`LeadDossierPage.tsx`, follow-up session, 2026-08-20)
+
+Complete restructure of the dossier's information architecture, modeled
+on a reference screenshot the client shared from another product
+("Radar Comercial") — a fixed header + 4 horizontal pill tabs (Dados /
+Contatos / Análise IA / Mensagens), replacing the earlier single
+long-scrolling page. **Explicit constraint honored**: every value shown
+comes from data the dossier already had — no new backend fields, no new
+AI call. Also explicitly deferred per the client-aligned plan: no
+"Insights da IA" side panel this session — don't add one without a
+follow-up request naming it.
+
+**Fixed header** (`DossierHeader`) — razão social, `nome_fantasia`/CNPJ
+(kept even though the reference screenshot didn't show them explicitly;
+"only use existing data" was about not inventing fields, not about
+deleting already-useful identifying info), then three new derived
+lines, all computed from fields the dossier already exposed:
+- **Secondary line** (`município/UF · nicho`) — nicho is the fixed
+  string `"Clínica Médica"` (`NICHO_FIXO`), not derived from `cnae_principal`,
+  because there's no niche-friendly-name mapping anywhere in this
+  codebase and the request explicitly offered this as the simpler
+  acceptable option ("pode usar CNAE como texto, ou 'Clínica Médica'
+  fixo") — every lead in this project is already filtered to this niche
+  at the seed stage (`app/services/receita_federal_bulk.py`, CNAE group
+  8630), so the fixed string is accurate for 100% of leads, not a
+  simplification that could mislead.
+- **Resumo line** (`Score: X · Classificação: ... · Prioridade: ... ·
+  Canal: ...`) — `Classificação` is a new label mapping over the
+  existing `prioridade` (A/B/C) field: `CLASSIFICACAO_LABELS = {A:
+  "Excelente", B: "Bom", C: "Regular"}`, exactly the mapping the request
+  specified. `Canal` is `canalPreferido(lead)`: WhatsApp if
+  `whatsapp_ativo`, else E-mail if `email_validado`, else `"—"` —
+  deliberately gated on the *confirmed* signal (not mere field
+  presence), matching the same gating `CampoWhatsapp`/`SecaoAbordagem`
+  already use elsewhere on this page; WhatsApp is checked first to
+  match the existing "WhatsApp-first" ordering convention already
+  visible in the Contato card and the quick-action links.
+- **Footer row** — the existing Kanban status pill + `motivo_perda` +
+  "Encontrado em/Atualizado" text, unchanged content, just moved inside
+  the header card as its bottom row (was a separate paragraph below the
+  header before).
+
+**Where the giant score number went**: the previous session's "hero"
+score display (60px, gold glow, large `PriorityBadge`) lived in a
+right-hand column of the header. That column is gone — **judgment call,
+not explicit in the request**: since the new resumo line already shows
+`Score: X` as compact text, keeping the giant number *also* in the
+header would be redundant with itself. Read the "Análise IA" tab
+instruction literally instead — "mova pra cá o breakdown do score...
+com visual mais forte no número total (como já está, com o brilho
+dourado)" — as an instruction to relocate the entire hero-score
+treatment (badge + number + label, same CSS classes,
+`.dossier-analise-score` is just a new container) into that tab, not to
+duplicate it. If this reads wrong once actually seen on screen, moving
+it back to the header (or showing both) is a small, contained change —
+flagged here specifically so a future session doesn't have to
+re-derive the reasoning.
+
+**Tabs** (`AbaNav`, `ABAS` config array) — local `useState<Aba>("dados")`
+in `LeadDossierPage`, no URL/query-param sync (not asked, would add
+complexity for a feature that isn't needed yet — reconsider if deep-
+linking to a specific tab is ever requested). Switching tabs unmounts
+the previous tab's subtree entirely (plain conditional rendering, not
+`display: none`) — this is safe because all persistent state
+(`lead`, `mensagens`) lives in the parent component, not in any
+per-tab component; only transient UI state (`CanalAbordagemCard`'s
+`gerando`/`erro`) resets on tab-away, which is the correct behavior
+for "in-flight loading state," not data loss.
+
+**Aba "Dados"** (`AbaDados`) — the exact same three cards (Dados
+cadastrais / Contato / Presença digital) plus the RQE card, same
+fields, same components (`Campo`, `CampoWhatsapp`, `CampoEmail`,
+`SecaoRqe`) — purely moved inside a new wrapper, zero field changes.
+PGFN section (`SecaoPgfn`) sits above the card grid, unchanged
+component, just reordered to be first per the explicit "most critical
+info" instruction (it already was first before this session too, so
+this is actually a no-op relative to the prior layout — worth noting
+so nobody goes looking for a diff that isn't there).
+
+**Aba "Contatos"** (`AbaContatos`, new) — **deliberately duplicates
+data already visible in the Dados tab's Contato card** — this is
+correct per the request, not an oversight: Dados tab shows raw fields
+(spec-sheet style, `dt`/`dd` rows); Contatos tab shows the same
+underlying data as a *person-centric* card with clickable channel
+chips. Structured as `<ul><li>` (`.dossier-contatos-lista`/
+`-contato-card`) even though today only one contact
+(`decisor_nome`) can ever exist on a `Lead` — explicit request: "estruture
+como uma lista que comporta mais contatos no futuro." A future
+multi-contact model would map onto this same markup by rendering more
+`<li>`s, no restructure needed. Chip gating, each independently
+justified:
+- WhatsApp chip: `whatsapp_ativo === true` **and** a valid formatted
+  number (`formatarNumeroWhatsapp` succeeds) — same "don't offer an
+  action for an unconfirmed channel" rule as the rest of the page.
+- E-mail chip: `lead.email` truthy — **not** gated on `email_validado`,
+  unlike the header's `canalPreferido` — deliberate difference: the
+  header's "Canal" line is about which channel to *lead with*
+  (should be a confirmed-good one), the Contatos chip is just "here's a
+  way to reach them" (a raw, unvalidated email is still a real contact
+  attempt worth offering as a chip). If this distinction turns out to
+  be confusing in practice, the fix is a one-line gate change, not a
+  restructure.
+- LinkedIn chip: `linkedin_decisor` specifically (the *person's*
+  LinkedIn, matching "pra ele" in the request), not `linkedin_empresa`
+  (the company's).
+- **Icon substitution, not a missing feature**: the LinkedIn chip uses
+  `Link2` (a generic link icon), not a LinkedIn logo — `lucide-react`
+  1.33 (the version installed in the previous polish session) doesn't
+  export brand/logo icons at all (removed upstream for trademark
+  reasons; confirmed by grepping the package's own `.d.ts` for
+  `Linkedin`/`*Link*` declarations — only `Link2`/`Link2Off`/`Unlink2`
+  exist). The chip's own "LinkedIn" text label already disambiguates,
+  so this isn't a visual regression, just a constraint of the icon
+  library as currently pinned.
+
+**Aba "Análise IA"** (`AbaAnalise`, replaces the old standalone
+`SecaoBreakdown`) — hero score block (see above) + a new "Sinais
+positivos" chip list + the unchanged 9-criterion breakdown list.
+"Sinais positivos" is **derived reorganization of `score_detalhes`,
+not a new signal or a new AI call** (explicit constraint in the
+request, worth restating since it's easy to reach for "just call the
+AI for this" reflexively): `breakdown.filter(item => item.weight > 0 &&
+item.points >= item.weight - 0.01)`. Two things worth knowing about
+that filter if you touch it:
+- `weight > 0` excludes `rating_google` specifically — its weight was
+  confirmed at 0 by the client ("pra mim não importa", see
+  `app/scoring/rules.py`), and without this exclusion a lead with no
+  Google rating data (`points = 0`, `weight = 0`) would technically
+  satisfy `points >= weight` and get listed as a false "positive
+  signal" for a criterion that structurally can never produce one.
+- The `- 0.01` tolerance exists because `points`/`weight` cross the
+  network as floats computed server-side (e.g. `pgfn_points`: `6 ×
+  (20/6)` doesn't always land on exactly `20.0` in IEEE 754) — a strict
+  `>=` without the epsilon would silently drop a criterion that's
+  visually "clearly full" in the breakdown list right above it from the
+  "positive signals" list, which would read as a bug to anyone
+  comparing the two lists side by side.
+- Every criterion's own `label` (already a client-approved string from
+  `SCORING_CRITERIA`) is reused verbatim for the chip text — no new
+  copy was written, including for `divida_ativa_pgfn`: a full-weight
+  PGFN debt score genuinely is a positive *prospecting* signal for an
+  accounting firm's business model (more debt registrations = more
+  reason for Minotto to reach out), so it correctly earns a "Dívida
+  ativa PGFN" chip here even though the PGFN section elsewhere on the
+  page frames the same fact as something to "verify before advancing" —
+  both framings are accurate for their respective audiences (sales
+  signal vs. deal-risk note), not a contradiction to reconcile.
+
+**Aba "Mensagens"** — `SecaoAbordagem`/`CanalAbordagemCard`, generation/
+regeneration/mailto/wa.me logic completely unchanged, only relocated
+into the tab-conditional render instead of always rendering below the
+old score-breakdown card.
+
+**Not visually validated** — same standing sandbox limitation as every
+other frontend session (no browser here). This is the fourth
+consecutive dossier-touching session with that caveat; if the client's
+reference screenshot implies a layout detail this write-up
+misjudged (tab styling, header line order, chip placement), that's the
+first thing to check against the real screen, not a sign the
+implementation is fundamentally wrong.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

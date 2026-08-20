@@ -36,11 +36,14 @@
   color: #f0938e;
 }
 
+/* Cabeçalho -- fixo no topo, fora das abas (reestruturação desta
+   sessão). Virou um bloco de coluna única (nome, linha secundária,
+   linha de resumo, status do Kanban + datas) -- o número de score
+   "hero" que ficava aqui numa coluna à direita se mudou pra dentro da
+   aba "Análise IA" (ver `.dossier-analise-score` mais abaixo), porque a
+   linha de resumo já mostra "Score: X" como texto -- ter os dois (texto
+   compacto aqui + número gigante do lado) seria redundante. */
 .dossier-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 20px;
   background: var(--navy-dark);
   border: 1px solid rgba(245, 200, 66, 0.18);
   border-radius: 16px;
@@ -80,17 +83,51 @@
   font-family: ui-monospace, monospace;
 }
 
-.dossier-header-score {
-  text-align: right;
-  flex-shrink: 0;
+/* Linha secundária: "município/UF · nicho" -- nicho é texto fixo
+   ("Clínica Médica", ver NICHO_FIXO em LeadDossierPage.tsx), já que o
+   Lead não tem um campo de especialidade estruturado pra derivar algo
+   mais específico sem inventar dado novo. */
+.dossier-secundaria {
+  margin: var(--space-2) 0 0;
+  font-size: 13px;
+  color: var(--gray);
+}
+
+/* Linha de resumo: "Score: X · Classificação: ... · Prioridade: ... ·
+   Canal: ...". Cada pedaço já vem de um campo que existe (score_total,
+   prioridade mapeada pra um rótulo, canal preferido derivado de
+   whatsapp_ativo/email_validado) -- nenhum dado novo, só reagrupado
+   numa linha compacta em vez de um bloco de número gigante. */
+.dossier-resumo {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: 13px;
+  color: var(--gray);
+}
+
+.dossier-resumo strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+.dossier-resumo-sep {
+  color: rgba(255, 255, 255, 0.15);
+}
+
+.dossier-header-footer {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .dossier-kanban-status {
-  margin-top: var(--space-3);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -122,7 +159,7 @@
 .dossier-datas {
   font-size: 12px;
   color: var(--gray);
-  margin: 0 0 var(--space-4);
+  margin: 0;
 }
 
 /* Score total -- o número mais importante da tela, precisa de presença
@@ -141,6 +178,46 @@
   text-transform: uppercase;
   letter-spacing: 1px;
   color: var(--gray);
+}
+
+/* Navegação por abas -- pills horizontais, estilo da referência
+   compartilhada pelo cliente (Radar Comercial). Mesma linguagem visual
+   dos outros badges "pill" da sessão anterior (raio 999px), mas maior
+   e clicável -- é navegação, não um rótulo passivo. */
+.dossier-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  overflow-x: auto;
+}
+
+.dossier-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--gray);
+  border-radius: 999px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.dossier-tab:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.dossier-tab-ativa,
+.dossier-tab-ativa:hover {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: var(--navy-dark);
 }
 
 .dossier-pgfn {
@@ -398,6 +475,127 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--gray);
   border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Aba "Contatos" -- lista de cards de pessoa (hoje só o decisor, mas a
+   estrutura em <ul>/<li> já comporta mais de um contato no futuro sem
+   mudar CSS nenhum, só o array de origem). */
+.dossier-contatos-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dossier-contato-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: var(--space-4) var(--space-5);
+}
+
+.dossier-contato-nome {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.dossier-contato-canais {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Chip de canal -- mesma pill arredondada do resto do sistema de
+   badges, tom neutro (não usa a cor de marca cheia como os botões de
+   ação primários, pra não competir visualmente com eles) mas fica
+   dourada no hover, reforçando que é clicável. */
+.dossier-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--gray);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.dossier-chip:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(245, 200, 66, 0.08);
+}
+
+/* Aba "Análise IA" -- o bloco "hero" (badge de prioridade + número de
+   score + label) que antes vivia no cabeçalho da página, agora dentro
+   desta aba (ver comentário em `.dossier-header` acima pro porquê).
+   Reaproveita `.dossier-score-total`/`.dossier-score-label` como estão
+   (mesmo brilho dourado, mesmo tamanho -- só o container mudou). */
+.dossier-analise-score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding-bottom: var(--space-5);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Subtítulo dentro da aba "Análise IA" -- um nível abaixo de
+   `.dossier-section-heading` (que é usado quando cada card TEM seu
+   próprio título de topo; aqui a aba inteira já é um card só, então
+   "Sinais positivos"/"Breakdown do score" são subtítulos internos, não
+   títulos de card). */
+.dossier-subheading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--gold-dim);
+  margin: 0 0 var(--space-3);
+}
+
+.dossier-subheading svg {
+  color: var(--gold);
+}
+
+.dossier-sinais-positivos {
+  margin-bottom: var(--space-6);
+}
+
+.dossier-sinais-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dossier-sinal-chip {
+  font-size: 12px;
+  font-weight: 700;
+  color: #8ee6ab;
+  background: rgba(124, 215, 156, 0.16);
+  border: 1px solid rgba(124, 215, 156, 0.35);
+  border-radius: 999px;
+  padding: 6px 14px;
 }
 
 .dossier-abordagem-canais {

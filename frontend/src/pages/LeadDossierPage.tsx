@@ -2,17 +2,23 @@ import {
   AlertTriangle,
   ArrowLeft,
   Building2,
+  CheckCircle2,
   ExternalLink,
+  FileText,
   Gauge,
   Globe,
   Landmark,
+  Link2,
   Loader2,
   Mail,
+  MessageCircle,
+  MessageSquare,
   Phone,
   Send,
   ShieldCheck,
   Sparkles,
   Stethoscope,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -34,6 +40,15 @@ import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
 import "./LeadDossierPage.css";
 
+type Aba = "dados" | "contatos" | "analise" | "mensagens";
+
+const ABAS: { id: Aba; label: string; icon: LucideIcon }[] = [
+  { id: "dados", label: "Dados", icon: FileText },
+  { id: "contatos", label: "Contatos", icon: Users },
+  { id: "analise", label: "Análise IA", icon: Gauge },
+  { id: "mensagens", label: "Mensagens", icon: MessageSquare },
+];
+
 export function LeadDossierPage() {
   const { id } = useParams<{ id: string }>();
   const { token, logout } = useAuth();
@@ -43,6 +58,7 @@ export function LeadDossierPage() {
   const [mensagens, setMensagens] = useState<LeadMessage[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const [abaAtiva, setAbaAtiva] = useState<Aba>("dados");
 
   useEffect(() => {
     if (!token || !id) return;
@@ -77,84 +93,98 @@ export function LeadDossierPage() {
 
       {lead && (
         <>
-          <header className="dossier-header">
-            <div>
-              <div className="dossier-eyebrow">Dossiê do lead</div>
-              <h1 className="dossier-razao">{lead.razao_social}</h1>
-              {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
-              <p className="dossier-cnpj">{lead.cnpj}</p>
-              <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
-            </div>
-            <div className="dossier-header-score">
-              <PriorityBadge prioridade={lead.prioridade} size="lg" />
-              <div className="dossier-score-total">{lead.score_total ?? "—"}</div>
-              <div className="dossier-score-label">pontos de score</div>
-            </div>
-          </header>
+          <DossierHeader lead={lead} />
 
-          <p className="dossier-datas">
-            Encontrado em {formatDate(lead.created_at)} · Atualizado {formatRelative(lead.updated_at)}
-          </p>
+          <AbaNav ativa={abaAtiva} onChange={setAbaAtiva} />
 
-          <SecaoPgfn
-            qtdInscricoes={lead.divida_ativa_qtd_inscricoes}
-            valorTotal={lead.divida_ativa_valor_total}
-            ajuizado={lead.divida_ativa_ajuizado}
-          />
+          {abaAtiva === "dados" && <AbaDados lead={lead} />}
 
-          <div className="dossier-grid">
-            <section className="dossier-card">
-              <SectionHeading icon={Building2}>Dados cadastrais</SectionHeading>
-              <dl>
-                <Campo label="CNAE" valor={lead.cnae_principal} />
-                <Campo label="Município/UF" valor={lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : null} />
-                <Campo label="Anos de mercado" valor={lead.anos_mercado} />
-                <Campo label="Situação cadastral" valor={lead.situacao_cadastral} />
-                <Campo label="Simples Nacional" valor={boolLabel(lead.simples_nacional)} />
-              </dl>
-            </section>
+          {abaAtiva === "contatos" && <AbaContatos lead={lead} />}
 
-            <section className="dossier-card">
-              <SectionHeading icon={Phone}>Contato</SectionHeading>
-              <dl>
-                <Campo label="Telefone" valor={lead.telefone} />
-                <CampoWhatsapp telefone={lead.telefone} ativo={lead.whatsapp_ativo} />
-                <CampoEmail email={lead.email} validado={lead.email_validado} />
-                <Campo label="Decisor" valor={lead.decisor_nome} />
-              </dl>
-            </section>
+          {abaAtiva === "analise" && (
+            <AbaAnalise scoreTotal={lead.score_total} prioridade={lead.prioridade} scoreDetalhes={lead.score_detalhes} />
+          )}
 
-            <section className="dossier-card">
-              <SectionHeading icon={Globe}>Presença digital</SectionHeading>
-              <dl>
-                <Campo label="Site" valor={lead.site} link={lead.site} />
-                <Campo label="Instagram" valor={lead.instagram} />
-                <Campo label="LinkedIn (empresa)" valor={lead.linkedin_empresa} link={lead.linkedin_empresa} />
-                <Campo label="LinkedIn (decisor)" valor={lead.linkedin_decisor} link={lead.linkedin_decisor} />
-                <Campo
-                  label="Rating Google"
-                  valor={lead.google_rating != null ? `${lead.google_rating} (${lead.google_avaliacoes ?? 0} avaliações)` : null}
-                />
-                <Campo label="Serviços" valor={lead.servicos} />
-              </dl>
-            </section>
-
-            <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
-          </div>
-
-          <SecaoAbordagem
-            leadId={lead.id}
-            email={lead.email}
-            temWhatsapp={!!lead.whatsapp_ativo}
-            telefone={lead.telefone}
-            mensagens={mensagens}
-            onGerada={registrarNovaMensagem}
-          />
-
-          <SecaoBreakdown scoreDetalhes={lead.score_detalhes} />
+          {abaAtiva === "mensagens" && (
+            <SecaoAbordagem
+              leadId={lead.id}
+              email={lead.email}
+              temWhatsapp={!!lead.whatsapp_ativo}
+              telefone={lead.telefone}
+              mensagens={mensagens}
+              onGerada={registrarNovaMensagem}
+            />
+          )}
         </>
       )}
     </div>
+  );
+}
+
+// --- Cabeçalho (fixo, fora das abas) ---------------------------------------
+
+// Mapeamento simples A/B/C -> rótulo de classificação, derivado da
+// `prioridade` que já existe no lead (nenhum campo novo). "Excelente"/
+// "Bom"/"Regular" são só um rótulo mais legível pro mesmo valor que o
+// badge de prioridade já mostra.
+const CLASSIFICACAO_LABELS: Record<string, string> = {
+  A: "Excelente",
+  B: "Bom",
+  C: "Regular",
+};
+
+// Nicho é fixo pra todo lead deste projeto (consultórios/clínicas com
+// RQE, ver CLAUDE.md) -- não há campo de especialidade estruturado no
+// Lead pra derivar um texto mais específico, então não inventamos um.
+const NICHO_FIXO = "Clínica Médica";
+
+/** WhatsApp antes de e-mail -- mesma preferência já assumida no resto
+ * do dossiê (a ação rápida de WhatsApp aparece antes da de e-mail na
+ * seção de Contato). Só considera canal *confirmado* (whatsapp_ativo/
+ * email_validado), não a mera presença do dado. */
+function canalPreferido(lead: Lead): string {
+  if (lead.whatsapp_ativo) return "WhatsApp";
+  if (lead.email_validado) return "E-mail";
+  return "—";
+}
+
+function DossierHeader({ lead }: { lead: Lead }) {
+  const classificacao = lead.prioridade ? CLASSIFICACAO_LABELS[lead.prioridade.toUpperCase()] ?? lead.prioridade : "—";
+
+  return (
+    <header className="dossier-header">
+      <div className="dossier-eyebrow">Dossiê do lead</div>
+      <h1 className="dossier-razao">{lead.razao_social}</h1>
+      {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
+      <p className="dossier-cnpj">{lead.cnpj}</p>
+
+      <p className="dossier-secundaria">
+        {lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : "Localização não informada"} · {NICHO_FIXO}
+      </p>
+
+      <div className="dossier-resumo">
+        <span>
+          Score: <strong>{lead.score_total ?? "—"}</strong>
+        </span>
+        <span className="dossier-resumo-sep">·</span>
+        <span>
+          Classificação: <strong>{classificacao}</strong>
+        </span>
+        <span className="dossier-resumo-sep">·</span>
+        <span>Prioridade: {lead.prioridade ? <PriorityBadge prioridade={lead.prioridade} /> : <strong>—</strong>}</span>
+        <span className="dossier-resumo-sep">·</span>
+        <span>
+          Canal: <strong>{canalPreferido(lead)}</strong>
+        </span>
+      </div>
+
+      <div className="dossier-header-footer">
+        <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
+        <p className="dossier-datas">
+          Encontrado em {formatDate(lead.created_at)} · Atualizado {formatRelative(lead.updated_at)}
+        </p>
+      </div>
+    </header>
   );
 }
 
@@ -166,6 +196,86 @@ function KanbanStatusBadge({ status, motivoPerda }: { status: string; motivoPerd
       <span className={`dossier-kanban-pill ${perdido ? "dossier-kanban-pill-perdido" : ""}`}>{label}</span>
       {perdido && motivoPerda && <span className="dossier-motivo-perda">Motivo: {motivoPerda}</span>}
     </div>
+  );
+}
+
+// --- Navegação por abas ------------------------------------------------
+
+function AbaNav({ ativa, onChange }: { ativa: Aba; onChange: (aba: Aba) => void }) {
+  return (
+    <div className="dossier-tabs" role="tablist">
+      {ABAS.map(({ id, label, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={ativa === id}
+          className={`dossier-tab ${ativa === id ? "dossier-tab-ativa" : ""}`}
+          onClick={() => onChange(id)}
+        >
+          <Icon size={15} />
+          <span>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// --- Aba "Dados" ---------------------------------------------------------
+// Mesmos 3 cards (Dados cadastrais/Contato/Presença digital) + RQE que já
+// existiam antes das abas -- só reagrupados aqui, campos inalterados.
+// Dívida ativa PGFN fica no topo da aba, antes dos cards, por ser a
+// informação mais crítica (pedido explícito).
+
+function AbaDados({ lead }: { lead: Lead }) {
+  return (
+    <>
+      <SecaoPgfn
+        qtdInscricoes={lead.divida_ativa_qtd_inscricoes}
+        valorTotal={lead.divida_ativa_valor_total}
+        ajuizado={lead.divida_ativa_ajuizado}
+      />
+
+      <div className="dossier-grid">
+        <section className="dossier-card">
+          <SectionHeading icon={Building2}>Dados cadastrais</SectionHeading>
+          <dl>
+            <Campo label="CNAE" valor={lead.cnae_principal} />
+            <Campo label="Município/UF" valor={lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : null} />
+            <Campo label="Anos de mercado" valor={lead.anos_mercado} />
+            <Campo label="Situação cadastral" valor={lead.situacao_cadastral} />
+            <Campo label="Simples Nacional" valor={boolLabel(lead.simples_nacional)} />
+          </dl>
+        </section>
+
+        <section className="dossier-card">
+          <SectionHeading icon={Phone}>Contato</SectionHeading>
+          <dl>
+            <Campo label="Telefone" valor={lead.telefone} />
+            <CampoWhatsapp telefone={lead.telefone} ativo={lead.whatsapp_ativo} />
+            <CampoEmail email={lead.email} validado={lead.email_validado} />
+            <Campo label="Decisor" valor={lead.decisor_nome} />
+          </dl>
+        </section>
+
+        <section className="dossier-card">
+          <SectionHeading icon={Globe}>Presença digital</SectionHeading>
+          <dl>
+            <Campo label="Site" valor={lead.site} link={lead.site} />
+            <Campo label="Instagram" valor={lead.instagram} />
+            <Campo label="LinkedIn (empresa)" valor={lead.linkedin_empresa} link={lead.linkedin_empresa} />
+            <Campo label="LinkedIn (decisor)" valor={lead.linkedin_decisor} link={lead.linkedin_decisor} />
+            <Campo
+              label="Rating Google"
+              valor={lead.google_rating != null ? `${lead.google_rating} (${lead.google_avaliacoes ?? 0} avaliações)` : null}
+            />
+            <Campo label="Serviços" valor={lead.servicos} />
+          </dl>
+        </section>
+
+        <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
+      </div>
+    </>
   );
 }
 
@@ -234,6 +344,142 @@ function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: 
     </section>
   );
 }
+
+// --- Aba "Contatos" --------------------------------------------------------
+// Mesmo dado do decisor (decisor_nome, email, whatsapp_ativo,
+// linkedin_decisor) que já aparece na aba "Dados", só apresentado de um
+// jeito diferente: como um card de pessoa/contato com os canais dele em
+// chips clicáveis, em vez de uma linha de spec sheet. Estruturado como
+// lista (<ul>) mesmo só tendo hoje um único contato possível
+// (decisor_nome é um campo único no Lead) -- comporta mais contatos no
+// futuro sem mudar a estrutura, só o array de origem.
+
+function AbaContatos({ lead }: { lead: Lead }) {
+  const numeroWhatsapp = formatarNumeroWhatsapp(lead.telefone);
+  const temWhatsapp = !!lead.whatsapp_ativo && !!numeroWhatsapp;
+  const temEmail = !!lead.email;
+  const temLinkedin = !!lead.linkedin_decisor;
+
+  if (!lead.decisor_nome) {
+    return (
+      <section className="dossier-card">
+        <SectionHeading icon={Users}>Contatos</SectionHeading>
+        <p className="dossier-muted">Nenhum decisor identificado ainda pra este lead.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="dossier-card">
+      <SectionHeading icon={Users}>Contatos</SectionHeading>
+      <ul className="dossier-contatos-lista">
+        <li className="dossier-contato-card">
+          <div className="dossier-contato-nome">{lead.decisor_nome}</div>
+          <div className="dossier-contato-canais">
+            {temWhatsapp && (
+              <a className="dossier-chip" href={`https://wa.me/${numeroWhatsapp}`} target="_blank" rel="noreferrer">
+                <MessageCircle size={13} />
+                <span>WhatsApp</span>
+              </a>
+            )}
+            {temEmail && (
+              <a className="dossier-chip" href={`mailto:${lead.email}`}>
+                <Mail size={13} />
+                <span>E-mail</span>
+              </a>
+            )}
+            {lead.linkedin_decisor && (
+              // Link2 (ícone genérico), não um logo da LinkedIn -- essa
+              // versão do lucide-react (1.33) não exporta mais ícones de
+              // marca (removidos por questão de trademark); o texto "LinkedIn"
+              // ao lado do ícone já deixa claro o canal.
+              <a className="dossier-chip" href={lead.linkedin_decisor} target="_blank" rel="noreferrer">
+                <Link2 size={13} />
+                <span>LinkedIn</span>
+              </a>
+            )}
+            {!temWhatsapp && !temEmail && !temLinkedin && (
+              <span className="dossier-muted">Nenhum canal confirmado ainda.</span>
+            )}
+          </div>
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+// --- Aba "Análise IA" --------------------------------------------------
+// Score total + badge de prioridade com o mesmo destaque visual que já
+// existia no cabeçalho antes desta reestruturação (brilho dourado,
+// número grande) -- só mudou de lugar, não de tratamento. "Sinais
+// positivos" é derivado do próprio breakdown, não é uma chamada de IA
+// nova: qualquer critério que bateu o peso máximo dele vira um chip.
+
+function AbaAnalise({
+  scoreTotal,
+  prioridade,
+  scoreDetalhes,
+}: {
+  scoreTotal?: number | null;
+  prioridade?: string | null;
+  scoreDetalhes: unknown;
+}) {
+  const breakdown = getScoreBreakdown(scoreDetalhes);
+  // weight > 0 exclui rating_google (peso zerado a pedido do cliente --
+  // nunca deveria aparecer como "sinal positivo" de nada, mesmo que
+  // pontue 0/0). points >= weight - 0.01 tolera arredondamento de
+  // ponto flutuante vindo do backend (ex.: 6 × 20/6 pode chegar como
+  // 19.999999999998, não exatamente 20.0).
+  const sinaisPositivos = breakdown.filter((item) => item.weight > 0 && item.points >= item.weight - 0.01);
+
+  return (
+    <section className="dossier-card dossier-analise">
+      <div className="dossier-analise-score">
+        <PriorityBadge prioridade={prioridade} size="lg" />
+        <div className="dossier-score-total">{scoreTotal ?? "—"}</div>
+        <div className="dossier-score-label">pontos de score</div>
+      </div>
+
+      {sinaisPositivos.length > 0 && (
+        <div className="dossier-sinais-positivos">
+          <h3 className="dossier-subheading">
+            <CheckCircle2 size={15} />
+            <span>Sinais positivos</span>
+          </h3>
+          <ul className="dossier-sinais-lista">
+            {sinaisPositivos.map((item) => (
+              <li key={item.key} className="dossier-sinal-chip">
+                {item.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <h3 className="dossier-subheading">
+        <Gauge size={15} />
+        <span>Breakdown do score</span>
+      </h3>
+      {breakdown.length ? (
+        <ul className="dossier-breakdown-list">
+          {breakdown.map((item) => (
+            <li key={item.key} className={`dossier-breakdown-item layer-${item.layer}`}>
+              <span className="dossier-breakdown-layer-tag">{SIGNAL_LAYER_LABELS[item.layer] ?? item.layer}</span>
+              <span className="dossier-breakdown-label">{item.label}</span>
+              <span className="dossier-breakdown-pontos">
+                {formatPontos(item.points)}/{item.weight} pts
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
+      )}
+    </section>
+  );
+}
+
+// --- Aba "Mensagens" (abordagem sugerida) -----------------------------
 
 function SecaoAbordagem({
   leadId,
@@ -392,35 +638,15 @@ function CanalAbordagemCard({
   );
 }
 
-function SecaoBreakdown({ scoreDetalhes }: { scoreDetalhes: unknown }) {
-  const breakdown = getScoreBreakdown(scoreDetalhes);
-  return (
-    <section className="dossier-card">
-      <SectionHeading icon={Gauge}>Breakdown do score</SectionHeading>
-      {breakdown.length ? (
-        <ul className="dossier-breakdown-list">
-          {breakdown.map((item) => (
-            <li key={item.key} className={`dossier-breakdown-item layer-${item.layer}`}>
-              <span className="dossier-breakdown-layer-tag">{SIGNAL_LAYER_LABELS[item.layer] ?? item.layer}</span>
-              <span className="dossier-breakdown-label">{item.label}</span>
-              <span className="dossier-breakdown-pontos">
-                {formatPontos(item.points)}/{item.weight} pts
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
-      )}
-    </section>
-  );
-}
+// --- Helpers compartilhados ---------------------------------------------
 
-/** Título de seção com ícone -- usado em todo `<h2>` deste dossiê
- * (exceto o de "Dívida ativa PGFN", que troca de ícone conforme
- * pendência/ok, ver SecaoPgfn). `icon` recebe o componente do
- * lucide-react direto (não um elemento já instanciado), pra poder
- * controlar `size` num lugar só. */
+/** Título de seção com ícone -- usado nos cards das abas "Dados",
+ * "Contatos" e "Mensagens" (exceto o de "Dívida ativa PGFN", que troca
+ * de ícone conforme pendência/ok, ver SecaoPgfn, e os subtítulos da aba
+ * "Análise IA", que usam `.dossier-subheading` -- um nível abaixo, já
+ * que a aba inteira é um card só, não vários). `icon` recebe o
+ * componente do lucide-react direto (não um elemento já instanciado),
+ * pra poder controlar `size` num lugar só. */
 function SectionHeading({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
   return (
     <h2 className="dossier-section-heading">
