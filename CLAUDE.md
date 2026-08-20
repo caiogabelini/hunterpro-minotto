@@ -837,6 +837,119 @@ them in the exact shape `_persistir_enriquecimento_lead` uses, and
 asserts the API round-trips a non-empty 9-item breakdown with exactly
 the fields `ScoreBreakdownItem` (frontend) expects.
 
+### Lead dossier enrichment — fields that existed but weren't shown (2026-08-20)
+
+Backend and frontend both touched in the same session, expanding the
+dossier with data that was already computed/persisted somewhere but
+never reached `LeadDossierPage.tsx` (or, in `mensagem_abordagem`'s
+case, never existed as a field at all).
+
+**Model (`app/models/lead.py`)** — three new columns:
+- `mensagem_abordagem` (`Text`, nullable) — **display-only placeholder**
+  this session. No generation logic, no endpoint to populate it — that's
+  explicitly future work. Don't add a "gerar abordagem" button or AI
+  call against this field without a follow-up request; the frontend
+  (`SecaoAbordagem`) already renders a clean empty state
+  ("Mensagem ainda não gerada") for when it's `None`.
+- `divida_ativa_valor_total` (`Float`, nullable) and
+  `divida_ativa_ajuizado` (`Boolean`, nullable) — closing a real gap:
+  `app/services/pgfn.py::PgfnDebtSummary` has computed both
+  (`valor_total`, `algum_ajuizado`) since the PGFN parser session, and
+  `save_index_to_redis`/`lookup_debt_from_redis` already round-trip them
+  through Redis — but `Lead` only ever persisted the count
+  (`divida_ativa_qtd_inscricoes`). The two new columns don't change
+  `pgfn.py` at all (it already produced the data); nothing yet writes
+  them onto a `Lead` row (`_persistir_enriquecimento_lead` in
+  `celery_app.py` still only sets `divida_ativa_qtd_inscricoes` — wiring
+  the other two into that persistence step is a natural follow-up, not
+  done this session since it wasn't asked for).
+
+**Migration** `fbd6142f0632_adiciona_mensagem_abordagem_e_campos_...py`
+chains after `a3f7c1d92b4e` (kanban_status/motivo_perda), all three
+columns nullable with no `server_default` (unlike `kanban_status`,
+`NULL` is already the correct "don't know yet" value here, no backfill
+needed). **Validated against a real Postgres 16** — same
+throwaway-cluster technique as the three previous migrations (port
+5434 this time, socket dir a short `mktemp -d /tmp/pgsock_ma.XXXXXX`
+per the 107-byte path lesson from the kanban migration): all four
+migrations upgrade cleanly in chain order, `downgrade -1` reverts only
+this one (kanban's columns and everything before stay intact),
+re-upgrade is clean, and the resulting schema (`double precision`/
+`boolean`/`text`, all nullable, no default) matches the model exactly.
+Cluster stopped and deleted immediately after.
+
+**Schema (`app/schemas/lead.py`)** — `LeadRead` gained the three new
+fields plus `rqe_fonte`, `cnes_codigo`, and `updated_at`, which existed
+on the model since earlier sessions but were never exposed by the
+schema (an easy category of gap to miss: the field exists, nothing is
+broken, it just silently never reaches the API). No `list_leads`
+change needed — this is exactly the same `LeadRead`-is-shared-by-both-
+routes situation already noted in the "Kanban" section above.
+
+**Frontend (`LeadDossierPage.tsx`)**:
+- **PGFN section**: now shows `divida_ativa_valor_total` formatted with
+  `formatCurrencyBRL` (`src/format.ts`, `Intl.NumberFormat("pt-BR", {
+  style: "currency", currency: "BRL" })`) inline in the warning sentence,
+  and a separate, visually louder red badge
+  ("⚠️ Execução judicial em andamento") when `divida_ativa_ajuizado` is
+  true — deliberately a second, more alarming element, not just folded
+  into the existing sentence, per the explicit request for something
+  "visualmente destacado."
+- **New "RQE / Especialidade" card** (`SecaoRqe`, added to the existing
+  3-card grid as a 4th card, not a separate full-width section — fits
+  the same `repeat(auto-fit, minmax(260px, 1fr))` grid without layout
+  changes): three states by `(rqe_confirmado, rqe_fonte)` — confirmed +
+  `fonte === "cnes"` → green "RQE confirmado via CNES" (high
+  confidence); confirmed without CNES → gold "RQE mencionado no site
+  (não confirmado via CNES)" (inference only); neither → neutral gray
+  "RQE não confirmado." Colors deliberately reuse the same
+  green/gold/gray vocabulary as `SignalLayer` elsewhere in this page
+  (estruturado/inferência), not a new palette.
+- **Kanban status badge** (`KanbanStatusBadge`, in the header, under the
+  CNPJ line): looks up the display label from `kanbanStatuses.ts`'s
+  `KANBAN_COLUMNS` (same source of truth the Kanban board itself uses —
+  no duplicate label list). When `kanban_status === "perdido"`, also
+  renders `motivo_perda` right next to the pill, not hidden behind a
+  click — the dossier is meant to answer "why is this lead here" at a
+  glance.
+- **WhatsApp → `wa.me` link** (`CampoWhatsapp`): number formatting
+  (`formatarNumeroWhatsapp` in `src/format.ts`) is a **deliberate
+  mirror** of `app/services/whatsapp.py::formatar_numero_whatsapp` — same
+  length-based (not prefix-based) heuristic for the country code, same
+  reasoning (DDD 55 is Rio Grande do Sul, so a bare 11-digit local
+  number can start with "55" without having the country code — see that
+  module's docstring). Re-implementing this in TypeScript without also
+  re-implementing the tests would be exactly the kind of silent
+  transcription risk the previous bug-fix session's write-up warned
+  about, so `src/format.test.ts` mirrors
+  `backend/tests/test_whatsapp.py`'s cases one-for-one, including the
+  DDD-55 trap case. The link only renders when the number formats to a
+  plausible 12-13 digits — same "don't show a broken link" logic as the
+  backend's "don't call the API with a clearly wrong number."
+- **E-mail copy button** (`CampoEmail`): `navigator.clipboard.writeText`,
+  local `copiado` state flips the button label to "Copiado!" for 1.5s
+  (`setTimeout`). Clipboard failure (e.g. non-secure context) is
+  swallowed silently — not critical enough to surface as a page error,
+  matches this page's existing tolerance for degraded-but-non-fatal
+  states.
+- **`created_at`/`updated_at`** (`src/format.ts`): `formatDate` (`Intl.DateTimeFormat("pt-BR")`,
+  `DD/MM/AAAA`) for `created_at` ("Encontrado em..."), `formatRelative`
+  for `updated_at` ("Atualizado há X minutos/horas/dias" — falls back to
+  `formatDate` past 30 days, since "há 4 meses" is too vague to inform a
+  contact-priority decision).
+- **Markup fix while wiring `CampoWhatsapp`**: extracted `Indicador`
+  (just the `<span>` badge) out of `CampoIndicador` (which wraps it in
+  its own `dt`/`dd`) — `CampoWhatsapp` needed the badge *inside* its own
+  `dd` alongside the `wa.me` link, and nesting a full `CampoIndicador`
+  (with its own `dt`/`dd`) inside another field's `dd` would have been
+  invalid nested `dt`/`dd` markup. `CampoIndicador` itself now just
+  wraps `Indicador` in the same `dt`/`dd` shape as before — no visible
+  change for its existing callers.
+- Same standing sandbox limitation as every other frontend screen so
+  far — not tested in an actual browser; validated via `tsc -b`,
+  `npm run build`, `npm run lint`, and `npm run test` (12 vitest cases:
+  4 pre-existing in `leadScore.test.ts`, 8 new in `format.test.ts`).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -901,6 +1014,18 @@ after the downgrade/re-upgrade round-trip. Cluster stopped and its data
 dir + socket dir fully deleted immediately after — same
 not-the-project's-real-`DATABASE_URL` caveat as the other two
 migrations still applies.
+
+A **fourth** migration was added 2026-08-20 (same day, later session):
+`fbd6142f0632_adiciona_mensagem_abordagem_e_campos_...py`
+(`down_revision="a3f7c1d92b4e"`, adds `Lead.mensagem_abordagem`/
+`Lead.divida_ativa_valor_total`/`Lead.divida_ativa_ajuizado` — see "Lead
+dossier enrichment" above). Same throwaway-cluster validation as the
+third migration (port 5434 this time, short socket dir per the 107-byte
+lesson above): all four migrations upgrade in chain order, `downgrade
+-1` reverts only this one, re-upgrade is clean, schema matches the
+model exactly (all three columns nullable, no default — unlike
+`kanban_status`, `NULL` is already the correct value here, no backfill
+needed). Cluster stopped and deleted immediately after.
 
 ### Deployment note (EasyPanel)
 

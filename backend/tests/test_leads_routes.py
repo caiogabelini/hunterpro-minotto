@@ -88,9 +88,15 @@ def test_get_lead_traz_todos_os_campos_do_dossie(client, db_session, token):
         google_rating=4.7,
         google_avaliacoes=132,
         servicos="Cardiologia, Check-up",
+        rqe_confirmado=True,
+        rqe_fonte="cnes",
+        cnes_codigo="1234567",
         divida_ativa_qtd_inscricoes=2,
+        divida_ativa_valor_total=15234.78,
+        divida_ativa_ajuizado=True,
         score_total=63.5,
         score_detalhes={"breakdown": [{"key": "divida_ativa_pgfn", "label": "Dívida ativa PGFN", "weight": 20, "layer": "estruturado", "points": 6.67}]},
+        mensagem_abordagem="Olá, Dr. Fulano, vimos que...",
     )
 
     resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
@@ -109,8 +115,33 @@ def test_get_lead_traz_todos_os_campos_do_dossie(client, db_session, token):
     assert corpo["google_rating"] == 4.7
     assert corpo["google_avaliacoes"] == 132
     assert corpo["servicos"] == "Cardiologia, Check-up"
+    assert corpo["rqe_confirmado"] is True
+    assert corpo["rqe_fonte"] == "cnes"
+    assert corpo["cnes_codigo"] == "1234567"
     assert corpo["divida_ativa_qtd_inscricoes"] == 2
+    assert corpo["divida_ativa_valor_total"] == 15234.78
+    assert corpo["divida_ativa_ajuizado"] is True
     assert corpo["score_detalhes"]["breakdown"][0]["key"] == "divida_ativa_pgfn"
+    assert corpo["mensagem_abordagem"] == "Olá, Dr. Fulano, vimos que..."
+    assert corpo["updated_at"] is not None
+
+
+def test_get_lead_campos_novos_default_none_quando_nao_preenchidos(client, db_session, token):
+    """`mensagem_abordagem`, `divida_ativa_valor_total` e
+    `divida_ativa_ajuizado` são todos opcionais -- um lead que nunca
+    passou pela PGFN/geração de abordagem devolve null nesses campos,
+    não erro nem valor ausente na resposta."""
+    lead = _criar_lead(db_session)
+
+    resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["mensagem_abordagem"] is None
+    assert corpo["divida_ativa_valor_total"] is None
+    assert corpo["divida_ativa_ajuizado"] is None
+    assert corpo["rqe_fonte"] is None
+    assert corpo["cnes_codigo"] is None
 
 
 def test_get_lead_com_score_calculado_retorna_breakdown_nao_vazio(client, db_session, token):

@@ -305,8 +305,47 @@ interno do Docker.
   critérios) em vez de um breakdown de 1 item hand-crafted. Ver
   CLAUDE.md "Lead dossier score breakdown bug" pro relato completo da
   investigação.
-- ✅ 236 testes automatizados passando (`pytest`) + 4 testes novos no
-  frontend (`vitest`, primeira vez que o frontend ganha um test runner)
+- ✅ **Dossiê enriquecido — campos que já existiam no sistema mas não
+  apareciam na tela** — três colunas novas no `Lead`
+  (`app/models/lead.py`): `mensagem_abordagem` (Text, só o espaço
+  reservado — a geração via IA fica pra uma sessão futura, não
+  implementada agora), `divida_ativa_valor_total` (Float) e
+  `divida_ativa_ajuizado` (Boolean) — `app/services/pgfn.py::PgfnDebtSummary`
+  já calculava os dois últimos (`valor_total`, `algum_ajuizado`) desde a
+  sessão do parser da PGFN, mas o `Lead` nunca persistia, só a contagem
+  (`divida_ativa_qtd_inscricoes`). Migration
+  `fbd6142f0632_adiciona_mensagem_abordagem_e_campos_...py` (encadeada
+  depois de `a3f7c1d92b4e`/kanban) — **validada contra Postgres 16
+  real**, mesmo processo das três migrations anteriores (cluster
+  temporário, upgrade encadeado/downgrade -1/re-upgrade/schema
+  conferido, cluster apagado ao final). `LeadRead` ganhou os três campos
+  novos + `rqe_fonte`, `cnes_codigo` e `updated_at`, que já existiam no
+  modelo desde sessões anteriores mas nunca tinham sido expostos pelo
+  schema — 2 testes novos/expandidos em `tests/test_leads_routes.py`.
+  No dossiê (`LeadDossierPage.tsx`): a seção de PGFN agora mostra o
+  valor total formatado em R$ e um selo vermelho destacado
+  ("⚠️ Execução judicial em andamento") quando `divida_ativa_ajuizado`;
+  nova seção "RQE / Especialidade" com cor diferente pra confirmação via
+  CNES (alta confiança, verde) vs. menção só no site (inferência,
+  dourado); um badge do status atual do Kanban no cabeçalho (com o
+  `motivo_perda` junto quando for "Perdido"); nova seção "Abordagem
+  sugerida" mostrando `mensagem_abordagem` ou "Mensagem ainda não
+  gerada" (sem botão de gerar — só o espaço, como pedido); WhatsApp virou
+  link `wa.me/{numero}` (formatação do número em `src/format.ts`,
+  **espelha deliberadamente** a mesma heurística de
+  `app/services/whatsapp.py::formatar_numero_whatsapp` — prefixa o
+  código do país pelo TAMANHO do número, não pelo prefixo, pelo mesmo
+  motivo do DDD 55/Rio Grande do Sul documentado lá); e-mail ganhou
+  botão de copiar com feedback "Copiado!" (`navigator.clipboard`); e
+  `created_at`/`updated_at` formatados ("Encontrado em DD/MM/AAAA" ·
+  "Atualizado há X"). 12 testes novos no frontend (`vitest`):
+  `format.test.ts` espelha os mesmos casos de
+  `backend/tests/test_whatsapp.py` pra `formatarNumeroWhatsapp` (mesmo
+  risco de um projeto anterior — reimplementar uma heurística sem
+  reimplementar os testes que a validam é como bugs sutis passam
+  despercebidos). `npm run build`/`npm run lint`/`npm run test` limpos.
+- ✅ 233 testes automatizados passando (`pytest`) + 12 testes no
+  frontend (`vitest`)
 
 ## O que falta (próximas sessões)
 

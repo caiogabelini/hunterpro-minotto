@@ -75,6 +75,11 @@ class Lead(Base):
 
     # --- Específico da Minotto ---
     divida_ativa_qtd_inscricoes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # valor_total e algum_ajuizado -- app/services/pgfn.py::PgfnDebtSummary já calcula os
+    # dois (build_pgfn_index/lookup_debt_from_redis), mas até 20/08/2026 só a contagem
+    # (qtd_inscricoes_ativas) era persistida no Lead. Adicionados nesta sessão.
+    divida_ativa_valor_total: Mapped[float | None] = mapped_column(Float, nullable=True)
+    divida_ativa_ajuizado: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     zona_franca: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # --- Score ---
@@ -85,6 +90,11 @@ class Lead(Base):
     # --- Kanban (pipeline comercial) ---
     kanban_status: Mapped[str] = mapped_column(String(20), default=KanbanStatus.NOVO_LEAD.value)
     motivo_perda: Mapped[str | None] = mapped_column(Text, nullable=True)  # só relevante quando kanban_status == "perdido"
+
+    # --- Abordagem ---
+    # Só o espaço reservado nesta sessão -- a geração via IA (e o
+    # endpoint/task que preenche este campo) fica pra uma sessão futura.
+    mensagem_abordagem: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

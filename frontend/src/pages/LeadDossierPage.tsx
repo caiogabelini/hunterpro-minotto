@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { fetchLead, UnauthorizedError, type Lead } from "../api";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
+import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
+import { KANBAN_COLUMNS, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
 import "./LeadDossierPage.css";
@@ -47,6 +49,7 @@ export function LeadDossierPage() {
               <h1 className="dossier-razao">{lead.razao_social}</h1>
               {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
               <p className="dossier-cnpj">{lead.cnpj}</p>
+              <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
             </div>
             <div className="dossier-header-score">
               <PriorityBadge prioridade={lead.prioridade} />
@@ -55,7 +58,15 @@ export function LeadDossierPage() {
             </div>
           </header>
 
-          <SecaoPgfn qtdInscricoes={lead.divida_ativa_qtd_inscricoes} />
+          <p className="dossier-datas">
+            Encontrado em {formatDate(lead.created_at)} · Atualizado {formatRelative(lead.updated_at)}
+          </p>
+
+          <SecaoPgfn
+            qtdInscricoes={lead.divida_ativa_qtd_inscricoes}
+            valorTotal={lead.divida_ativa_valor_total}
+            ajuizado={lead.divida_ativa_ajuizado}
+          />
 
           <div className="dossier-grid">
             <section className="dossier-card">
@@ -73,9 +84,8 @@ export function LeadDossierPage() {
               <h2>Contato</h2>
               <dl>
                 <Campo label="Telefone" valor={lead.telefone} />
-                <CampoIndicador label="WhatsApp" ativo={lead.whatsapp_ativo} textoAtivo="Ativo" textoInativo="Não confirmado" />
-                <Campo label="E-mail" valor={lead.email} />
-                <CampoIndicador label="E-mail validado" ativo={lead.email_validado} textoAtivo="Validado" textoInativo="Não validado" />
+                <CampoWhatsapp telefone={lead.telefone} ativo={lead.whatsapp_ativo} />
+                <CampoEmail email={lead.email} validado={lead.email_validado} />
                 <Campo label="Decisor" valor={lead.decisor_nome} />
               </dl>
             </section>
@@ -94,12 +104,98 @@ export function LeadDossierPage() {
                 <Campo label="Serviços" valor={lead.servicos} />
               </dl>
             </section>
+
+            <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
           </div>
+
+          <SecaoAbordagem mensagem={lead.mensagem_abordagem} />
 
           <SecaoBreakdown scoreDetalhes={lead.score_detalhes} />
         </>
       )}
     </div>
+  );
+}
+
+function KanbanStatusBadge({ status, motivoPerda }: { status: string; motivoPerda?: string | null }) {
+  const label = KANBAN_COLUMNS.find((c) => c.status === status)?.label ?? status;
+  const perdido = status === STATUS_PERDIDO;
+  return (
+    <div className="dossier-kanban-status">
+      <span className={`dossier-kanban-pill ${perdido ? "dossier-kanban-pill-perdido" : ""}`}>{label}</span>
+      {perdido && motivoPerda && <span className="dossier-motivo-perda">Motivo: {motivoPerda}</span>}
+    </div>
+  );
+}
+
+function SecaoPgfn({
+  qtdInscricoes,
+  valorTotal,
+  ajuizado,
+}: {
+  qtdInscricoes?: number | null;
+  valorTotal?: number | null;
+  ajuizado?: boolean | null;
+}) {
+  const temPendencia = !!qtdInscricoes && qtdInscricoes > 0;
+  return (
+    <section className={`dossier-pgfn ${temPendencia ? "dossier-pgfn-alerta" : "dossier-pgfn-ok"}`}>
+      <h2>Dívida ativa PGFN</h2>
+      {temPendencia ? (
+        <>
+          <p>
+            {qtdInscricoes} inscrição{qtdInscricoes === 1 ? "" : "ões"} ativa{qtdInscricoes === 1 ? "" : "s"} na
+            dívida ativa da União
+            {valorTotal != null && (
+              <>
+                {" "}
+                — valor total <strong>{formatCurrencyBRL(valorTotal)}</strong>
+              </>
+            )}
+            {" "}— verificar antes de avançar a negociação.
+          </p>
+          {ajuizado && <span className="dossier-pgfn-ajuizado">⚠️ Execução judicial em andamento</span>}
+        </>
+      ) : (
+        <p>Nenhuma pendência encontrada na Receita/PGFN.</p>
+      )}
+    </section>
+  );
+}
+
+function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: string | null }) {
+  let texto: string;
+  let classe: string;
+
+  if (confirmado && fonte === "cnes") {
+    texto = "RQE confirmado via CNES";
+    classe = "rqe-alta-confianca";
+  } else if (confirmado) {
+    texto = "RQE mencionado no site (não confirmado via CNES)";
+    classe = "rqe-inferencia";
+  } else {
+    texto = "RQE não confirmado";
+    classe = "rqe-desconhecido";
+  }
+
+  return (
+    <section className="dossier-card">
+      <h2>RQE / Especialidade</h2>
+      <span className={`dossier-rqe-badge ${classe}`}>{texto}</span>
+    </section>
+  );
+}
+
+function SecaoAbordagem({ mensagem }: { mensagem?: string | null }) {
+  return (
+    <section className="dossier-card">
+      <h2>Abordagem sugerida</h2>
+      {mensagem ? (
+        <p className="dossier-abordagem-texto">{mensagem}</p>
+      ) : (
+        <p className="dossier-muted">Mensagem ainda não gerada.</p>
+      )}
+    </section>
   );
 }
 
@@ -122,23 +218,6 @@ function SecaoBreakdown({ scoreDetalhes }: { scoreDetalhes: unknown }) {
         </ul>
       ) : (
         <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
-      )}
-    </section>
-  );
-}
-
-function SecaoPgfn({ qtdInscricoes }: { qtdInscricoes?: number | null }) {
-  const temPendencia = !!qtdInscricoes && qtdInscricoes > 0;
-  return (
-    <section className={`dossier-pgfn ${temPendencia ? "dossier-pgfn-alerta" : "dossier-pgfn-ok"}`}>
-      <h2>Dívida ativa PGFN</h2>
-      {temPendencia ? (
-        <p>
-          {qtdInscricoes} inscrição{qtdInscricoes === 1 ? "" : "ões"} ativa{qtdInscricoes === 1 ? "" : "s"} na dívida
-          ativa da União — verificar antes de avançar a negociação.
-        </p>
-      ) : (
-        <p>Nenhuma pendência encontrada na Receita/PGFN.</p>
       )}
     </section>
   );
@@ -171,6 +250,23 @@ function Campo({ label, valor, link }: { label: string; valor?: string | number 
   );
 }
 
+function Indicador({
+  ativo,
+  textoAtivo,
+  textoInativo,
+}: {
+  ativo?: boolean | null;
+  textoAtivo: ReactNode;
+  textoInativo: ReactNode;
+}) {
+  const conhecido = ativo !== null && ativo !== undefined;
+  return (
+    <span className={`dossier-indicador ${conhecido ? (ativo ? "indicador-on" : "indicador-off") : "indicador-desconhecido"}`}>
+      {conhecido ? (ativo ? textoAtivo : textoInativo) : "—"}
+    </span>
+  );
+}
+
 function CampoIndicador({
   label,
   ativo,
@@ -182,15 +278,62 @@ function CampoIndicador({
   textoAtivo: ReactNode;
   textoInativo: ReactNode;
 }) {
-  const conhecido = ativo !== null && ativo !== undefined;
   return (
     <div className="dossier-campo">
       <dt>{label}</dt>
       <dd>
-        <span className={`dossier-indicador ${conhecido ? (ativo ? "indicador-on" : "indicador-off") : "indicador-desconhecido"}`}>
-          {conhecido ? (ativo ? textoAtivo : textoInativo) : "—"}
-        </span>
+        <Indicador ativo={ativo} textoAtivo={textoAtivo} textoInativo={textoInativo} />
       </dd>
     </div>
+  );
+}
+
+function CampoWhatsapp({ telefone, ativo }: { telefone?: string | null; ativo?: boolean | null }) {
+  const numero = formatarNumeroWhatsapp(telefone);
+  return (
+    <div className="dossier-campo">
+      <dt>WhatsApp</dt>
+      <dd className="dossier-campo-acao">
+        <Indicador ativo={ativo} textoAtivo="Ativo" textoInativo="Não confirmado" />
+        {numero && (
+          <a className="dossier-whatsapp-link" href={`https://wa.me/${numero}`} target="_blank" rel="noreferrer">
+            Abrir WhatsApp ↗
+          </a>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+function CampoEmail({ email, validado }: { email?: string | null; validado?: boolean | null }) {
+  const [copiado, setCopiado] = useState(false);
+
+  async function copiar() {
+    if (!email) return;
+    try {
+      await navigator.clipboard.writeText(email);
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 1500);
+    } catch {
+      // clipboard indisponível (ex.: contexto não-seguro) -- silencioso,
+      // não é crítico o suficiente pra mostrar erro na tela
+    }
+  }
+
+  return (
+    <>
+      <div className="dossier-campo">
+        <dt>E-mail</dt>
+        <dd className="dossier-campo-acao">
+          {email ?? <span className="dossier-campo-vazio">—</span>}
+          {email && (
+            <button type="button" className="dossier-copy-btn" onClick={copiar}>
+              {copiado ? "Copiado!" : "Copiar"}
+            </button>
+          )}
+        </dd>
+      </div>
+      <CampoIndicador label="E-mail validado" ativo={validado} textoAtivo="Validado" textoInativo="Não validado" />
+    </>
   );
 }

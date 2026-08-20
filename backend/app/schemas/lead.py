@@ -29,14 +29,20 @@ class LeadRead(BaseModel):
     google_avaliacoes: int | None = None
     servicos: str | None = None
     rqe_confirmado: bool | None = None
+    rqe_fonte: str | None = None
+    cnes_codigo: str | None = None
     divida_ativa_qtd_inscricoes: int | None = None
+    divida_ativa_valor_total: float | None = None
+    divida_ativa_ajuizado: bool | None = None
     zona_franca: bool | None = None
     score_total: float | None = None
     score_detalhes: dict | None = None
     prioridade: str | None = None
     kanban_status: str
     motivo_perda: str | None = None
+    mensagem_abordagem: str | None = None
     created_at: datetime
+    updated_at: datetime
 
 
 class LeadStatusUpdate(BaseModel):

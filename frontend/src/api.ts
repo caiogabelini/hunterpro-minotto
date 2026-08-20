@@ -39,14 +39,20 @@ export interface Lead {
   google_avaliacoes?: number | null;
   servicos?: string | null;
   rqe_confirmado?: boolean | null;
+  rqe_fonte?: string | null;
+  cnes_codigo?: string | null;
   divida_ativa_qtd_inscricoes?: number | null;
+  divida_ativa_valor_total?: number | null;
+  divida_ativa_ajuizado?: boolean | null;
   zona_franca?: boolean | null;
   score_total?: number | null;
   score_detalhes?: ScoreDetalhes | null;
   prioridade?: string | null;
   kanban_status: string;
   motivo_perda?: string | null;
+  mensagem_abordagem?: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 /** Lançada quando o backend devolve 401 -- o token guardado em memória
