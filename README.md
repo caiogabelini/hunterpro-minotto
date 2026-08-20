@@ -285,7 +285,28 @@ interno do Docker.
   telas. `npm run build`/`npm run lint` limpos; mesma ressalva de sempre
   — não testado num navegador de verdade (sandbox sem acesso de
   rede/browser).
-- ✅ 234 testes automatizados passando (`pytest`)
+- ✅ **Bugfix: breakdown do score não aparecia no dossiê** — reportado
+  como "Score ainda não calculado" mesmo com `score_detalhes` preenchido
+  no banco. Investigação ponta a ponta (schema → endpoint → frontend)
+  não achou nada quebrado no caminho canônico (confirmado com dois
+  round-trips reais, um deles um `uvicorn` de verdade servindo HTTP,
+  não só `TestClient`) — a fragilidade real é que `fetchLead`/`fetchLeads`
+  confiam cegamente no shape de `res.json()` (tipado `any` pelo DOM lib,
+  sem garantia nenhuma em runtime). Corrigido extraindo a leitura do
+  breakdown pra uma função pura e defensiva,
+  `getScoreBreakdown` (`frontend/src/leadScore.ts`), que trata a entrada
+  como `unknown`, aceita o formato canônico e um array cru como
+  fallback, e nunca lança. `npm run test` (vitest, adicionado nesta
+  sessão) tem 4 casos novos em `leadScore.test.ts` — confirmado que o
+  primeiro caso falha contra uma implementação propositalmente quebrada
+  antes de restaurar a correção, então é uma trava de regressão real.
+  Reforçado também `tests/test_leads_routes.py` no backend: um teste
+  novo roda o motor de score de verdade (`montar_score_lead`, os 9
+  critérios) em vez de um breakdown de 1 item hand-crafted. Ver
+  CLAUDE.md "Lead dossier score breakdown bug" pro relato completo da
+  investigação.
+- ✅ 236 testes automatizados passando (`pytest`) + 4 testes novos no
+  frontend (`vitest`, primeira vez que o frontend ganha um test runner)
 
 ## O que falta (próximas sessões)
 
@@ -452,6 +473,11 @@ cd frontend
 npm install
 cp .env.example .env
 npm run dev
+```
+
+Rodar os testes (vitest — só funções puras por enquanto, ver CLAUDE.md):
+```bash
+npm run test
 ```
 
 Pra logar, é preciso ter um usuário criado no backend primeiro (ver

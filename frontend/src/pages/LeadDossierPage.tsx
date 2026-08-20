@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { fetchLead, UnauthorizedError, type Lead } from "../api";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
+import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
 import "./LeadDossierPage.css";
 
@@ -95,27 +96,34 @@ export function LeadDossierPage() {
             </section>
           </div>
 
-          <section className="dossier-card">
-            <h2>Breakdown do score</h2>
-            {lead.score_detalhes?.breakdown?.length ? (
-              <ul className="dossier-breakdown-list">
-                {lead.score_detalhes.breakdown.map((item) => (
-                  <li key={item.key} className={`dossier-breakdown-item layer-${item.layer}`}>
-                    <span className="dossier-breakdown-layer-tag">{SIGNAL_LAYER_LABELS[item.layer] ?? item.layer}</span>
-                    <span className="dossier-breakdown-label">{item.label}</span>
-                    <span className="dossier-breakdown-pontos">
-                      {formatPontos(item.points)}/{item.weight} pts
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
-            )}
-          </section>
+          <SecaoBreakdown scoreDetalhes={lead.score_detalhes} />
         </>
       )}
     </div>
+  );
+}
+
+function SecaoBreakdown({ scoreDetalhes }: { scoreDetalhes: unknown }) {
+  const breakdown = getScoreBreakdown(scoreDetalhes);
+  return (
+    <section className="dossier-card">
+      <h2>Breakdown do score</h2>
+      {breakdown.length ? (
+        <ul className="dossier-breakdown-list">
+          {breakdown.map((item) => (
+            <li key={item.key} className={`dossier-breakdown-item layer-${item.layer}`}>
+              <span className="dossier-breakdown-layer-tag">{SIGNAL_LAYER_LABELS[item.layer] ?? item.layer}</span>
+              <span className="dossier-breakdown-label">{item.label}</span>
+              <span className="dossier-breakdown-pontos">
+                {formatPontos(item.points)}/{item.weight} pts
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
+      )}
+    </section>
   );
 }
 

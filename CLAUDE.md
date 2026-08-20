@@ -54,9 +54,15 @@ npm run dev       # dev server
 npm run build     # tsc -b && vite build
 npm run lint       # oxlint
 npm run preview
+npm run test       # vitest run -- pure-function unit tests only, no DOM/component rendering yet
 ```
 
-No test runner is configured for the frontend yet.
+`vitest` was added 2026-08-20 (bugfix session, see "Lead dossier score
+breakdown bug" below) — deliberately minimal: it only runs plain
+TypeScript unit tests against pure functions (`src/leadScore.test.ts` is
+the only spec so far). No `jsdom`/React Testing Library, no
+component-rendering tests — that's a bigger addition for whenever the
+frontend actually needs it, not added preemptively here.
 
 ## Architecture
 
@@ -773,6 +779,63 @@ status-change history/audit log, CSV/Excel export.
   as the Kanban screen (see above); validated via `tsc -b`, `npm run
   build`, `npm run lint` (only the same pre-existing `AuthContext.tsx`
   fast-refresh warning), and code review.
+
+### Lead dossier score breakdown bug (fixed 2026-08-20)
+
+User report: the dossier showed "Score ainda não calculado pra este
+lead" for a lead whose `score_detalhes` was confirmed populated in the
+database (direct SQL). Investigation walked the full chain end to end —
+worth recording since every layer checked out individually, and the fix
+ended up being about robustness, not a specific broken line:
+
+- **`LeadRead` schema**: correct — `score_detalhes: dict | None`, no
+  `exclude`/alias issue.
+- **`GET /api/leads/{lead_id}`**: correct — verified with two
+  independent round-trips, not just reading the code: an in-process
+  `TestClient` call, and a *real* `uvicorn` process (temp SQLite DB,
+  real HTTP over `127.0.0.1`, actual JSON login → bearer token → GET)
+  bypassing `TestClient` entirely. Both returned
+  `{"score_detalhes": {"breakdown": [...]}}` exactly matching what
+  `compute_lead_score` persists.
+- **`LeadDossierPage.tsx`**: the field name and condition
+  (`lead.score_detalhes?.breakdown?.length`) were also already correct
+  for the canonical shape.
+
+No reproducible bug was found in the canonical pipeline path. The
+likely actual trigger: `fetchLead`/`fetchLeads` in `api.ts` return
+`res.json()` cast straight to `Promise<Lead>` — `fetch().json()` is
+typed `any` by the DOM lib, so TypeScript provides **zero runtime
+guarantee** the payload matches `Lead`/`ScoreDetalhes`. Any
+`score_detalhes` that didn't arrive as the exact `{"breakdown": [...]}`
+object (hand-seeded test data via raw SQL during manual testing, a
+future backend change, etc.) would silently and permanently read as
+"no score," with no error anywhere to point at the real cause — the
+optional-chaining check degrades a shape mismatch into indistinguishable
+"empty" instead of surfacing it.
+
+**Fix**: extracted the breakdown-reading logic into a standalone, pure
+function, `getScoreBreakdown(scoreDetalhes: unknown)` in
+`frontend/src/leadScore.ts`. It treats the input as genuinely unknown
+(matching how it actually arrives over the wire) and accepts both the
+canonical `{ breakdown: [...] }` shape and a bare array as a fallback,
+returning `[]` — never throwing — for anything else.
+`LeadDossierPage.tsx`'s score section (`SecaoBreakdown`) now calls this
+instead of reading `.breakdown` inline.
+
+**Test added**: `frontend/src/leadScore.test.ts` (4 cases, using
+`vitest` — see "Frontend (React 19 + Vite + TypeScript)" above for why
+this dependency was added this session) — the first case is the direct
+regression guard ("lead with score_detalhes filled returns the
+breakdown, not empty"), confirmed to actually fail against a
+deliberately broken always-`[]` implementation before being restored,
+so it's a real guard, not a tautology. Also strengthened
+`test_get_lead_com_score_calculado_retorna_breakdown_nao_vazio` in
+`backend/tests/test_leads_routes.py` — unlike the pre-existing dossier
+test (which hand-crafted a single breakdown item), this one runs the
+**real** `montar_score_lead` engine to produce all 9 criteria, persists
+them in the exact shape `_persistir_enriquecimento_lead` uses, and
+asserts the API round-trips a non-empty 9-item breakdown with exactly
+the fields `ScoreBreakdownItem` (frontend) expects.
 
 ### Migrations (`backend/alembic/`)
 

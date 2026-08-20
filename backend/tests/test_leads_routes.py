@@ -18,6 +18,7 @@ from app.core.security import create_access_token, hash_password
 from app.main import app
 from app.models.lead import KanbanStatus, Lead
 from app.models.user import User, UserRole
+from app.scoring.compute_lead_score import montar_score_lead
 
 SENHA = "senha-forte-123"
 
@@ -110,6 +111,61 @@ def test_get_lead_traz_todos_os_campos_do_dossie(client, db_session, token):
     assert corpo["servicos"] == "Cardiologia, Check-up"
     assert corpo["divida_ativa_qtd_inscricoes"] == 2
     assert corpo["score_detalhes"]["breakdown"][0]["key"] == "divida_ativa_pgfn"
+
+
+def test_get_lead_com_score_calculado_retorna_breakdown_nao_vazio(client, db_session, token):
+    """
+    Regressão de bug reportado: o dossiê mostrava "Score ainda não
+    calculado" mesmo com `score_detalhes` preenchido no banco. Os testes
+    anteriores só cobriam um breakdown com 1 item hand-crafted -- este
+    usa o motor de score de verdade (`montar_score_lead`, mesma função
+    que `compute_lead_score` chama em app/workers/celery_app.py) pra
+    gerar os 9 critérios completos, persiste no mesmo shape exato que
+    `_persistir_enriquecimento_lead` usa (`{"breakdown": [...]}`, com
+    `layer` já como string via `.value` -- não o Enum), e confere que a
+    API devolve um `score_detalhes.breakdown` não-vazio com todos os
+    campos que o frontend (`ScoreBreakdownItem` em `frontend/src/api.ts`)
+    espera: `key`, `label`, `weight`, `layer`, `points`.
+    """
+    enriquecimentos = {
+        "enrich_pgfn_divida_ativa": {"qtd_inscricoes_ativas": 3},
+        "enrich_zona_franca": True,
+        "enrich_cnes": {"encontrado_cnes": True},
+        "enrich_receita_federal": {"decisor_nome": "Fulano de Tal", "situacao_cadastral": "ATIVA"},
+        "enrich_site_firecrawl": {
+            "rqe_mencionado": True,
+            "scrape_sucesso": True,
+            "site_content_resumo": "Clínica de cardiologia",
+            "instagram": "clinicaexemplo",
+        },
+        "validate_whatsapp": {"whatsapp_ativo": True},
+        "enrich_email": {"email_aprovado": True},
+    }
+    resultado = montar_score_lead(enriquecimentos)
+    assert len(resultado.breakdown) == 9  # os 9 critérios de SCORING_CRITERIA
+
+    lead = _criar_lead(
+        db_session,
+        score_total=resultado.score_total,
+        score_detalhes={
+            "breakdown": [
+                {"key": d.key, "label": d.label, "weight": d.weight, "layer": d.layer.value, "points": d.points}
+                for d in resultado.breakdown
+            ]
+        },
+    )
+
+    resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    breakdown = resp.json()["score_detalhes"]["breakdown"]
+    assert len(breakdown) == 9
+    for item in breakdown:
+        assert set(item.keys()) == {"key", "label", "weight", "layer", "points"}
+    chaves = {item["key"] for item in breakdown}
+    assert "divida_ativa_pgfn" in chaves
+    assert "zona_franca_alc" in chaves
+    assert "rqe_especialista" in chaves
 
 
 def test_get_lead_inexistente_retorna_404(client, token):
