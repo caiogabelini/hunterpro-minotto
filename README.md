@@ -72,9 +72,24 @@ interno do Docker.
   estabelecimentos de um município (paginando) e cruza o CNPJ do lead
   localmente. `enrich_cnes` confirma unidade registrada no CNES (reforço
   estrutural do sinal de RQE, não substitui a inferência via IA).
+- ✅ **Enriquecimento via Receita Federal** (`app/services/receita_federal.py`)
+  — via BrasilAPI (`GET /api/cnpj/v1/{cnpj}`, espelha os Dados Abertos do
+  CNPJ, sem autenticação): CNAE, porte, situação cadastral, anos de
+  mercado e decisor (identificado por palavra-chave na qualificação do
+  sócio, já que não há tabela oficial confiável de códigos de
+  qualificação disponível pra decorar). `enrich_receita_federal` também
+  devolve `codigo_municipio_cnes`, fechando o gap que tinha ficado
+  pendente da sessão do CNES.
+- ✅ **Resolução de município → código IBGE** (`app/services/ibge_municipios.py`)
+  — pra resolver esse gap, em vez de uma tabela estática decorada (o
+  Brasil tem ~5.570 municípios; um dígito errado quebraria o cruzamento
+  com o CNES silenciosamente), consulta a API oficial de Localidades do
+  IBGE ao vivo. `codigo_ibge_para_cnes` confirma, por teste manual em
+  19/08/2026, que o `codigo_municipio` do CNES é o código IBGE de 7
+  dígitos sem o dígito verificador final.
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 43 testes automatizados passando (`pytest`)
+- ✅ 61 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -83,12 +98,10 @@ Em ordem de prioridade combinada com o cliente:
 1. ~~Fórmula da dívida ativa PGFN~~ ✅ confirmada com o Douglas em
    19/08/2026 e implementada (`pgfn_points`)
 2. ~~Parser do CSV trimestral da PGFN~~ ✅ feito
-3. ~~Integração com a API do CNES~~ ✅ feito (falta resolver município →
-   código IBGE, que hoje precisa vir de uma etapa anterior do pipeline)
-4. Busca inicial via Google Places (`search_google_places`)
-5. Enriquecimento via Receita Federal (mesmo padrão do projeto SR) — ver
-   se a fonte usada já devolve o código IBGE do município, necessário
-   pro `enrich_cnes`
+3. ~~Integração com a API do CNES~~ ✅ feito
+4. ~~Enriquecimento via Receita Federal~~ ✅ feito (BrasilAPI), incluindo
+   a resolução de município → código IBGE que fechou o gap do CNES
+5. Busca inicial via Google Places (`search_google_places`)
 6. Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)
 7. Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)
 8. `compute_lead_score` — juntar os pontos de todos os critérios (a

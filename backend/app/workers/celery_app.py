@@ -6,7 +6,10 @@ de execução por lead é a mesma definida no fluxo de execução
 apresentado no kickoff (documento 03_Fluxo_Execucao.html):
 
   1. search_google_places      → busca inicial por nicho + região
-  2. enrich_receita_federal    → CNAE, sócios, porte, anos de mercado
+  2. enrich_receita_federal    → CNAE, sócios/decisor, porte, anos de
+                                  mercado, situação cadastral (BrasilAPI) —
+                                  também resolve codigo_municipio_cnes,
+                                  usado pela ETAPA 5
   3. enrich_pgfn_divida_ativa  → cruzamento por CNPJ (sem contato, só sinal)
   4. enrich_zona_franca        → lookup estático de município (sem custo externo)
   5. enrich_cnes               → cruzamento por CNPJ (confirma unidade de
@@ -19,9 +22,9 @@ apresentado no kickoff (documento 03_Fluxo_Execucao.html):
   10. enrich_email             → Hunter.io + validação MX/ZeroBounce
   11. compute_lead_score       → aplica app/scoring/rules.py
 
-Cada task abaixo é um placeholder — implementação entra sessão a
-sessão, começando pelas fontes específicas da Minotto (PGFN, Zona
-Franca, CNES) por serem a prioridade combinada com o cliente.
+Implementadas até agora: enrich_receita_federal, enrich_pgfn_divida_ativa
+(+ refresh_pgfn_index), enrich_zona_franca, enrich_cnes. As demais
+continuam placeholder — implementação entra sessão a sessão.
 """
 from celery import Celery
 
@@ -50,8 +53,45 @@ def search_google_places(nicho: str, regiao: str) -> list[dict]:
 
 @celery_app.task(name="enrich_receita_federal")
 def enrich_receita_federal(cnpj: str) -> dict:
-    """TODO: CNAE, sócios, porte, anos de mercado, situação cadastral."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+    """
+    Consulta a Receita Federal (via BrasilAPI, ver app/services/receita_federal.py)
+    pra CNAE, porte, situação cadastral, anos de mercado e decisor.
+
+    Também resolve `codigo_municipio_cnes`, já convertido do código IBGE
+    de 7 dígitos devolvido aqui pro formato de 6 dígitos que
+    `enrich_cnes` espera (ver app/services/ibge_municipios.py) — fecha o
+    gap deixado em aberto na sessão anterior.
+    """
+    from app.services.ibge_municipios import codigo_ibge_para_cnes
+    from app.services.receita_federal import anos_mercado, fetch_empresa, identificar_decisor
+
+    empresa = fetch_empresa(cnpj)
+    if empresa is None:
+        return {"cnpj": cnpj, "encontrado": False}
+
+    decisor = identificar_decisor(empresa.socios)
+    codigo_municipio_cnes = (
+        codigo_ibge_para_cnes(empresa.codigo_municipio_ibge)
+        if empresa.codigo_municipio_ibge
+        else None
+    )
+
+    return {
+        "cnpj": empresa.cnpj,
+        "encontrado": True,
+        "razao_social": empresa.razao_social,
+        "nome_fantasia": empresa.nome_fantasia,
+        "situacao_cadastral": empresa.situacao_cadastral,
+        "cnae_principal": empresa.cnae_principal_codigo,
+        "porte": empresa.porte,
+        "municipio": empresa.municipio,
+        "uf": empresa.uf,
+        "codigo_municipio_ibge": empresa.codigo_municipio_ibge,
+        "codigo_municipio_cnes": codigo_municipio_cnes,
+        "anos_mercado": anos_mercado(empresa.data_inicio_atividade),
+        "simples_nacional": empresa.opcao_pelo_simples,
+        "decisor_nome": decisor.nome if decisor else None,
+    }
 
 
 @celery_app.task(name="refresh_pgfn_index")

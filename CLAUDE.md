@@ -67,7 +67,8 @@ backend/app/
   models/         SQLAlchemy models (Lead)
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
-  services/       external-data parsers/clients (PGFN CSV parser, CNES HTTP client)
+  services/       external-data parsers/clients (PGFN CSV parser, CNES/Receita
+                  Federal/IBGE HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
 backend/tests/    pytest suite, one file per module under test
@@ -135,19 +136,53 @@ docs are a JS-rendered Swagger SPA that doesn't scrape:
   presence is only a structural reinforcement signal for the
   `rqe_especialista` criterion, not a standalone confirmation.
 
-`enrich_cnes` (the Celery task) needs `codigo_municipio` passed in; nothing
-in the pipeline resolves município name → IBGE code yet (see README's "O
-que falta").
+`enrich_cnes` (the Celery task) needs `codigo_municipio` passed in — resolved
+by `enrich_receita_federal` (see below), which now runs first in the pipeline.
+
+### Receita Federal data (`app/services/receita_federal.py`)
+
+Live HTTP client for BrasilAPI (`brasilapi.com.br/api/cnpj/v1/{cnpj}`), a
+free, unauthenticated mirror of the Receita Federal's own CNPJ open data.
+Same per-CNPJ, no-bulk-file design as CNES. Two things worth knowing:
+
+- `identificar_decisor` picks the likely decision-maker from the sócios
+  (QSA) list by keyword-matching the `qualificacao_socio` string (e.g.
+  "ADMINISTRADOR", "PRESIDENTE") — there's no verified official
+  qualification-code table to match against instead, so don't replace this
+  with a numeric-code lookup without first confirming the codes against
+  Receita Federal's own documentation.
+- The response includes `codigo_municipio_ibge` (7-digit IBGE code)
+  directly per CNPJ — this is what resolves CNES's `codigo_municipio` gap
+  (see `app/services/ibge_municipios.py::codigo_ibge_para_cnes` below),
+  no separate name-based lookup needed once a lead has gone through this
+  step.
+
+### Município → IBGE/CNES code (`app/services/ibge_municipios.py`)
+
+Resolves município name + UF to an IBGE code by querying IBGE's own public
+Localidades API live, rather than embedding a static table — deliberately
+different from `zona_franca.py`'s pattern. With ~5,570 municípios
+nationwide, a hand-typed/memorized table risks a silent wrong-digit error
+that would only surface as `enrich_cnes` mysteriously returning no results
+for one município; the small Zona Franca list (10 entries) is checkable
+against the Suframa page, this one isn't practical to eyeball. In practice
+this module is a fallback — `enrich_receita_federal` already returns
+`codigo_municipio_ibge` directly, avoiding the name-matching step entirely.
+
+`codigo_ibge_para_cnes()` does the IBGE-7-digit → CNES-6-digit conversion
+(drop the trailing check digit) — confirmed empirically against the live
+CNES API on 2026-08-19 (São Paulo: 3550308 → 355030), not from documentation.
 
 ### Celery pipeline (`app/workers/celery_app.py`)
 
 Tasks are ordered to match the client kickoff's execution flow: Google
 Places search → Receita Federal → PGFN → Zona Franca → CNES → site/Firecrawl
 → Instagram → LinkedIn → WhatsApp (Evolution API) → email (Hunter.io +
-ZeroBounce) → `compute_lead_score`. Implemented so far: `enrich_zona_franca`,
-`enrich_pgfn_divida_ativa` (plus its prerequisite `refresh_pgfn_index`), and
-`enrich_cnes`. Everything else raises `NotImplementedError` — implement in
-the same task-per-pipeline-stage shape when picking up the next stage.
+ZeroBounce) → `compute_lead_score`. Implemented so far: `enrich_receita_federal`,
+`enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
+`refresh_pgfn_index`), and `enrich_cnes`. Everything else raises
+`NotImplementedError` — implement in the same task-per-pipeline-stage shape
+when picking up the next stage.
 
 ### Deployment note (EasyPanel)
 

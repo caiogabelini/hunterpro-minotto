@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     # página menor que o `limit` pedido, sem campo de especialidade).
     CNES_API_BASE_URL: str = "https://apidadosabertos.saude.gov.br"
 
+    # Base URL da BrasilAPI, usada pro enriquecimento via Receita Federal
+    # (CNAE, sócios, porte, situação cadastral). Espelha os Dados Abertos
+    # do CNPJ da própria Receita — pública, sem autenticação. Ver
+    # app/services/receita_federal.py.
+    RECEITA_FEDERAL_API_BASE_URL: str = "https://brasilapi.com.br"
+
+    # Base URL da API de Localidades do IBGE, usada só pra resolver
+    # município + UF -> código IBGE (necessário pro codigo_municipio do
+    # enrich_cnes). Ver app/services/ibge_municipios.py.
+    IBGE_API_BASE_URL: str = "https://servicodados.ibge.gov.br"
+
     # --- CORS ---
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
