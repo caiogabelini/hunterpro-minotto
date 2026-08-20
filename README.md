@@ -87,9 +87,37 @@ interno do Docker.
   IBGE ao vivo. `codigo_ibge_para_cnes` confirma, por teste manual em
   19/08/2026, que o `codigo_municipio` do CNES é o código IBGE de 7
   dígitos sem o dígito verificador final.
+- ✅ **Semente de leads a partir do arquivo bruto da Receita Federal**
+  (`app/services/receita_federal_bulk.py`) — parser do arquivo
+  ESTABELECIMENTOS dos Dados Abertos do CNPJ (mesmo formato do projeto
+  SR Contábil, layout confirmado contra o PDF oficial da Receita em
+  19/08/2026), filtrando por CNAE de consultório médico (grupo 8630,
+  exceto a subclasse odontológica) e por UF/região, situação cadastral
+  ativa por padrão. Task `gerar_semente_leads` lê os arquivos de
+  `RECEITA_FEDERAL_DADOS_ABERTOS_DIR` e devolve a lista de CNPJs — esse
+  arquivo NÃO tem o código IBGE do município (tem um código próprio da
+  Receita, não cruzar com CNES/IBGE).
+- ✅ **Junção com o arquivo EMPRESAS pra trazer razão social** — o
+  ESTABELECIMENTOS só tem `nome_fantasia` (costuma vir vazio em empresas
+  pequenas); `enriquecer_com_razao_social` cruza pela raiz do CNPJ
+  (`cnpj_basico`, 8 primeiros dígitos) com o arquivo EMPRESAS
+  (`K3241.K03200Y0.D10612.EMPRECSV` e afins, layout também confirmado
+  contra o PDF oficial), buscando só os CNPJs básicos que já sobraram
+  do filtro — não indexa os ~60 milhões de empresas do arquivo inteiro.
+  Razão social é o campo principal do resultado de `gerar_semente_leads`
+  (nome fantasia fica complementar); CNPJs sem correspondência no
+  EMPRESAS ficam com razão social vazia, sem quebrar o pipeline.
+- ✅ **`search_google_places` deixou de ser o ponto de entrada** do
+  pipeline — agora recebe os CNPJs já filtrados pela semente acima e
+  busca cada um no Google Places preferencialmente pela `razao_social`,
+  caindo pro `nome_fantasia` só se ela vier vazia
+  (`nome_busca_google_places`). A chamada real à Places API ainda não
+  foi implementada — falta uma `GOOGLE_API_KEY` válida pra validar o
+  formato de resposta (diferente do CNES/IBGE/BrasilAPI, que são
+  públicas e sem chave).
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 61 testes automatizados passando (`pytest`)
+- ✅ 93 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -101,7 +129,10 @@ Em ordem de prioridade combinada com o cliente:
 3. ~~Integração com a API do CNES~~ ✅ feito
 4. ~~Enriquecimento via Receita Federal~~ ✅ feito (BrasilAPI), incluindo
    a resolução de município → código IBGE que fechou o gap do CNES
-5. Busca inicial via Google Places (`search_google_places`)
+5. ~~Semente de leads (arquivo bruto de Estabelecimentos + filtro por
+   CNAE/UF) + junção com EMPRESAS pra razão social~~ ✅ feito — falta só
+   implementar a chamada real à Places API em `search_google_places`
+   (precisa de `GOOGLE_API_KEY` real pra validar)
 6. Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)
 7. Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)
 8. `compute_lead_score` — juntar os pontos de todos os critérios (a
@@ -115,6 +146,12 @@ navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar
 `refresh_pgfn_index`. Automação desse download fica para uma sessão
 futura, se valer a pena frente ao volume (atualiza só 1x por trimestre).
+Mesma lógica pros arquivos ESTABELECIMENTOS **e** EMPRESAS da Receita
+Federal (arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/,
+atualização mensal, publicados juntos no mesmo lote) — baixar manualmente
+e colocar os dois em `RECEITA_FEDERAL_DADOS_ABERTOS_DIR` antes de rodar
+`gerar_semente_leads`. Sem o(s) arquivo(s) EMPRESAS na pasta, a task
+ainda funciona (filtra e devolve os CNPJs), só que sem razão social.
 
 ---
 

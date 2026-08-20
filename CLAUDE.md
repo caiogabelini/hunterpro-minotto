@@ -67,8 +67,8 @@ backend/app/
   models/         SQLAlchemy models (Lead)
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
-  services/       external-data parsers/clients (PGFN CSV parser, CNES/Receita
-                  Federal/IBGE HTTP clients)
+  services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
+                  parsers, CNES/Receita Federal/IBGE HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
 backend/tests/    pytest suite, one file per module under test
@@ -173,16 +173,66 @@ this module is a fallback — `enrich_receita_federal` already returns
 (drop the trailing check digit) — confirmed empirically against the live
 CNES API on 2026-08-19 (São Paulo: 3550308 → 355030), not from documentation.
 
+### Lead seed from the Receita Federal bulk file (`app/services/receita_federal_bulk.py`)
+
+Parses the RFB's "Estabelecimentos" open-data file (monthly, split across
+several files like `K3241.K03200Y0.D60411.ESTABELE` — the number is just a
+shard, layout is identical across shards) — 30 fixed-position columns,
+**no header row**, semicolon-delimited, quoted fields. Layout was confirmed
+against the RFB's own metadata PDF (`gov.br/receitafederal/dados/cnpj-metadados.pdf`)
+on 2026-08-19, not guessed — see `ESTABELECIMENTOS_COLUNAS` for the exact
+order. Same streaming/no-bulk-load design as `pgfn.py`.
+
+Filters on CNAE prefix `8630` (grupo "Atividade médica ambulatorial") minus
+subclass `8630504` (Atividade odontológica — excluded because the niche is
+RQE-holding physicians, and dentists don't hold RQE), plus UF/região and
+active-status by default.
+
+**Razão social comes from a second bulk file, joined in.** ESTABELECIMENTOS
+only has `nome_fantasia` (often blank for small companies) — razão social
+(mandatory field) lives in the separate EMPRESAS file
+(`K3241.K03200Y0.D10612.EMPRECSV` and shards, layout also confirmed against
+the same RFB PDF, 7 columns, same no-header/`;`/quoted convention).
+`enriquecer_com_razao_social` joins on `cnpj_basico` (first 8 digits) —
+it only streams EMPRESAS looking for the `cnpj_basico` set already
+surviving the ESTABELECIMENTOS filter (`build_razao_social_index`), never
+indexes the full ~60M-row file. A `cnpj_basico` missing from the EMPRESAS
+file(s) passed in just leaves `razao_social` as `""` (never `None`,
+never raises) — expected in tests with a partial EMPRESAS fixture, not
+expected in production with the real same-month files. `razao_social` is
+the primary field on the `gerar_semente_leads` output; `nome_fantasia` is
+the fallback, chosen by `nome_busca_google_places()` in `celery_app.py`.
+
+**`municipio` here is not an IBGE code** — it's an RFB-internal
+jurisdiction code from RFB's own domain table, unrelated to IBGE codes.
+Don't feed it to `ibge_municipios.py` or CNES; `enrich_receita_federal`'s
+`codigo_municipio_ibge` (from BrasilAPI) is still the only confirmed path
+to that code.
+
+`gerar_semente_leads` (the Celery task) wraps both files' parsing the same
+way `refresh_pgfn_index` wraps `pgfn.py` — reads from
+`settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR` (manual download, both file
+types land in the same folder since RFB ships them together monthly), and
+is not a per-lead task.
+
 ### Celery pipeline (`app/workers/celery_app.py`)
 
-Tasks are ordered to match the client kickoff's execution flow: Google
-Places search → Receita Federal → PGFN → Zona Franca → CNES → site/Firecrawl
-→ Instagram → LinkedIn → WhatsApp (Evolution API) → email (Hunter.io +
-ZeroBounce) → `compute_lead_score`. Implemented so far: `enrich_receita_federal`,
-`enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
-`refresh_pgfn_index`), and `enrich_cnes`. Everything else raises
-`NotImplementedError` — implement in the same task-per-pipeline-stage shape
-when picking up the next stage.
+As of 2026-08-19 the pipeline no longer starts with a free-form Google
+Places search — it starts with `gerar_semente_leads` (ETAPA 0, not part of
+the per-lead flow below), which filters CNPJs from the RFB bulk files and
+joins in razão social. Tasks per lead: `search_google_places` (now an
+*enrichment* step over the already-known CNPJs from the seed — searches
+Google Places by `nome_busca_google_places()`'s pick, razão social
+preferred over nome_fantasia; the actual Places API call is still
+`NotImplementedError`, blocked on a real `GOOGLE_API_KEY` to validate
+against, unlike the free/no-auth CNES/IBGE/BrasilAPI sources) → Receita
+Federal → PGFN → Zona Franca → CNES → site/Firecrawl → Instagram →
+LinkedIn → WhatsApp (Evolution API) → email (Hunter.io + ZeroBounce) →
+`compute_lead_score`. Implemented so far: `gerar_semente_leads`,
+`enrich_receita_federal`, `enrich_zona_franca`, `enrich_pgfn_divida_ativa`
+(plus its prerequisite `refresh_pgfn_index`), and `enrich_cnes`. Everything
+else raises `NotImplementedError` — implement in the same
+task-per-pipeline-stage shape when picking up the next stage.
 
 ### Deployment note (EasyPanel)
 

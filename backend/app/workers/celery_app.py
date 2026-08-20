@@ -3,9 +3,23 @@ Celery app — HunterPro Minotto Contabilidade.
 
 Cada etapa do pipeline de busca/enriquecimento vira uma task. A ordem
 de execução por lead é a mesma definida no fluxo de execução
-apresentado no kickoff (documento 03_Fluxo_Execucao.html):
+apresentado no kickoff (documento 03_Fluxo_Execucao.html), com uma
+mudança em 19/08/2026: a entrada do pipeline deixou de ser uma busca
+livre no Google Places e passou a ser a "semente" filtrada a partir do
+arquivo de Estabelecimentos da Receita Federal — ver ETAPA 0.
 
-  1. search_google_places      → busca inicial por nicho + região
+  0. gerar_semente_leads       → NÃO faz parte do fluxo por lead abaixo,
+                                  roda uma vez sobre o(s) arquivo(s) de
+                                  Estabelecimentos da Receita Federal
+                                  (baixado(s) manualmente, mesmo padrão
+                                  da PGFN) e gera a lista inicial de
+                                  CNPJs, já filtrados por CNAE de
+                                  consultório médico + UF/região (ver
+                                  app/services/receita_federal_bulk.py)
+  1. search_google_places      → enriquecimento por CNPJ já filtrado na
+                                  ETAPA 0 (busca por nome_fantasia → site,
+                                  rating, nº de avaliações) — NÃO é mais o
+                                  ponto de entrada do pipeline
   2. enrich_receita_federal    → CNAE, sócios/decisor, porte, anos de
                                   mercado, situação cadastral (BrasilAPI) —
                                   também resolve codigo_municipio_cnes,
@@ -22,9 +36,12 @@ apresentado no kickoff (documento 03_Fluxo_Execucao.html):
   10. enrich_email             → Hunter.io + validação MX/ZeroBounce
   11. compute_lead_score       → aplica app/scoring/rules.py
 
-Implementadas até agora: enrich_receita_federal, enrich_pgfn_divida_ativa
-(+ refresh_pgfn_index), enrich_zona_franca, enrich_cnes. As demais
-continuam placeholder — implementação entra sessão a sessão.
+Implementadas até agora: gerar_semente_leads, enrich_receita_federal,
+enrich_pgfn_divida_ativa (+ refresh_pgfn_index), enrich_zona_franca,
+enrich_cnes. As demais continuam placeholder — implementação entra
+sessão a sessão. `search_google_places` tem a assinatura nova (recebe
+estabelecimentos já filtrados) mas a chamada real à Places API ainda não
+foi implementada (falta validar contra uma GOOGLE_API_KEY real).
 """
 from celery import Celery
 
@@ -45,10 +62,101 @@ celery_app.conf.update(
 )
 
 
+@celery_app.task(name="gerar_semente_leads")
+def gerar_semente_leads(
+    ufs: list[str] | None = None,
+    regiao: str | None = None,
+) -> dict:
+    """
+    Gera a "semente" de leads a partir do(s) arquivo(s) ESTABELECIMENTOS +
+    EMPRESAS baixados em `settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR`
+    (mesmo padrão de `refresh_pgfn_index`) — filtra ESTABELECIMENTOS por
+    CNAE de consultório médico e por UF/região, depois junta a razão
+    social do arquivo EMPRESAS pela raiz do CNPJ (ver
+    app/services/receita_federal_bulk.py).
+
+    Razão social é o campo principal do resultado (obrigatório no
+    cadastro de CNPJ); nome_fantasia é complementar/opcional — ver
+    `search_google_places`, que prefere razão social e só cai pra
+    nome_fantasia se ela vier vazia.
+
+    NÃO roda por lead — roda uma vez (ou quando o cliente quiser ampliar
+    a busca pra outras UFs/região) e alimenta `search_google_places` com
+    os CNPJs encontrados.
+    """
+    from app.services.receita_federal_bulk import (
+        enriquecer_com_razao_social,
+        filtrar_semente_leads,
+        find_empresas_rfb_files,
+        find_estabelecimentos_rfb_files,
+    )
+
+    estabelecimentos_paths = find_estabelecimentos_rfb_files(settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR)
+    if not estabelecimentos_paths:
+        return {"status": "sem_arquivos", "dir": settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR}
+
+    estabelecimentos = list(
+        filtrar_semente_leads(estabelecimentos_paths, ufs=set(ufs) if ufs else None, regiao=regiao)
+    )
+
+    empresas_paths = find_empresas_rfb_files(settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR)
+    if empresas_paths:
+        estabelecimentos = enriquecer_com_razao_social(estabelecimentos, empresas_paths)
+
+    return {
+        "status": "ok",
+        "total_encontrado": len(estabelecimentos),
+        "arquivos_processados": [str(p) for p in estabelecimentos_paths + empresas_paths],
+        "estabelecimentos": [
+            {
+                "cnpj": e.cnpj,
+                "razao_social": e.razao_social,
+                "nome_fantasia": e.nome_fantasia,
+                "uf": e.uf,
+                "cnae_fiscal_principal": e.cnae_fiscal_principal,
+            }
+            for e in estabelecimentos
+        ],
+    }
+
+
+def nome_busca_google_places(estabelecimento: dict) -> str | None:
+    """
+    Escolhe o nome a usar na busca por um estabelecimento no Google
+    Places: preferencialmente `razao_social` (campo obrigatório no
+    cadastro de CNPJ), caindo pro `nome_fantasia` só se ela vier vazia —
+    o que não deveria acontecer com os arquivos reais (só em cenários de
+    EMPRESAS parcial/teste, ver `enriquecer_com_razao_social` em
+    app/services/receita_federal_bulk.py). Devolve None se nenhum dos
+    dois estiver preenchido.
+    """
+    return estabelecimento.get("razao_social") or estabelecimento.get("nome_fantasia") or None
+
+
 @celery_app.task(name="search_google_places")
-def search_google_places(nicho: str, regiao: str) -> list[dict]:
-    """TODO: busca inicial via Google Places API (ETAPA 1 do pipeline)."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+def search_google_places(estabelecimentos: list[dict]) -> list[dict]:
+    """
+    Enriquecimento via Google Places — NÃO é mais o ponto de entrada do
+    pipeline (ver ETAPA 0 no docstring do módulo: a entrada agora é
+    `gerar_semente_leads`, que já filtra os CNPJs por CNAE de consultório
+    médico + UF/região e já junta a razão social do arquivo EMPRESAS).
+
+    Recebe a lista de estabelecimentos já filtrados (formato devolvido
+    por `gerar_semente_leads`: cnpj, razao_social, nome_fantasia, uf, ...)
+    e busca cada um no Google Places pelo nome escolhido por
+    `nome_busca_google_places` (razão social, com fallback pra
+    nome_fantasia), pra trazer site, rating e nº de avaliações.
+
+    TODO: implementar a chamada real à Places API (Text Search pelo nome
+    de `nome_busca_google_places` + UF, depois Place Details pro
+    site/rating/avaliações). Ainda não dá pra confirmar o formato de
+    resposta contra a API real nesta sessão — diferente do
+    CNES/IBGE/BrasilAPI (públicas, sem chave), a Places API exige uma
+    GOOGLE_API_KEY válida pra testar, que não está configurada.
+    """
+    raise NotImplementedError(
+        "Implementar a chamada à Places API numa sessão com GOOGLE_API_KEY configurada."
+    )
 
 
 @celery_app.task(name="enrich_receita_federal")

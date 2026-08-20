@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # enrich_cnes). Ver app/services/ibge_municipios.py.
     IBGE_API_BASE_URL: str = "https://servicodados.ibge.gov.br"
 
+    # Caminho local onde os arquivos ESTABELECIMENTOS e EMPRESAS dos
+    # Dados Abertos do CNPJ da Receita Federal ficam armazenados após
+    # download manual (mesmo padrão do PGFN_DADOS_ABERTOS_DIR) — a
+    # Receita publica os dois tipos de arquivo juntos, no mesmo lote
+    # mensal, então usam a mesma pasta. Ver
+    # app/services/receita_federal_bulk.py.
+    RECEITA_FEDERAL_DADOS_ABERTOS_DIR: str = "./data/receita_federal"
+
     # --- CORS ---
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
