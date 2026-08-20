@@ -68,7 +68,8 @@ backend/app/
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
   services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
-                  parsers, CNES/Receita Federal/IBGE HTTP clients)
+                  parsers, CNES/Receita Federal/IBGE/Evolution/Hunter.io/ZeroBounce
+                  HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
 backend/tests/    pytest suite, one file per module under test
@@ -215,6 +216,46 @@ way `refresh_pgfn_index` wraps `pgfn.py` — reads from
 types land in the same folder since RFB ships them together monthly), and
 is not a per-lead task.
 
+### WhatsApp validation (`app/services/whatsapp.py`)
+
+Live HTTP client for Evolution API
+(`POST {EVOLUTION_URL}/chat/whatsappNumbers/{EVOLUTION_INSTANCE}`, header
+`apikey`) — endpoint and contract already validated in production on the
+SR Contábil sibling project, implemented here to match exactly.
+
+`formatar_numero_whatsapp()` decides whether to prepend the country code
+(55) by the cleaned number's **length** (10/11 digits = national number,
+always prepend), not by checking whether it already starts with "55" —
+DDD 55 is Rio Grande do Sul, so a bare 11-digit local number can start
+with "55" without having the country code at all. Prefix-checking would
+silently under-prefix those numbers. Only calls the API if the final
+result is 12-13 digits; otherwise returns `numero_valido=False` without
+an HTTP call.
+
+### Email enrichment (`app/services/email_enrichment.py`)
+
+Three chained steps, contract for both APIs already validated in
+production on SR Contábil:
+
+1. Hunter.io Email Finder (`GET api.hunter.io/v2/email-finder`, params
+   `domain`/`first_name`/`last_name`/`api_key`) — `_dividir_nome()` splits
+   whatever single `nome_decisor` string the pipeline has into first/last
+   name. A 200 response with `data.email: null` is a valid "not found"
+   result, not an error.
+2. MX check via dnspython (`dns.resolver.resolve(dominio, "MX")`) — cheap
+   gate before spending a paid ZeroBounce lookup on a domain that can't
+   receive mail. The `resolver` param is injectable (same DI pattern as
+   the HTTP `client` elsewhere) so tests don't touch real DNS.
+3. ZeroBounce (`GET api.zerobounce.net/v2/validate`) — only `valid` and
+   `catch-all` count as approved (`ZEROBOUNCE_STATUS_APROVADOS`); `invalid`,
+   `do_not_mail`, `abuse` don't.
+
+`enriquecer_email()` short-circuits after step 1 or 2 if they fail, never
+reaching the paid ZeroBounce call unnecessarily. Unlike every other HTTP
+module in this project, it does **not** set `client.base_url` — Hunter.io
+and ZeroBounce are different hosts, so each function passes an absolute
+URL and a single client (real or injected) serves both.
+
 ### Celery pipeline (`app/workers/celery_app.py`)
 
 As of 2026-08-19 the pipeline no longer starts with a free-form Google
@@ -227,11 +268,11 @@ preferred over nome_fantasia; the actual Places API call is still
 `NotImplementedError`, blocked on a real `GOOGLE_API_KEY` to validate
 against, unlike the free/no-auth CNES/IBGE/BrasilAPI sources) → Receita
 Federal → PGFN → Zona Franca → CNES → site/Firecrawl → Instagram →
-LinkedIn → WhatsApp (Evolution API) → email (Hunter.io + ZeroBounce) →
-`compute_lead_score`. Implemented so far: `gerar_semente_leads`,
-`enrich_receita_federal`, `enrich_zona_franca`, `enrich_pgfn_divida_ativa`
-(plus its prerequisite `refresh_pgfn_index`), and `enrich_cnes`. Everything
-else raises `NotImplementedError` — implement in the same
+LinkedIn → `validate_whatsapp` → `enrich_email` → `compute_lead_score`.
+Implemented so far: `gerar_semente_leads`, `enrich_receita_federal`,
+`enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
+`refresh_pgfn_index`), `enrich_cnes`, `validate_whatsapp`, `enrich_email`.
+Everything else raises `NotImplementedError` — implement in the same
 task-per-pipeline-stage shape when picking up the next stage.
 
 ### Deployment note (EasyPanel)

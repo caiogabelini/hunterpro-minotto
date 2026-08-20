@@ -32,16 +32,22 @@ arquivo de Estabelecimentos da Receita Federal — ver ETAPA 0.
   6. enrich_site_firecrawl     → varredura de site + IA (serviços, RQE inferido)
   7. enrich_instagram          → localizado a partir do site
   8. enrich_linkedin           → busca por razão social/decisor
-  9. validate_whatsapp         → Evolution API
-  10. enrich_email             → Hunter.io + validação MX/ZeroBounce
+  9. validate_whatsapp         → Evolution API — normaliza o telefone
+                                  (código do país por tamanho, não por
+                                  prefixo, ver app/services/whatsapp.py)
+                                  e confirma WhatsApp ativo
+  10. enrich_email             → Hunter.io (encontra) + MX (dnspython) +
+                                  ZeroBounce (valida entregabilidade) —
+                                  ver app/services/email_enrichment.py
   11. compute_lead_score       → aplica app/scoring/rules.py
 
 Implementadas até agora: gerar_semente_leads, enrich_receita_federal,
 enrich_pgfn_divida_ativa (+ refresh_pgfn_index), enrich_zona_franca,
-enrich_cnes. As demais continuam placeholder — implementação entra
-sessão a sessão. `search_google_places` tem a assinatura nova (recebe
-estabelecimentos já filtrados) mas a chamada real à Places API ainda não
-foi implementada (falta validar contra uma GOOGLE_API_KEY real).
+enrich_cnes, validate_whatsapp, enrich_email. As demais continuam
+placeholder — implementação entra sessão a sessão. `search_google_places`
+tem a assinatura nova (recebe estabelecimentos já filtrados) mas a
+chamada real à Places API ainda não foi implementada (falta validar
+contra uma GOOGLE_API_KEY real).
 """
 from celery import Celery
 
@@ -305,15 +311,47 @@ def enrich_site_firecrawl(site_url: str) -> dict:
 
 
 @celery_app.task(name="validate_whatsapp")
-def validate_whatsapp(telefone: str) -> bool:
-    """TODO: validação via Evolution API (mesmo padrão do projeto SR Contábil)."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+def validate_whatsapp(telefone: str) -> dict:
+    """
+    Valida se um telefone tem WhatsApp ativo via Evolution API (ver
+    app/services/whatsapp.py — endpoint e contrato já validados em
+    produção no projeto SR Contábil). O número é normalizado antes de
+    bater na API; se não normalizar pra um formato plausível, a task
+    devolve `numero_valido=False` sem chamar a Evolution API.
+    """
+    from app.services.whatsapp import check_whatsapp
+
+    resultado = check_whatsapp(telefone)
+
+    return {
+        "telefone_original": telefone,
+        "numero_formatado": resultado.numero_formatado,
+        "numero_valido": resultado.numero_valido,
+        "whatsapp_ativo": resultado.tem_whatsapp,
+    }
 
 
 @celery_app.task(name="enrich_email")
 def enrich_email(dominio: str, decisor_nome: str | None) -> dict:
-    """TODO: Hunter.io + validação MX/ZeroBounce."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+    """
+    Encontra e valida o e-mail do decisor: Hunter.io Email Finder ->
+    validação de MX (dnspython) -> ZeroBounce (ver
+    app/services/email_enrichment.py — contrato das duas APIs já
+    validado em produção no projeto SR Contábil). Só considera o e-mail
+    "aprovado" se o ZeroBounce devolver status "valid" ou "catch-all".
+    """
+    from app.services.email_enrichment import enriquecer_email
+
+    resultado = enriquecer_email(dominio, decisor_nome)
+
+    return {
+        "dominio": dominio,
+        "email": resultado.email,
+        "hunter_score": resultado.hunter_score,
+        "mx_valido": resultado.mx_valido,
+        "zerobounce_status": resultado.zerobounce_status,
+        "email_aprovado": resultado.aprovado,
+    }
 
 
 @celery_app.task(name="compute_lead_score")

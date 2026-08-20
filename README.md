@@ -115,9 +115,24 @@ interno do Docker.
   foi implementada — falta uma `GOOGLE_API_KEY` válida pra validar o
   formato de resposta (diferente do CNES/IBGE/BrasilAPI, que são
   públicas e sem chave).
+- ✅ **Validação de WhatsApp** (`app/services/whatsapp.py`) — Evolution
+  API (`POST {EVOLUTION_URL}/chat/whatsappNumbers/{EVOLUTION_INSTANCE}`,
+  header `apikey`), endpoint e contrato já validados em produção no
+  projeto SR Contábil. `formatar_numero_whatsapp` normaliza o telefone
+  antes de chamar a API — decide se precisa prefixar o código do país
+  (55) pelo TAMANHO do número (10/11 dígitos = nacional), não pelo
+  prefixo, porque checar só "já começa com 55" é ambíguo (DDD 55 é do
+  Rio Grande do Sul). Só bate na API se o resultado tiver 12-13 dígitos.
+- ✅ **Enriquecimento de e-mail** (`app/services/email_enrichment.py`)
+  — Hunter.io Email Finder (acha o e-mail do decisor) → validação de MX
+  via dnspython → ZeroBounce (valida entregabilidade). Contrato das duas
+  APIs também já validado em produção no SR Contábil. Só considera
+  "aprovado" status `valid` ou `catch-all` do ZeroBounce; para cedo (sem
+  gastar a consulta paga do ZeroBounce) se o Hunter.io não achar e-mail
+  ou o domínio não tiver MX válido.
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 93 testes automatizados passando (`pytest`)
+- ✅ 126 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -134,7 +149,8 @@ Em ordem de prioridade combinada com o cliente:
    implementar a chamada real à Places API em `search_google_places`
    (precisa de `GOOGLE_API_KEY` real pra validar)
 6. Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)
-7. Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)
+7. ~~Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)~~
+   ✅ feito
 8. `compute_lead_score` — juntar os pontos de todos os critérios (a
    PGFN já calcula os dela; falta fazer o mesmo pros outros 8 e somar,
    incluindo como o sinal do CNES reforça o critério `rqe_especialista`)
