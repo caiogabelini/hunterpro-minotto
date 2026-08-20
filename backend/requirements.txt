@@ -19,6 +19,14 @@ python-dotenv==1.0.1
 # --- Auth (JWT) ---
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# bcrypt travado em <4.0 de propósito: passlib==1.7.4 (não mantido desde
+# 2020) lê bcrypt.__about__.__version__ pra detectar a versão do backend,
+# atributo removido no bcrypt 4.x -- sem esse pin, hash_password() quebra
+# com um ValueError enganoso ("password cannot be longer than 72 bytes"),
+# mesmo pra senha curta. Confirmado batendo nesse bug de verdade em
+# 20/08/2026 (bcrypt 4.0.1 instalava por padrão, sem essa linha). Ver
+# app/core/security.py.
+bcrypt==3.2.2
 
 # --- HTTP / integrações externas ---
 httpx==0.27.2

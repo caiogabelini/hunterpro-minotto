@@ -62,9 +62,11 @@ No test runner is configured for the frontend yet.
 
 ```
 backend/app/
-  api/routes/     FastAPI endpoints (health.py, leads.py)
+  api/routes/     FastAPI endpoints (health.py, leads.py, auth.py)
+  api/deps.py     auth dependencies (get_current_user, require_admin)
   core/           settings (Pydantic BaseSettings from .env) + SQLAlchemy engine/session
-  models/         SQLAlchemy models (Lead)
+                  + security.py (password hashing, JWT)
+  models/         SQLAlchemy models (Lead, User)
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
   services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
@@ -72,6 +74,7 @@ backend/app/
                   Firecrawl/Anthropic/Google Places HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
+backend/scripts/  one-off CLI scripts (create_user.py — the only way to create a user)
 backend/tests/    pytest suite, one file per module under test
 
 frontend/src/
@@ -528,6 +531,101 @@ added to `config.py` that needs a real value (e.g. `FIRECRAWL_API_KEY`,
 added 2026-08-19), it won't be reflected in `.env.example` — check
 `config.py` directly for the full settings surface, and flag the gap to
 the user rather than silently skipping it.
+
+### Authentication (`app/models/user.py`, `app/core/security.py`, `app/api/routes/auth.py`, `app/api/deps.py`)
+
+Added 2026-08-20, deliberately minimal — see README's "O que falta" item
+11 for the explicit list of what was left out on purpose (refresh
+tokens, password recovery, public registration) rather than forgotten.
+
+- `User` (`app/models/user.py`): `id` (uuid string, same pattern as
+  `Lead`), `email` (unique/indexed), `senha_hash`, `role` (plain
+  `String(10)` storing a `UserRole(str, Enum)`'s `.value` — `"admin"` |
+  `"client"` — not a native DB enum type, same pragmatic-string
+  convention as `Lead.rqe_fonte`/`Lead.prioridade`, avoids the extra
+  Alembic ceremony a native Postgres ENUM needs on both upgrade and
+  downgrade), `ativo` (bool, default `True`), `created_at`.
+- `app/core/security.py`: `hash_password`/`verify_password` (passlib
+  bcrypt) and `create_access_token`/`decode_access_token` (python-jose,
+  HS256, `settings.SECRET_KEY` + `settings.ACCESS_TOKEN_EXPIRE_MINUTES`).
+  `decode_access_token` never raises — catches `JWTError` (the base
+  class covering both bad-signature and expired-token cases) and
+  returns `None`, so callers only ever check for `None`.
+- **Real bug hit and fixed**: `passlib==1.7.4` (already pinned) is
+  broken with `bcrypt>=4.0` — passlib's backend-detection code reads
+  `bcrypt.__about__.__version__`, an attribute removed in bcrypt 4.x.
+  The failure mode is *not* a clear compatibility error — it's a
+  misleading `ValueError: password cannot be longer than 72 bytes`,
+  even for a 12-character password, because passlib's internal
+  self-test silently breaks first. Confirmed by hitting this for real
+  in this session (bcrypt resolved to 4.0.1 by default, since
+  `passlib[bcrypt]==1.7.4` doesn't pin the bcrypt version itself). Fixed
+  by pinning `bcrypt==3.2.2` explicitly in `requirements.txt` — don't
+  bump bcrypt without re-validating `hash_password`/`verify_password`
+  against the new version first.
+- `POST /api/auth/login` (`app/api/routes/auth.py`, mounted at
+  `/api/auth`): plain JSON body (`email`, `senha` — not OAuth2
+  form-encoded `username`/`password`, since there's no OAuth2 flow
+  here), returns `{"access_token", "token_type": "bearer"}` with
+  `user_id` and `role` in the JWT payload. One generic 401 for
+  nonexistent email, wrong password, *and* inactive user — deliberately
+  not distinguished, so a failed login never reveals which emails have
+  accounts.
+- `app/api/deps.py`: `get_current_user` uses `HTTPBearer(auto_error=False)`
+  (not the default `auto_error=True`) specifically so a missing
+  `Authorization` header can be folded into the same 401 path as an
+  invalid/expired token, instead of `HTTPBearer`'s own default of 403
+  for "no credentials at all" — keeps "who are you" (401) cleanly
+  separate from "I know who you are, but no" (403, `require_admin`).
+  `get_current_user` also re-checks `ativo` on every request (not just
+  at login) — a deactivated user's still-valid token stops working
+  immediately, not just at next login. `require_admin` is wired and
+  tested (`tests/test_deps.py`, called directly with constructed `User`
+  objects — no admin-only route exists yet to exercise it through HTTP)
+  but **doesn't protect anything yet** — no admin-only route has been
+  built. `GET /api/leads` requires only `get_current_user` (any
+  authenticated role), not `require_admin`.
+- `scripts/create_user.py`: CLI (argparse: `--email`, `--senha`,
+  `--role`) for creating users — the only way to create one, since
+  there's no public registration endpoint by design (only Minotto and
+  4Hands use the system). Refuses to run if the email already exists.
+
+**Test infra gotcha worth knowing**: `tests/test_auth_routes.py` uses
+`fastapi.testclient.TestClient` against an in-memory SQLite DB, and
+initially hit a classic trap — `TestClient` runs the endpoint in a
+*different thread* (via `anyio.to_thread.run_sync`) than the one that
+built the DB fixture and ran `Base.metadata.create_all()`. Plain
+`sqlite:///:memory:` gives each thread its own separate, empty
+in-memory database (`SingletonThreadPool` is the sqlite3 dialect's
+default for `:memory:` URLs) — symptom was `no such table: users` in
+some tests but not others, depending on whether a given test's fixture
+happened to force a query in the main thread first. Fix: pass
+`poolclass=StaticPool` (from `sqlalchemy.pool`) alongside
+`connect_args={"check_same_thread": False}` — pins the engine to one
+shared connection across every thread. Apply the same fix to any future
+test that spins up a `TestClient` against SQLite; `test_process_lead_pipeline.py`
+never needed this because it calls task functions directly, never
+through `TestClient`'s threadpool.
+
+### Migrations (`backend/alembic/`)
+
+**`alembic/versions/` was empty before 2026-08-20** — there was no
+baseline migration for the `leads` table (`app/models/lead.py`), even
+though that model and its API route have existed since the project's
+first commit. The new `6102ef9fc509_cria_tabela_users.py` migration
+(for `User`, see above) is the *first* migration in this repo, written
+by hand — no Postgres was reachable with the `.env` credentials in this
+sandbox (auth failure even using the real configured `DATABASE_URL`),
+so `alembic revision --autogenerate` had nothing to diff against.
+Consequence: `alembic upgrade head` on a genuinely empty database
+creates `users` but **not** `leads` — whatever mechanism has been
+creating the `leads` table until now (manual `Base.metadata.create_all()`,
+most likely) still needs to keep doing so until someone writes that
+baseline migration too. Not this session's scope to fix, just flagged
+so it doesn't surprise anyone running migrations against a fresh DB.
+`alembic/env.py` now imports both `app.models.lead` and `app.models.user`
+so a future `--autogenerate` run (once a live DB is reachable) picks up
+both.
 
 ### Deployment note (EasyPanel)
 

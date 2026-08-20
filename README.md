@@ -185,9 +185,27 @@ interno do Docker.
   (`site_url`/`telefone`, que nenhuma etapa implementada produz ainda) é
   pulada com aviso no log, registrada em `etapas_puladas` no resultado —
   nunca quebra o pipeline inteiro.
+- ✅ **Autenticação enxuta** (`app/models/user.py`, `app/core/security.py`,
+  `app/api/routes/auth.py`, `app/api/deps.py`) — JWT (python-jose, HS256)
+  com hash de senha via passlib/bcrypt. `POST /api/auth/login` (e-mail +
+  senha → `access_token` com `user_id` e `role` no payload, 401 genérico
+  pra credencial errada/e-mail inexistente/usuário inativo, sem vazar
+  qual é o caso). `get_current_user` protege rota lendo o Bearer token;
+  `require_admin` (peso morto por enquanto — nenhuma rota administrativa
+  existe ainda) bloqueia quem não for `role == "admin"`. `GET /api/leads`
+  já protegida — exige autenticação, qualquer papel. Sem endpoint de
+  cadastro público de propósito: usuários são criados por admin via
+  `scripts/create_user.py` (só a Minotto e a 4Hands usam o sistema por
+  enquanto). **Bug real encontrado e corrigido**: `passlib==1.7.4` (já
+  no requirements.txt) quebra com bcrypt>=4.0 — um `ValueError` enganoso
+  ("password cannot be longer than 72 bytes") mesmo pra senha curta, não
+  um erro claro de incompatibilidade. Fixado `bcrypt==3.2.2` em
+  `requirements.txt`. Escopo deliberadamente enxuto — ver "O que falta"
+  pro que ficou de fora conscientemente (refresh token, recuperação de
+  senha, registro público).
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 199 testes automatizados passando (`pytest`)
+- ✅ 219 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -223,8 +241,23 @@ Em ordem de prioridade combinada com o cliente:
     (c) rodar `gerar_semente_leads` e iterar sobre os CNPJs chamando
     `process_lead_pipeline` pra cada um — hoje isso é manual, não existe
     uma task que faça esse loop sozinha
-11. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
-    exportação CSV/Excel pedida pela Sulamita)
+11. ~~Autenticação (JWT, admin/client)~~ ✅ feito, escopo enxuto de
+    propósito — deixado de fora nesta sessão, não esquecido:
+    - **Refresh token**: hoje só existe `access_token` de vida curta
+      (`ACCESS_TOKEN_EXPIRE_MINUTES`, 12h por padrão); expirado, o
+      usuário precisa logar de novo. Sem refresh token nem revogação.
+    - **Recuperação de senha**: não existe fluxo de "esqueci minha
+      senha" — reset é manual, alguém com acesso ao banco roda
+      `scripts/create_user.py` de novo ou atualiza `senha_hash` direto.
+    - **Registro público**: de propósito não existe endpoint de
+      cadastro — só a Minotto e a 4Hands usam o sistema, admin cria
+      usuário via `scripts/create_user.py`. Se isso mudar (mais
+      clientes, self-service), revisitar.
+    - **Rotas administrativas**: `require_admin` existe e está testado,
+      mas não protege nenhuma rota ainda — nenhuma rota admin-only
+      foi criada nesta sessão.
+    - Telas do frontend (Kanban, exportação CSV/Excel pedida pela
+      Sulamita) — segue pendente, não é relacionado a auth.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
@@ -260,6 +293,17 @@ ficam implementadas contra documentação oficial, não contra chamada
 real. Se isso for revisitado numa sessão futura com outro ambiente/
 ferramental, considerar rotacionar a `GOOGLE_API_KEY` antes.
 
+**Nota operacional (20/08/2026):** `alembic/versions/` estava **vazio**
+antes desta sessão — não existe migration baseline pra tabela `leads`
+(só a nova, `6102ef9fc509_cria_tabela_users.py`, escrita à mão porque
+não há Postgres acessível com as credenciais do `.env` neste sandbox
+pra rodar `--autogenerate`). Isso quer dizer que `alembic upgrade head`
+num banco totalmente vazio cria só `users`, **não** `leads` — a tabela
+`leads` precisa continuar existindo por outro meio (como já estava
+sendo feito antes) até alguém gerar a migration baseline dela também.
+Não é escopo desta sessão consertar, só ficou documentado pra não
+surpreender quem for rodar as migrations em produção.
+
 ---
 
 ## Rodando localmente
@@ -276,6 +320,13 @@ uvicorn app.main:app --reload
 
 Requer PostgreSQL e Redis rodando localmente (ou ajuste `DATABASE_URL`/
 `REDIS_URL` no `.env`).
+
+Aplicar as migrations e criar o primeiro usuário:
+```bash
+alembic upgrade head
+python scripts/create_user.py --email seu@email.com --senha "uma-senha-forte" --role admin
+```
+(sem endpoint de cadastro público de propósito — ver "O que falta")
 
 Rodar os testes:
 ```bash
