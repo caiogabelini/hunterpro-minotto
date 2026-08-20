@@ -92,12 +92,59 @@ Do not change a criterion's `weight` without client sign-off; if you do,
 every other weight must be rebalanced so the total stays 100 (see the
 `divida_ativa_pgfn` note in the file for a past example of this trade-off).
 
-Only the PGFN criterion currently has a confirmed points formula
-(`pgfn_points()`, confirmed with the client 2026-08-19): points scale
-linearly with active PGFN debt registrations, capped at 6. The other 8
-criteria still need their own point-conversion formulas before
-`compute_lead_score` (currently a `NotImplementedError` placeholder in
-`celery_app.py`) can sum them into `Lead.score_total`.
+Only the PGFN criterion has a **client-confirmed** points formula
+(`pgfn_points()`, confirmed 2026-08-19): points scale linearly with active
+PGFN debt registrations, capped at 6. The other 8 criteria's formulas live
+in a separate file, `app/scoring/compute_lead_score.py` — deliberately not
+in `rules.py`, so the confirmed-vs-session-decision boundary is visible
+just from which file you're reading. See that file's section below.
+
+### Lead score combination (`app/scoring/compute_lead_score.py`)
+
+`montar_score_lead(enriquecimentos)` is the pure function `compute_lead_score`
+(the Celery task) wraps — takes a dict keyed by enrichment task name (e.g.
+`"enrich_pgfn_divida_ativa"`, `"enrich_cnes"`, ...) matching each task's
+actual return shape in `celery_app.py`, and produces `score_total` (0-100)
++ a per-criterion breakdown (label, weight, points, `SignalLayer`) for the
+lead dossier to show "where the points came from." A missing/never-run
+key just means "no signal" for that criterion — never raises.
+
+Each of the 8 non-PGFN criteria has a small `_points()` function (same
+shape as `pgfn_points`: takes the extracted signal, optional `weight`
+override). Most are straightforwardly binary (`zona_franca_alc`,
+`whatsapp_ativo`, `email_validado`, `decisor_identificavel`,
+`unidade_cnpj_ativo` — full weight or zero). Two are **not** client-confirmed
+and are flagged as such in the module docstring and each function:
+
+- `rqe_especialista_points`: combines the AI's `rqe_mencionado` (site
+  content) with CNES's `encontrado_cnes` (health-facility registration,
+  no specialty field). Graduated by combination — both agree positive →
+  full weight; AI-only → 2/3 (a direct RQE mention is stronger evidence
+  than CNES presence, which never actually confirms specialty); CNES-only
+  → 1/3; neither → 0. `rules.py` and `cnes.py` both already flag this
+  combination as unconfirmed with the client — this session's choice is
+  a specific, testable resolution of that open question, not a new gap.
+- `presenca_digital_points`: no objective rule existed for "strong digital
+  presence" beyond the source list ("Site + Instagram/LinkedIn"). Decided:
+  full weight if both site-with-real-content (`scrape_sucesso` +
+  non-empty `site_content_resumo`) and Instagram are present, half weight
+  for exactly one, zero for neither. LinkedIn isn't in the signal yet
+  (`enrich_linkedin` doesn't exist) — when it does, re-derive the
+  graduation rather than bolting on a third "third."
+
+`rating_google_points` exists and is wired into the breakdown even though
+the criterion's weight is confirmed at 0 ("pra mim não importa") — the
+function's threshold logic (`rating >= 4.0` → full weight) only matters
+once `search_google_places` actually returns a rating, which it doesn't
+yet (`NotImplementedError`).
+
+**`compute_lead_score` doesn't fetch `enriquecimentos` itself** — there's
+still no orchestration/persistence layer that runs a lead's enrichment
+tasks in sequence and stores results somewhere `compute_lead_score` could
+read from a bare `lead_id`. Its signature is
+`compute_lead_score(lead_id, enriquecimentos)`, not
+`compute_lead_score(lead_id)` alone — whoever calls it must already have
+the per-task results in hand (Celery chain/group, manual assembly, etc.).
 
 ### PGFN debt data (`app/services/pgfn.py`)
 
@@ -303,13 +350,18 @@ against, unlike the free/no-auth CNES/IBGE/BrasilAPI sources) → Receita
 Federal → PGFN → Zona Franca → CNES → `enrich_site_firecrawl` (also
 covers what would've been a separate `enrich_instagram` step — the
 Instagram link comes out of the same scrape, no extra task needed) →
-LinkedIn → `validate_whatsapp` → `enrich_email` → `compute_lead_score`.
+LinkedIn → `validate_whatsapp` → `enrich_email` → `compute_lead_score`
+(now also implemented — see the "Lead score combination" section above;
+note its signature needs `enriquecimentos` passed in, since no
+orchestration layer exists yet to assemble that from just a `lead_id`).
 Implemented so far: `gerar_semente_leads`, `enrich_receita_federal`,
 `enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
 `refresh_pgfn_index`), `enrich_cnes`, `enrich_site_firecrawl`,
-`validate_whatsapp`, `enrich_email`. Everything else raises
-`NotImplementedError` — implement in the same task-per-pipeline-stage
-shape when picking up the next stage.
+`validate_whatsapp`, `enrich_email`, `compute_lead_score`. Only
+`search_google_places` raises `NotImplementedError` at this point —
+`enrich_linkedin` doesn't exist as a task at all yet (never even got a
+placeholder), unlike every other pipeline stage; it needs to be created
+from scratch, not just filled in, when picked up.
 
 ### `.env.example` is inaccessible in this sandbox
 

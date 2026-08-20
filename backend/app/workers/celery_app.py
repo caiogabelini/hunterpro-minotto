@@ -49,19 +49,26 @@ arquivo de Estabelecimentos da Receita Federal — ver ETAPA 0.
   10. enrich_email             → Hunter.io (encontra) + MX (dnspython) +
                                   ZeroBounce (valida entregabilidade) —
                                   ver app/services/email_enrichment.py
-  11. compute_lead_score       → aplica app/scoring/rules.py
+  11. compute_lead_score       → combina o resultado de todas as etapas
+                                  acima nos 9 critérios de
+                                  app/scoring/rules.py (via
+                                  app/scoring/compute_lead_score.py) —
+                                  score total 0-100 + breakdown por
+                                  critério
 
 Implementadas até agora: gerar_semente_leads, enrich_receita_federal,
 enrich_pgfn_divida_ativa (+ refresh_pgfn_index), enrich_zona_franca,
-enrich_cnes, enrich_site_firecrawl, validate_whatsapp, enrich_email. As
-demais continuam placeholder — implementação entra sessão a sessão.
-`search_google_places` tem a assinatura nova (recebe estabelecimentos já
-filtrados) mas a chamada real à Places API ainda não foi implementada
-(falta validar contra uma GOOGLE_API_KEY real). `enrich_site_firecrawl`
-também não foi testada contra as APIs reais do Firecrawl/Anthropic nesta
-sessão (sem FIRECRAWL_API_KEY disponível; o schema do Firecrawl foi
-confirmado contra o openapi.json oficial, não por chamada real — ver
-app/services/site_scraping.py).
+enrich_cnes, enrich_site_firecrawl, validate_whatsapp, enrich_email,
+compute_lead_score. As demais continuam placeholder — implementação
+entra sessão a sessão. `search_google_places` tem a assinatura nova
+(recebe estabelecimentos já filtrados) mas a chamada real à Places API
+ainda não foi implementada (falta validar contra uma GOOGLE_API_KEY
+real). `enrich_site_firecrawl` também não foi testada contra as APIs
+reais do Firecrawl/Anthropic (sem FIRECRAWL_API_KEY disponível; o schema
+do Firecrawl foi confirmado contra o openapi.json oficial, não por
+chamada real — ver app/services/site_scraping.py). `compute_lead_score`
+ainda não tem de onde buscar `enriquecimentos` sozinha (sem camada de
+orquestração/persistência) — ver a ressalva na própria task.
 """
 from celery import Celery
 
@@ -409,6 +416,43 @@ def enrich_email(dominio: str, decisor_nome: str | None) -> dict:
 
 
 @celery_app.task(name="compute_lead_score")
-def compute_lead_score(lead_id: str) -> dict:
-    """TODO: aplicar app/scoring/rules.py sobre os dados enriquecidos do lead."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+def compute_lead_score(lead_id: str, enriquecimentos: dict) -> dict:
+    """
+    Aplica os pesos e a lógica de app/scoring/rules.py (via
+    app/scoring/compute_lead_score.py) sobre o resultado já rodado de
+    cada task de enriquecimento pra esse lead, e devolve o score total
+    (0-100) + o breakdown por critério.
+
+    `enriquecimentos` é um dict chaveado pelo nome de cada task de
+    enriquecimento (ex.: "enrich_pgfn_divida_ativa", "enrich_cnes", ...)
+    — ver `montar_score_lead` em app/scoring/compute_lead_score.py pro
+    formato exato esperado de cada chave, e o próprio arquivo pras
+    ressalvas sobre quais critérios (`rqe_especialista`,
+    `presenca_digital`) têm regra de combinação decidida nesta sessão,
+    ainda não confirmada com o cliente.
+
+    NÃO busca esses resultados sozinha: ainda não existe uma camada de
+    orquestração/persistência que salve o resultado de cada task de
+    enriquecimento em algum lugar (linha do Lead, Redis, etc.) pra essa
+    task buscar só a partir do `lead_id` — fica pra uma sessão futura.
+    Por enquanto, quem chamar essa task precisa já ter os resultados em
+    mãos (ex.: via Celery chain/group, ou passando manualmente).
+    """
+    from app.scoring.compute_lead_score import montar_score_lead
+
+    resultado = montar_score_lead(enriquecimentos)
+
+    return {
+        "lead_id": lead_id,
+        "score_total": resultado.score_total,
+        "breakdown": [
+            {
+                "key": detalhe.key,
+                "label": detalhe.label,
+                "weight": detalhe.weight,
+                "layer": detalhe.layer.value,
+                "points": detalhe.points,
+            }
+            for detalhe in resultado.breakdown
+        ],
+    }

@@ -144,9 +144,19 @@ interno do Docker.
   padrão de client `httpx` injetável/testável do resto do projeto),
   pedindo resposta em JSON; resposta malformada (a IA varia formato
   mesmo instruída) nunca lança exceção, só devolve valores vazios.
+- ✅ **`compute_lead_score`** (`app/scoring/compute_lead_score.py`) —
+  junta o resultado de todas as etapas de enriquecimento nos 9 critérios
+  de `rules.py` e devolve o score total (0-100) + o breakdown por
+  critério (label, peso, pontos, camada de confiabilidade), pro futuro
+  dossiê do lead mostrar de onde vieram os pontos. Fórmula da PGFN
+  continua a única confirmada com o cliente; as outras 8 são decisões
+  desta sessão, documentadas caso a caso no arquivo — duas delas
+  (`rqe_especialista`, cruzamento IA×CNES; `presenca_digital`, regra de
+  site+Instagram) não tinham régua fechada nas reuniões e ficam
+  marcadas como pendentes de validação com o Douglas.
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 152 testes automatizados passando (`pytest`)
+- ✅ 176 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -169,9 +179,16 @@ Em ordem de prioridade combinada com o cliente:
    chamada real)
 7. ~~Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)~~
    ✅ feito
-8. `compute_lead_score` — juntar os pontos de todos os critérios (a
-   PGFN já calcula os dela; falta fazer o mesmo pros outros 8 e somar,
-   incluindo como o sinal do CNES reforça o critério `rqe_especialista`)
+8. ~~`compute_lead_score`~~ ✅ feito (`app/scoring/compute_lead_score.py`)
+   — falta: (a) validar com o Douglas as regras de `rqe_especialista`
+   (cruzamento IA×CNES) e `presenca_digital` (site+Instagram), que não
+   saíram fechadas das reuniões; (b) a camada de orquestração/persistência
+   que roda as tasks de enriquecimento em sequência pra um lead e
+   alimenta `compute_lead_score` com os resultados — hoje a task espera
+   receber `enriquecimentos` já prontos, não sabe buscá-los sozinha;
+   (c) implementar a task placeholder `enrich_linkedin`, que ainda não
+   existe — quando existir, revisar a graduação de `presenca_digital_points`
+   pra virar 3 sinais em vez de 2
 9. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
    exportação CSV/Excel pedida pela Sulamita)
 
