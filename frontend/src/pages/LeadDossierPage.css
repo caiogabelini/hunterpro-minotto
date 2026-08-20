@@ -346,8 +346,54 @@
   font-size: 14px;
   line-height: 1.6;
   color: #fff;
-  margin: 0;
+  margin: 0 0 14px;
   white-space: pre-wrap;
+}
+
+.dossier-abordagem-btn {
+  background: var(--gold);
+  color: var(--navy-dark);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-body);
+  margin-top: 10px;
+}
+
+.dossier-abordagem-btn:hover:not(:disabled) {
+  background: var(--gold-dim);
+}
+
+.dossier-abordagem-btn-secundario {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--gray);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-body);
+}
+
+.dossier-abordagem-btn-secundario:hover:not(:disabled) {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.dossier-abordagem-btn:disabled,
+.dossier-abordagem-btn-secundario:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.dossier-abordagem-erro {
+  color: #e8837f;
+  font-size: 13px;
+  margin: 10px 0 0;
 }
 
 .dossier-breakdown-list {

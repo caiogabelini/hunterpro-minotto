@@ -50,6 +50,24 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
     `MAX_CARACTERES_TEXTO_SITE` caracteres antes de mandar pro modelo,
     pra não estourar o prompt com uma página gigante. Sites reais raramente
     precisam de mais que isso pra esse tipo de classificação.
+
+`gerar_mensagem_abordagem` (adicionada 20/08/2026) gera a mensagem
+exibida na seção "Abordagem sugerida" do dossiê do lead
+(`Lead.mensagem_abordagem`, ver `PATCH /api/leads/{id}/gerar-abordagem`
+em app/api/routes/leads.py) — mesmo modelo/endpoint/client injetável de
+`inferir_dados_site`, mas **defensiva de um jeito que `inferir_dados_site`
+não é**: essa função nunca lança, nem em erro HTTP/rede (diferente de
+`inferir_dados_site`, que deixa `raise_for_status()` propagar — ver
+`test_erro_http_propaga_excecao` em test_ai_enrichment.py). Aqui, tanto
+falha de rede/HTTP quanto resposta vazia/sem bloco de texto viram `""`;
+é a rota que decide o que fazer com uma string vazia (não persiste,
+devolve 502 pro frontend mostrar erro amigável — ver "Abordagem
+sugerida" no CLAUDE.md). Essa chamada específica, diferente das outras
+integrações deste módulo, **pode ser validada de verdade pelo usuário
+final através da própria tela do dossiê** (o botão "Gerar mensagem com
+IA"), já que ele acessa o sistema com a `ANTHROPIC_API_KEY` real
+configurada no ambiente de produção — não fica pendente de validação
+como `inferir_dados_site`.
 """
 from __future__ import annotations
 
@@ -92,6 +110,125 @@ Conteúdo do site:
 """
 
 
+def _get_client(client: httpx.Client | None) -> tuple[httpx.Client, bool]:
+    if client is not None:
+        return client, False
+    return httpx.Client(timeout=DEFAULT_TIMEOUT), True
+
+
+PROMPT_ABORDAGEM_TEMPLATE = """Você é um redator de prospecção B2B pra uma empresa de contabilidade \
+(Minotto Contabilidade) que atende clínicas e consultórios médicos no Brasil.
+
+Escreva uma mensagem curta de e-mail de PRIMEIRO CONTATO (2 a 3 frases), \
+tom profissional e consultivo -- nunca agressivo, acusatório ou alarmista. \
+A mensagem deve soar genuinamente personalizada (mencione pelo menos um \
+dado real da lista abaixo) e terminar convidando a uma conversa breve.
+
+Regras de tom, siga à risca:
+- Se houver dívida ativa na PGFN listada abaixo, mencione de forma \
+consultiva, como uma oportunidade de ajuda -- NUNCA como cobrança ou \
+acusação. Exemplo do tom certo: "identificamos uma oportunidade de \
+revisão financeira que pode beneficiar sua empresa". Exemplo do tom \
+ERRADO, nunca use: "sua empresa está endividada" ou "vocês devem para a \
+União".
+- Pode citar RQE confirmado ou um bom rating no Google como reconhecimento \
+positivo, se estiverem na lista.
+- NÃO invente nenhum dado que não esteja explicitamente na lista abaixo.
+
+Dados do lead:
+{dados_lead}
+
+Responda APENAS com o texto da mensagem em si -- sem saudação tipo \
+"Prezado(a)", sem assinatura, sem explicações antes ou depois, sem aspas \
+ao redor do texto.
+"""
+
+
+def _montar_contexto_lead(lead: dict) -> str:
+    """
+    Monta a lista de sinais reais do lead que entra no prompt --
+    só inclui uma linha quando o dado existe, pra não dar munição pra IA
+    "preencher lacuna" inventando algo. `lead` é um dict simples (não o
+    ORM `Lead` direto) montado pela rota, mesmo padrão de
+    `montar_score_lead` em app/scoring/compute_lead_score.py aceitar um
+    dict já extraído em vez de um objeto de banco.
+    """
+    linhas = [f"- Razão social: {lead.get('razao_social') or 'não informado'}"]
+
+    if lead.get("decisor_nome"):
+        linhas.append(f"- Nome do decisor/responsável: {lead['decisor_nome']}")
+
+    if lead.get("municipio"):
+        uf = lead.get("uf") or ""
+        linhas.append(f"- Localização: {lead['municipio']}/{uf}")
+
+    qtd_pgfn = lead.get("divida_ativa_qtd_inscricoes")
+    if qtd_pgfn:
+        linhas.append(
+            f"- Possui {qtd_pgfn} inscrição(ões) ativa(s) na dívida ativa da União (PGFN) "
+            "-- mencionar com tom consultivo, como oportunidade de revisão financeira, "
+            "nunca como cobrança ou acusação"
+        )
+
+    if lead.get("rqe_confirmado"):
+        linhas.append("- RQE (Registro de Qualificação de Especialista) confirmado")
+
+    if lead.get("google_rating"):
+        avaliacoes = lead.get("google_avaliacoes") or 0
+        linhas.append(f"- Rating no Google: {lead['google_rating']} ({avaliacoes} avaliações)")
+
+    if lead.get("situacao_cadastral"):
+        linhas.append(f"- Situação cadastral na Receita Federal: {lead['situacao_cadastral']}")
+
+    return "\n".join(linhas)
+
+
+def gerar_mensagem_abordagem(lead: dict, client: httpx.Client | None = None) -> str:
+    """
+    Gera uma mensagem curta (2-3 frases) de e-mail de primeiro contato,
+    personalizada com dados reais do lead — ver `PROMPT_ABORDAGEM_TEMPLATE`
+    pra regra de tom explícita sobre dívida ativa PGFN (consultivo, nunca
+    acusatório).
+
+    Nunca lança — diferente de `inferir_dados_site` (que deixa erro HTTP
+    propagar via `raise_for_status()`), esta função captura qualquer
+    `httpx.HTTPError` (erro de rede OU status HTTP de erro) e resposta
+    vazia/sem bloco de texto, devolvendo `""` em qualquer um desses
+    casos. É a rota (`POST /api/leads/{lead_id}/gerar-abordagem` em
+    app/api/routes/leads.py) que decide o que fazer com uma string vazia
+    — não persiste, devolve 502 pro frontend mostrar um erro amigável em
+    vez de silenciosamente salvar `mensagem_abordagem` vazia.
+    """
+    client, owns_client = _get_client(client)
+
+    try:
+        prompt = PROMPT_ABORDAGEM_TEMPLATE.format(dados_lead=_montar_contexto_lead(lead))
+
+        resp = client.post(
+            ANTHROPIC_MESSAGES_URL,
+            headers={
+                "x-api-key": settings.ANTHROPIC_API_KEY,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+            },
+            json={
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": MAX_TOKENS_RESPOSTA,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        resp.raise_for_status()
+
+        blocos = resp.json().get("content") or []
+        texto_resposta = next((b.get("text", "") for b in blocos if b.get("type") == "text"), "")
+        return texto_resposta.strip()
+    except httpx.HTTPError:
+        return ""
+    finally:
+        if owns_client:
+            client.close()
+
+
 @dataclass
 class InferenciaSiteResult:
     rqe_mencionado: bool
@@ -126,12 +263,6 @@ def _extrair_json(texto: str) -> dict | None:
             return resultado
 
     return None
-
-
-def _get_client(client: httpx.Client | None) -> tuple[httpx.Client, bool]:
-    if client is not None:
-        return client, False
-    return httpx.Client(timeout=DEFAULT_TIMEOUT), True
 
 
 def inferir_dados_site(texto_site: str, client: httpx.Client | None = None) -> InferenciaSiteResult:

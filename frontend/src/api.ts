@@ -114,6 +114,16 @@ export async function fetchLead(token: string, leadId: string): Promise<Lead> {
   return res.json();
 }
 
+export async function gerarAbordagem(token: string, leadId: string): Promise<Lead> {
+  const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-abordagem`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
 export async function updateLeadStatus(
   token: string,
   leadId: string,

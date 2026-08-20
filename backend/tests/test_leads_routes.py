@@ -210,6 +210,65 @@ def test_get_lead_sem_token_retorna_401(client, db_session):
     assert resp.status_code == 401
 
 
+# --- POST /api/leads/{lead_id}/gerar-abordagem ---
+#
+# `gerar_mensagem_abordagem` (a chamada real à Anthropic) é mockada aqui
+# via monkeypatch no módulo da rota (app.api.routes.leads), mesmo padrão
+# de app/workers/celery_app.py mockar as etapas do pipeline por nome --
+# o contrato da própria função (prompt/parsing/tratamento de erro) já é
+# coberto em tests/test_ai_enrichment.py.
+
+
+def test_gerar_abordagem_com_sucesso(client, db_session, token, monkeypatch):
+    lead = _criar_lead(db_session, razao_social="Clínica Exemplo")
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_mensagem_abordagem",
+        lambda dados_lead: "Olá! Vimos que a Clínica Exemplo pode se beneficiar de uma conversa rápida.",
+    )
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["mensagem_abordagem"] == "Olá! Vimos que a Clínica Exemplo pode se beneficiar de uma conversa rápida."
+
+
+def test_gerar_abordagem_mensagem_e_persistida_no_banco(client, db_session, token, monkeypatch):
+    lead = _criar_lead(db_session)
+    monkeypatch.setattr("app.api.routes.leads.gerar_mensagem_abordagem", lambda dados_lead: "Mensagem gerada pela IA.")
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+
+    db_session.refresh(lead)
+    assert lead.mensagem_abordagem == "Mensagem gerada pela IA."
+
+
+def test_gerar_abordagem_lead_inexistente_retorna_404(client, token):
+    resp = client.post("/api/leads/id-que-nao-existe/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+
+
+def test_gerar_abordagem_resposta_vazia_da_ia_retorna_502_sem_persistir(client, db_session, token, monkeypatch):
+    """gerar_mensagem_abordagem nunca lança -- devolve "" em erro/resposta
+    vazia (ver test_ai_enrichment.py). A rota trata isso como 502, sem
+    sobrescrever mensagem_abordagem com uma string vazia."""
+    lead = _criar_lead(db_session, mensagem_abordagem="Mensagem antiga, não deve ser apagada")
+    monkeypatch.setattr("app.api.routes.leads.gerar_mensagem_abordagem", lambda dados_lead: "")
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 502
+    db_session.refresh(lead)
+    assert lead.mensagem_abordagem == "Mensagem antiga, não deve ser apagada"
+
+
+def test_gerar_abordagem_sem_token_retorna_401(client, db_session):
+    lead = _criar_lead(db_session)
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem")
+    assert resp.status_code == 401
+
+
 # --- PATCH /api/leads/{lead_id}/status ---
 
 

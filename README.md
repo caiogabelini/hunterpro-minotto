@@ -307,9 +307,9 @@ interno do Docker.
   investigação.
 - ✅ **Dossiê enriquecido — campos que já existiam no sistema mas não
   apareciam na tela** — três colunas novas no `Lead`
-  (`app/models/lead.py`): `mensagem_abordagem` (Text, só o espaço
-  reservado — a geração via IA fica pra uma sessão futura, não
-  implementada agora), `divida_ativa_valor_total` (Float) e
+  (`app/models/lead.py`): `mensagem_abordagem` (Text, na época só o
+  espaço reservado — a geração via IA ficou pra uma sessão futura, ver
+  bullet abaixo pra quando isso foi implementado), `divida_ativa_valor_total` (Float) e
   `divida_ativa_ajuizado` (Boolean) — `app/services/pgfn.py::PgfnDebtSummary`
   já calculava os dois últimos (`valor_total`, `algum_ajuizado`) desde a
   sessão do parser da PGFN, mas o `Lead` nunca persistia, só a contagem
@@ -330,8 +330,9 @@ interno do Docker.
   dourado); um badge do status atual do Kanban no cabeçalho (com o
   `motivo_perda` junto quando for "Perdido"); nova seção "Abordagem
   sugerida" mostrando `mensagem_abordagem` ou "Mensagem ainda não
-  gerada" (sem botão de gerar — só o espaço, como pedido); WhatsApp virou
-  link `wa.me/{numero}` (formatação do número em `src/format.ts`,
+  gerada" (nesta sessão, só o espaço de exibição — o botão "Gerar
+  mensagem com IA" veio na sessão seguinte, ver bullet abaixo); WhatsApp
+  virou link `wa.me/{numero}` (formatação do número em `src/format.ts`,
   **espelha deliberadamente** a mesma heurística de
   `app/services/whatsapp.py::formatar_numero_whatsapp` — prefixa o
   código do país pelo TAMANHO do número, não pelo prefixo, pelo mesmo
@@ -344,7 +345,54 @@ interno do Docker.
   risco de um projeto anterior — reimplementar uma heurística sem
   reimplementar os testes que a validam é como bugs sutis passam
   despercebidos). `npm run build`/`npm run lint`/`npm run test` limpos.
-- ✅ 233 testes automatizados passando (`pytest`) + 12 testes no
+- ✅ **Geração da mensagem de abordagem via IA** — completa o que tinha
+  ficado como só o espaço reservado na sessão anterior.
+  `app/services/ai_enrichment.py::gerar_mensagem_abordagem` (mesmo
+  modelo `claude-haiku-4-5-20251001`, mesmo client `httpx` injetável de
+  `inferir_dados_site`) monta um prompt com os sinais reais do lead
+  presentes (razão social, decisor, dívida ativa PGFN, RQE, rating do
+  Google, situação cadastral — nunca inventa um dado ausente) e pede uma
+  mensagem curta (2-3 frases) de e-mail de primeiro contato, com uma
+  regra de tom explícita e não-negociável no prompt: dívida ativa PGFN
+  tem que ser mencionada de forma consultiva ("oportunidade de revisão
+  financeira"), nunca acusatória ("sua empresa está endividada").
+  **Diferente de `inferir_dados_site`, essa função nunca lança** — erro
+  de rede/HTTP e resposta vazia/sem bloco de texto viram `""` em vez de
+  propagar exceção; é o endpoint novo, `POST
+  /api/leads/{lead_id}/gerar-abordagem` (protegido, mesma proteção do
+  resto das rotas de lead), que decide o que fazer com uma string vazia
+  — não persiste, devolve 502 com uma mensagem clara pro frontend
+  mostrar. Em caso de sucesso, persiste em `Lead.mensagem_abordagem` e
+  devolve o lead atualizado. 10 testes novos (5 em
+  `test_ai_enrichment.py` cobrindo o prompt/tratamento de erro da
+  função, 5 em `test_leads_routes.py` cobrindo o endpoint — geração bem-
+  sucedida, persistência confirmada no banco, lead inexistente 404,
+  resposta vazia da IA vira 502 sem sobrescrever uma mensagem anterior,
+  sem token retorna 401).
+
+  No dossiê (`LeadDossierPage.tsx`, só a seção "Abordagem sugerida"
+  mexida): quando `mensagem_abordagem` é `null`, o estado vazio agora
+  vem acompanhado de um botão "Gerar mensagem com IA"; ao clicar, mostra
+  "Gerando..." (botão desabilitado enquanto isso) e substitui o estado
+  vazio pela mensagem ao terminar; quando já existe mensagem, um botão
+  menor "Gerar novamente" aparece embaixo dela pra regenerar. Erro da
+  chamada (rede, 502 da IA) mostra uma frase amigável abaixo do botão,
+  sem quebrar o resto da tela — nunca deixa a seção num estado
+  quebrado/sem saída.
+
+  **Nota sobre validação, diferente de todo o resto deste módulo**: as
+  outras integrações via Anthropic/Firecrawl/Google Places neste projeto
+  ficaram marcadas como "não testadas contra a API real" porque o
+  *sandbox de desenvolvimento* não permite chamada de rede autenticada
+  (ver "Network access from Bash is blocked" no CLAUDE.md) — mas essa
+  ressalva é sobre o ambiente onde o código foi *escrito*, não sobre o
+  ambiente onde ele *roda*. Uma vez em produção, `POST
+  /api/leads/{lead_id}/gerar-abordagem` é chamada pelo navegador do
+  usuário final contra o backend real, que tem a `ANTHROPIC_API_KEY` de
+  produção configurada — o botão "Gerar mensagem com IA" na tela do
+  dossiê **é a validação real**, não fica pendente pra uma sessão
+  futura com outro ambiente/ferramental como as demais.
+- ✅ 243 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)

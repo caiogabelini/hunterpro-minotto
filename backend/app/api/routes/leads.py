@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.models.lead import KanbanStatus, Lead
 from app.models.user import User
 from app.schemas.lead import LeadRead, LeadStatusUpdate
+from app.services.ai_enrichment import gerar_mensagem_abordagem
 
 router = APIRouter()
 
@@ -93,6 +94,53 @@ def update_lead_status(
 
     lead.kanban_status = dados.kanban_status
     lead.motivo_perda = dados.motivo_perda if dados.kanban_status == KanbanStatus.PERDIDO.value else None
+    db.commit()
+    db.refresh(lead)
+    return lead
+
+
+@router.post("/{lead_id}/gerar-abordagem", response_model=LeadRead)
+def gerar_abordagem(
+    lead_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera (ou regenera) a mensagem de abordagem sugerida via IA
+    (`app/services/ai_enrichment.py::gerar_mensagem_abordagem`) e
+    persiste em `Lead.mensagem_abordagem`. Requer autenticação (qualquer
+    papel), mesma proteção do resto das rotas de lead.
+
+    502 se a IA não conseguir gerar nada — `gerar_mensagem_abordagem`
+    nunca lança, devolve `""` tanto em erro de rede/HTTP quanto em
+    resposta vazia/sem bloco de texto; é aqui que isso vira um erro
+    explícito pro frontend tratar (mostrar mensagem amigável), em vez de
+    silenciosamente persistir uma mensagem vazia.
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    dados_lead = {
+        "razao_social": lead.razao_social,
+        "decisor_nome": lead.decisor_nome,
+        "municipio": lead.municipio,
+        "uf": lead.uf,
+        "divida_ativa_qtd_inscricoes": lead.divida_ativa_qtd_inscricoes,
+        "rqe_confirmado": lead.rqe_confirmado,
+        "google_rating": lead.google_rating,
+        "google_avaliacoes": lead.google_avaliacoes,
+        "situacao_cadastral": lead.situacao_cadastral,
+    }
+    mensagem = gerar_mensagem_abordagem(dados_lead)
+
+    if not mensagem:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Não foi possível gerar a mensagem agora. Tente novamente.",
+        )
+
+    lead.mensagem_abordagem = mensagem
     db.commit()
     db.refresh(lead)
     return lead

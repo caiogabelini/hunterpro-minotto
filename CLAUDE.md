@@ -845,12 +845,10 @@ never reached `LeadDossierPage.tsx` (or, in `mensagem_abordagem`'s
 case, never existed as a field at all).
 
 **Model (`app/models/lead.py`)** — three new columns:
-- `mensagem_abordagem` (`Text`, nullable) — **display-only placeholder**
-  this session. No generation logic, no endpoint to populate it — that's
-  explicitly future work. Don't add a "gerar abordagem" button or AI
-  call against this field without a follow-up request; the frontend
-  (`SecaoAbordagem`) already renders a clean empty state
-  ("Mensagem ainda não gerada") for when it's `None`.
+- `mensagem_abordagem` (`Text`, nullable) — was a **display-only
+  placeholder** in this session (no generation logic, no endpoint). Both
+  were added in a follow-up session the same day — see "Suggested
+  approach message generation" below for the full implementation.
 - `divida_ativa_valor_total` (`Float`, nullable) and
   `divida_ativa_ajuizado` (`Boolean`, nullable) — closing a real gap:
   `app/services/pgfn.py::PgfnDebtSummary` has computed both
@@ -949,6 +947,100 @@ routes situation already noted in the "Kanban" section above.
   far — not tested in an actual browser; validated via `tsc -b`,
   `npm run build`, `npm run lint`, and `npm run test` (12 vitest cases:
   4 pre-existing in `leadScore.test.ts`, 8 new in `format.test.ts`).
+
+### Suggested approach message generation (`gerar_mensagem_abordagem`, follow-up session, 2026-08-20)
+
+Completes what the previous session deliberately left as a display-only
+placeholder (`mensagem_abordagem` — see "Lead dossier enrichment"
+above).
+
+**`app/services/ai_enrichment.py::gerar_mensagem_abordagem(lead: dict,
+client=None) -> str`** — same model (`claude-haiku-4-5-20251001`), same
+raw-HTTP-via-injectable-`httpx.Client` pattern as `inferir_dados_site`
+in this same module, but **deliberately more defensive**:
+`inferir_dados_site` lets `resp.raise_for_status()` propagate on an
+HTTP error (`test_erro_http_propaga_excecao` asserts this) — this
+function catches `httpx.HTTPError` (covers both connection failures and
+HTTP error statuses) and returns `""`, same as its handling of an empty/
+missing text block in the response. The reason for the divergence:
+`inferir_dados_site` runs inside `process_lead_pipeline`, where
+`_rodar_etapa()` already catches any exception per stage — letting it
+raise there is fine. `gerar_mensagem_abordagem` runs synchronously
+inside an HTTP request handler with no such wrapper, and the caller
+(the route) needs a single, uniform "did this work or not" signal
+(empty string) to decide whether to persist or return an error.
+Housekeeping while adding this: `_get_client` was moved above
+`PROMPT_ABORDAGEM_TEMPLATE`/`gerar_mensagem_abordagem` in the file (it
+used to sit right before `inferir_dados_site`, further down) so both
+functions can call it without relying on Python resolving a
+still-forward reference at call time — purely cosmetic, no behavior
+change.
+
+Prompt (`PROMPT_ABORDAGEM_TEMPLATE`) asks for a short (2-3 sentence)
+first-contact email, explicit non-negotiable tone rule for PGFN debt
+("oportunidade de revisão financeira", never "sua empresa está
+endividada" — the exact phrasing the user specified), and an explicit
+"don't invent data not in the list" instruction.
+`_montar_contexto_lead(lead: dict)` only adds a bullet line for signals
+that are actually present (razão social always included, everything
+else conditional) — same "don't give the model room to hallucinate a
+gap" principle as `inferir_dados_site`'s prompt. Takes a plain `dict`
+(not the ORM `Lead`), same pattern as `montar_score_lead` in
+`app/scoring/compute_lead_score.py` accepting pre-extracted data instead
+of a database object.
+
+**`POST /api/leads/{lead_id}/gerar-abordagem`** (`app/api/routes/leads.py`,
+`get_current_user`, same protection as the rest of the leads routes):
+404 if the lead doesn't exist; builds the `dict` from the `Lead` row's
+relevant fields, calls `gerar_mensagem_abordagem`; if it returns `""`,
+**502** ("Não foi possível gerar a mensagem agora. Tente novamente.")
+**without touching `Lead.mensagem_abordagem`** — a failed regeneration
+never wipes out a previously-generated message. On success, persists
+and returns the full updated lead (`response_model=LeadRead`, same
+pattern as `PATCH /status`).
+
+**Tests**: `tests/test_ai_enrichment.py` gained 5 cases (success with
+prompt-content assertions including the literal `"tom consultivo"`
+instruction, empty response, HTTP error, network error — the last two
+both assert `== ""`, not an exception). `tests/test_leads_routes.py`
+gained 5 route-level cases, monkeypatching
+`app.api.routes.leads.gerar_mensagem_abordagem` (not the service
+module — same "monkeypatch at the call-site" convention documented in
+"Pipeline orchestration" above) — success, persistence confirmed via
+`db_session.refresh(lead)`, 404, empty-AI-response → 502 without
+overwriting an existing message, and no-token → 401.
+
+**Frontend (`LeadDossierPage.tsx`, only `SecaoAbordagem` touched)**:
+`gerarAbordagem(token, leadId)` added to `api.ts` (POST, same
+401/error-parsing pattern as the rest of that file). `SecaoAbordagem`
+now owns its own `gerando`/`erro` state and calls `useAuth()` directly
+(same self-contained pattern as `CampoEmail`'s copy-button state) —
+`onGerada: (lead: Lead) => void` prop lets it hand the *entire* updated
+`Lead` back up to `LeadDossierPage`'s `setLead`, keeping `lead` as the
+single source of truth for the page rather than `SecaoAbordagem`
+tracking its own divergent copy of the message. Empty state gets a
+"Gerar mensagem com IA" button; populated state gets a smaller "Gerar
+novamente" button below the text; both show "Gerando..." and disable
+while in flight; a request error (network failure, or the 502 from an
+empty AI response) renders a plain-language message under the button
+and never removes the previously-shown text/button — the section always
+has a next action, never a dead end.
+
+**Validation note — this one's different from every other AI/HTTP
+integration in this project**: `inferir_dados_site`, Google Places, and
+Firecrawl are all marked "not tested against the real API" because
+*this development sandbox* blocks authenticated outbound network calls
+(see "Network access from Bash is blocked in this sandbox" above) —
+that limitation is about where the code was *written*, not where it
+*runs*. `POST /api/leads/{lead_id}/gerar-abordagem` is called by the
+end user's own browser against the real deployed backend, which holds
+the production `ANTHROPIC_API_KEY` — clicking "Gerar mensagem com IA"
+in the actual dossier screen **is** the live validation, performed by
+someone who already has legitimate access to that key. Don't add a
+"pending validation" caveat for this endpoint in README/CLAUDE.md the
+way the other integrations have one; if the user reports the button
+doesn't work, that's a real bug report against a live call, not a
+"still needs testing" gap.
 
 ### Migrations (`backend/alembic/`)
 

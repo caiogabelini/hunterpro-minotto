@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from app.services.ai_enrichment import ANTHROPIC_MODEL, inferir_dados_site
+from app.services.ai_enrichment import ANTHROPIC_MODEL, gerar_mensagem_abordagem, inferir_dados_site
 
 TEXTO_COM_RQE = "Somos especialistas em cardiologia. RQE 98765. Atendemos com hora marcada."
 TEXTO_SEM_RQE = "Clínica geral, atendimento de segunda a sexta."
@@ -170,3 +170,88 @@ def test_erro_http_propaga_excecao():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(httpx.HTTPStatusError):
         inferir_dados_site(TEXTO_SEM_RQE, client=client)
+
+
+# --- gerar_mensagem_abordagem ---
+
+
+LEAD_BASE = {"razao_social": "Clínica Exemplo Ltda"}
+
+
+def test_gera_mensagem_com_sucesso():
+    texto_gerado = "Olá! Vimos que a Clínica Exemplo tem uma presença digital forte. Podemos conversar 15 minutos essa semana?"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/messages"
+        corpo = json.loads(request.content)
+        assert corpo["model"] == ANTHROPIC_MODEL
+        assert "Clínica Exemplo Ltda" in corpo["messages"][0]["content"]
+        return httpx.Response(200, json=_resposta_anthropic(texto_gerado))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+
+    assert resultado == texto_gerado
+
+
+def test_gera_mensagem_inclui_sinais_relevantes_no_prompt():
+    """Sinais presentes no lead (dívida PGFN, RQE, rating) entram no
+    prompt; a regra de tom consultivo pra PGFN também vai junto."""
+    lead = {
+        "razao_social": "Clínica Exemplo Ltda",
+        "decisor_nome": "Dr. Fulano",
+        "divida_ativa_qtd_inscricoes": 3,
+        "rqe_confirmado": True,
+        "google_rating": 4.8,
+        "google_avaliacoes": 200,
+    }
+
+    prompt_recebido = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        corpo = json.loads(request.content)
+        prompt_recebido["texto"] = corpo["messages"][0]["content"]
+        return httpx.Response(200, json=_resposta_anthropic("Mensagem gerada."))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    gerar_mensagem_abordagem(lead, client=client)
+
+    prompt = prompt_recebido["texto"]
+    assert "Dr. Fulano" in prompt
+    assert "3 inscrição" in prompt
+    assert "RQE" in prompt
+    assert "4.8" in prompt
+    assert "tom consultivo" in prompt  # instrução de tom junto ao dado de dívida
+
+
+def test_gera_mensagem_resposta_vazia_nao_quebra():
+    """Content vazio (sem bloco de texto) -- devolve "" em vez de lançar."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"content": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+
+    assert resultado == ""
+
+
+def test_gera_mensagem_erro_http_nao_quebra():
+    """Diferente de inferir_dados_site, erro HTTP aqui NÃO propaga --
+    devolve "" pra rota decidir o que fazer."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+
+    assert resultado == ""
+
+
+def test_gera_mensagem_erro_de_rede_nao_quebra():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("conexão recusada", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+
+    assert resultado == ""

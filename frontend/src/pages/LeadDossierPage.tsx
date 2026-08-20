@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { fetchLead, UnauthorizedError, type Lead } from "../api";
+import { fetchLead, gerarAbordagem, UnauthorizedError, type Lead } from "../api";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
@@ -108,7 +108,7 @@ export function LeadDossierPage() {
             <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
           </div>
 
-          <SecaoAbordagem mensagem={lead.mensagem_abordagem} />
+          <SecaoAbordagem leadId={lead.id} mensagem={lead.mensagem_abordagem} onGerada={setLead} />
 
           <SecaoBreakdown scoreDetalhes={lead.score_detalhes} />
         </>
@@ -186,15 +186,56 @@ function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: 
   );
 }
 
-function SecaoAbordagem({ mensagem }: { mensagem?: string | null }) {
+function SecaoAbordagem({
+  leadId,
+  mensagem,
+  onGerada,
+}: {
+  leadId: string;
+  mensagem?: string | null;
+  onGerada: (lead: Lead) => void;
+}) {
+  const { token, logout } = useAuth();
+  const [gerando, setGerando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function gerar() {
+    if (!token) return;
+    setGerando(true);
+    setErro(null);
+    try {
+      const leadAtualizado = await gerarAbordagem(token, leadId);
+      onGerada(leadAtualizado);
+    } catch (e) {
+      if (e instanceof UnauthorizedError) {
+        logout();
+        return;
+      }
+      setErro("Não foi possível gerar a mensagem agora. Tente novamente.");
+    } finally {
+      setGerando(false);
+    }
+  }
+
   return (
     <section className="dossier-card">
       <h2>Abordagem sugerida</h2>
       {mensagem ? (
-        <p className="dossier-abordagem-texto">{mensagem}</p>
+        <>
+          <p className="dossier-abordagem-texto">{mensagem}</p>
+          <button type="button" className="dossier-abordagem-btn-secundario" onClick={gerar} disabled={gerando}>
+            {gerando ? "Gerando..." : "Gerar novamente"}
+          </button>
+        </>
       ) : (
-        <p className="dossier-muted">Mensagem ainda não gerada.</p>
+        <>
+          <p className="dossier-muted">Mensagem ainda não gerada.</p>
+          <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando}>
+            {gerando ? "Gerando..." : "Gerar mensagem com IA"}
+          </button>
+        </>
       )}
+      {erro && <p className="dossier-abordagem-erro">{erro}</p>}
     </section>
   );
 }
