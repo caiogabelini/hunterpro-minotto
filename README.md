@@ -293,16 +293,23 @@ ficam implementadas contra documentação oficial, não contra chamada
 real. Se isso for revisitado numa sessão futura com outro ambiente/
 ferramental, considerar rotacionar a `GOOGLE_API_KEY` antes.
 
-**Nota operacional (20/08/2026):** `alembic/versions/` estava **vazio**
-antes desta sessão — não existe migration baseline pra tabela `leads`
-(só a nova, `6102ef9fc509_cria_tabela_users.py`, escrita à mão porque
-não há Postgres acessível com as credenciais do `.env` neste sandbox
-pra rodar `--autogenerate`). Isso quer dizer que `alembic upgrade head`
-num banco totalmente vazio cria só `users`, **não** `leads` — a tabela
-`leads` precisa continuar existindo por outro meio (como já estava
-sendo feito antes) até alguém gerar a migration baseline dela também.
-Não é escopo desta sessão consertar, só ficou documentado pra não
-surpreender quem for rodar as migrations em produção.
+**Nota operacional (20/08/2026, atualizada no mesmo dia):**
+`alembic/versions/` estava **vazio** antes desta sessão — não existia
+migration baseline pra tabela `leads`. **Corrigido**: agora tem duas
+migrations encadeadas, `e119018824e8_cria_tabela_leads.py` (baseline de
+`leads`, sem `down_revision` — é a raiz) → `6102ef9fc509_cria_tabela_users.py`
+(depois dela). As duas foram escritas à mão (não por
+`--autogenerate` — o Postgres do `.env` deste projeto continua
+inacessível neste sandbox, autenticação falha mesmo com a URL real) e
+**validadas contra um Postgres 16 de verdade**: um cluster temporário e
+descartável foi provisionado só pra esse teste (`initdb`/`pg_ctl`, porta
+separada, apagado ao final — sem tocar no Postgres já rodando no
+ambiente, que é de outro serviço). `alembic upgrade head` aplicou as
+duas sem erro, `alembic downgrade base` reverteu sem erro, e o schema
+final bateu exato com os modelos (`\d leads`, `\d users`) — tipos,
+nullability, os dois índices únicos. O que **não** foi validado é
+contra a `DATABASE_URL` real deste projeto especificamente — só contra
+Postgres 16 em geral, já que essa credencial segue inacessível.
 
 ---
 

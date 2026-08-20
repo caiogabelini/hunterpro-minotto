@@ -612,20 +612,39 @@ through `TestClient`'s threadpool.
 **`alembic/versions/` was empty before 2026-08-20** — there was no
 baseline migration for the `leads` table (`app/models/lead.py`), even
 though that model and its API route have existed since the project's
-first commit. The new `6102ef9fc509_cria_tabela_users.py` migration
-(for `User`, see above) is the *first* migration in this repo, written
-by hand — no Postgres was reachable with the `.env` credentials in this
-sandbox (auth failure even using the real configured `DATABASE_URL`),
-so `alembic revision --autogenerate` had nothing to diff against.
-Consequence: `alembic upgrade head` on a genuinely empty database
-creates `users` but **not** `leads` — whatever mechanism has been
-creating the `leads` table until now (manual `Base.metadata.create_all()`,
-most likely) still needs to keep doing so until someone writes that
-baseline migration too. Not this session's scope to fix, just flagged
-so it doesn't surprise anyone running migrations against a fresh DB.
-`alembic/env.py` now imports both `app.models.lead` and `app.models.user`
-so a future `--autogenerate` run (once a live DB is reachable) picks up
-both.
+first commit. First fixed incompletely (only `6102ef9fc509_cria_tabela_users.py`
+got written, with `down_revision=None` as if it were the root) and then
+corrected the same day once asked to double check: **two** chained
+migrations now exist —
+`e119018824e8_cria_tabela_leads.py` (`down_revision=None`, the actual
+root — `leads` is the older model, so it migrates first) →
+`6102ef9fc509_cria_tabela_users.py` (`down_revision="e119018824e8"`).
+No data dependency between the two tables; the ordering is purely
+"older model migrates first."
+
+Both were written by hand, not via `alembic revision --autogenerate` —
+the Postgres in this project's own `settings.DATABASE_URL` (from
+`.env`) is still unreachable in this sandbox (auth failure even with
+the real configured URL), so autogenerate had nothing to diff against
+*for this project's actual database*. That said, **the migration files
+themselves have been validated against a real Postgres 16**, just not
+that specific one: a throwaway cluster was provisioned in-session
+(`initdb` + `pg_ctl`, own data dir under `/tmp`, a non-default port,
+Unix socket only — deliberately isolated from whatever unrelated
+Postgres service was already listening on 5432 in this environment) —
+`alembic upgrade head` applied both migrations cleanly, `alembic
+downgrade base` reverted both cleanly, and the resulting schema was
+diffed column-by-column (`\d leads`, `\d users`) against the SQLAlchemy
+models — exact match on types, nullability, and both unique indexes.
+The cluster was stopped and deleted immediately after. **Still
+unvalidated**: these migrations against this project's actual configured
+database — that would need either working `.env` credentials or a
+Postgres reachable some other way.
+
+`alembic/env.py` imports both `app.models.lead` and `app.models.user` so
+a future `--autogenerate` run (once the real DB is reachable) picks up
+both — and, per the above, would now correctly recognize the schema as
+already up to date rather than trying to create `leads` a second time.
 
 ### Deployment note (EasyPanel)
 
