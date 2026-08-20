@@ -51,23 +51,27 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
     pra não estourar o prompt com uma página gigante. Sites reais raramente
     precisam de mais que isso pra esse tipo de classificação.
 
-`gerar_mensagem_abordagem` (adicionada 20/08/2026) gera a mensagem
-exibida na seção "Abordagem sugerida" do dossiê do lead
-(`Lead.mensagem_abordagem`, ver `PATCH /api/leads/{id}/gerar-abordagem`
-em app/api/routes/leads.py) — mesmo modelo/endpoint/client injetável de
+`gerar_mensagem_abordagem` (adicionada 20/08/2026, expandida pra
+multi-canal no mesmo dia numa sessão seguinte) gera as mensagens
+exibidas na seção "Abordagem sugerida" do dossiê do lead — hoje
+persistidas em `LeadMessage` (app/models/lead_message.py, uma linha por
+geração, histórico completo por canal), não mais em
+`Lead.mensagem_abordagem` (deprecated, ver app/models/lead.py). Rota:
+`POST /api/leads/{lead_id}/gerar-abordagem/{canal}` em
+app/api/routes/leads.py. Mesmo modelo/client injetável de
 `inferir_dados_site`, mas **defensiva de um jeito que `inferir_dados_site`
-não é**: essa função nunca lança, nem em erro HTTP/rede (diferente de
+não é**: essa função nunca lança em erro HTTP/rede (diferente de
 `inferir_dados_site`, que deixa `raise_for_status()` propagar — ver
-`test_erro_http_propaga_excecao` em test_ai_enrichment.py). Aqui, tanto
-falha de rede/HTTP quanto resposta vazia/sem bloco de texto viram `""`;
-é a rota que decide o que fazer com uma string vazia (não persiste,
-devolve 502 pro frontend mostrar erro amigável — ver "Abordagem
-sugerida" no CLAUDE.md). Essa chamada específica, diferente das outras
-integrações deste módulo, **pode ser validada de verdade pelo usuário
-final através da própria tela do dossiê** (o botão "Gerar mensagem com
-IA"), já que ele acessa o sistema com a `ANTHROPIC_API_KEY` real
-configurada no ambiente de produção — não fica pendente de validação
-como `inferir_dados_site`.
+`test_erro_http_propaga_excecao` em test_ai_enrichment.py). Erro de
+rede/HTTP e resposta vazia/malformada viram `MensagemGerada(conteudo="",
+assunto=None)`; é a rota que decide o que fazer com um `conteudo` vazio
+(não persiste, devolve 502 pro frontend mostrar erro amigável — ver
+"Suggested approach message generation" no CLAUDE.md). Essa chamada
+específica, diferente das outras integrações deste módulo, **pode ser
+validada de verdade pelo usuário final através da própria tela do
+dossiê** (os botões "Gerar mensagem com IA" por canal), já que ele
+acessa o sistema com a `ANTHROPIC_API_KEY` real configurada no ambiente
+de produção — não fica pendente de validação como `inferir_dados_site`.
 """
 from __future__ import annotations
 
@@ -116,15 +120,40 @@ def _get_client(client: httpx.Client | None) -> tuple[httpx.Client, bool]:
     return httpx.Client(timeout=DEFAULT_TIMEOUT), True
 
 
-PROMPT_ABORDAGEM_TEMPLATE = """Você é um redator de prospecção B2B pra uma empresa de contabilidade \
-(Minotto Contabilidade) que atende clínicas e consultórios médicos no Brasil.
+def _extrair_json(texto: str) -> dict | None:
+    """
+    Tenta parsear `texto` como um objeto JSON. A IA pode variar o formato
+    mesmo instruída a responder só em JSON — às vezes embrulha em bloco
+    de código markdown (```json ... ```), às vezes acrescenta uma frase
+    antes/depois do objeto. Tenta essas variações antes de desistir.
+    Devolve None se nenhuma delas funcionar (nunca lança exceção).
 
-Escreva uma mensagem curta de e-mail de PRIMEIRO CONTATO (2 a 3 frases), \
-tom profissional e consultivo -- nunca agressivo, acusatório ou alarmista. \
-A mensagem deve soar genuinamente personalizada (mencione pelo menos um \
-dado real da lista abaixo) e terminar convidando a uma conversa breve.
+    Compartilhada por `inferir_dados_site` (mais abaixo) e
+    `gerar_mensagem_abordagem` (canal "email", que pede assunto+corpo em
+    JSON) — mesma tolerância a formato inconsistente da IA nos dois usos.
+    """
+    candidatos = [texto.strip()]
 
-Regras de tom, siga à risca:
+    bloco_codigo = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", texto, re.DOTALL)
+    if bloco_codigo:
+        candidatos.append(bloco_codigo.group(1))
+
+    primeiro_objeto = re.search(r"\{.*\}", texto, re.DOTALL)
+    if primeiro_objeto:
+        candidatos.append(primeiro_objeto.group(0))
+
+    for candidato in candidatos:
+        try:
+            resultado = json.loads(candidato)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(resultado, dict):
+            return resultado
+
+    return None
+
+
+_REGRAS_DE_TOM = """Regras de tom, siga à risca:
 - Se houver dívida ativa na PGFN listada abaixo, mencione de forma \
 consultiva, como uma oportunidade de ajuda -- NUNCA como cobrança ou \
 acusação. Exemplo do tom certo: "identificamos uma oportunidade de \
@@ -133,15 +162,48 @@ ERRADO, nunca use: "sua empresa está endividada" ou "vocês devem para a \
 União".
 - Pode citar RQE confirmado ou um bom rating no Google como reconhecimento \
 positivo, se estiverem na lista.
-- NÃO invente nenhum dado que não esteja explicitamente na lista abaixo.
+- NÃO invente nenhum dado que não esteja explicitamente na lista abaixo."""
+
+PROMPT_ABORDAGEM_EMAIL_TEMPLATE = """Você é um redator de prospecção B2B pra uma empresa de contabilidade \
+(Minotto Contabilidade) que atende clínicas e consultórios médicos no Brasil.
+
+Escreva um E-MAIL de PRIMEIRO CONTATO -- tom profissional, cordial e \
+consultivo, corpo com 3 a 4 frases. A mensagem deve soar genuinamente \
+personalizada (mencione pelo menos um dado real da lista abaixo) e \
+terminar convidando a uma conversa breve.
+
+{regras_de_tom}
 
 Dados do lead:
-{dados_lead}
+{{dados_lead}}
+
+Responda APENAS com um objeto JSON válido, sem texto antes ou depois, \
+sem bloco de código markdown, no formato exato abaixo:
+
+{{{{
+  "assunto": "assunto curto e direto do e-mail, sem saudação, até 60 caracteres",
+  "corpo": "o corpo do e-mail em si -- sem saudação tipo \\"Prezado(a)\\", \
+sem assinatura, sem aspas ao redor do texto"
+}}}}
+""".format(regras_de_tom=_REGRAS_DE_TOM)
+
+PROMPT_ABORDAGEM_WHATSAPP_TEMPLATE = """Você é um redator de prospecção B2B pra uma empresa de contabilidade \
+(Minotto Contabilidade) que atende clínicas e consultórios médicos no Brasil.
+
+Escreva uma mensagem de WHATSAPP de PRIMEIRO CONTATO -- tom direto e \
+casual (mas sempre respeitoso), só 1 a 2 frases curtas. A mensagem deve \
+soar genuinamente personalizada (mencione pelo menos um dado real da \
+lista abaixo) e terminar convidando a uma conversa breve.
+
+{regras_de_tom}
+
+Dados do lead:
+{{dados_lead}}
 
 Responda APENAS com o texto da mensagem em si -- sem saudação tipo \
 "Prezado(a)", sem assinatura, sem explicações antes ou depois, sem aspas \
-ao redor do texto.
-"""
+ao redor do texto, no máximo 1 emoji e só se fizer sentido.
+""".format(regras_de_tom=_REGRAS_DE_TOM)
 
 
 def _montar_contexto_lead(lead: dict) -> str:
@@ -183,26 +245,56 @@ def _montar_contexto_lead(lead: dict) -> str:
     return "\n".join(linhas)
 
 
-def gerar_mensagem_abordagem(lead: dict, client: httpx.Client | None = None) -> str:
-    """
-    Gera uma mensagem curta (2-3 frases) de e-mail de primeiro contato,
-    personalizada com dados reais do lead — ver `PROMPT_ABORDAGEM_TEMPLATE`
-    pra regra de tom explícita sobre dívida ativa PGFN (consultivo, nunca
-    acusatório).
+@dataclass
+class MensagemGerada:
+    """Resultado de `gerar_mensagem_abordagem`. `assunto` só vem
+    preenchido pro canal "email" -- WhatsApp não tem conceito de
+    assunto, fica sempre `None` nesse canal."""
 
-    Nunca lança — diferente de `inferir_dados_site` (que deixa erro HTTP
-    propagar via `raise_for_status()`), esta função captura qualquer
-    `httpx.HTTPError` (erro de rede OU status HTTP de erro) e resposta
-    vazia/sem bloco de texto, devolvendo `""` em qualquer um desses
-    casos. É a rota (`POST /api/leads/{lead_id}/gerar-abordagem` em
-    app/api/routes/leads.py) que decide o que fazer com uma string vazia
-    — não persiste, devolve 502 pro frontend mostrar um erro amigável em
-    vez de silenciosamente salvar `mensagem_abordagem` vazia.
+    conteudo: str
+    assunto: str | None = None
+
+
+CANAIS_VALIDOS = ("email", "whatsapp")
+
+
+def gerar_mensagem_abordagem(lead: dict, canal: str, client: httpx.Client | None = None) -> MensagemGerada:
     """
+    Gera uma mensagem de primeiro contato personalizada com dados reais
+    do lead, com tom/tamanho ajustados pelo `canal`:
+      - "email": mais formal, 3-4 frases, também gera `assunto` (a IA
+        responde em JSON — `{"assunto": ..., "corpo": ...}` — parseado
+        com o mesmo `_extrair_json` tolerante a formato usado por
+        `inferir_dados_site`)
+      - "whatsapp": mais direto/casual, 1-2 frases, sem assunto (resposta
+        em texto puro, sem JSON)
+    As duas variantes reforçam a mesma regra de tom consultivo pra
+    dívida ativa PGFN (`_REGRAS_DE_TOM`) — ver os templates acima.
+
+    Levanta `ValueError` pra um `canal` fora de `CANAIS_VALIDOS` — erro
+    de programação (a rota já valida contra `CanalMensagem` antes de
+    chamar; ver app/models/lead_message.py), não uma resposta da IA.
+
+    Nunca lança por causa da chamada à API em si — diferente de
+    `inferir_dados_site` (que deixa erro HTTP propagar via
+    `raise_for_status()`), esta função captura qualquer `httpx.HTTPError`
+    (erro de rede OU status HTTP de erro) e resposta vazia/malformada,
+    devolvendo `MensagemGerada(conteudo="", assunto=None)` em qualquer
+    um desses casos. É a rota (`POST
+    /api/leads/{lead_id}/gerar-abordagem/{canal}` em
+    app/api/routes/leads.py) que decide o que fazer com um `conteudo`
+    vazio — não persiste em `LeadMessage`, devolve 502 pro frontend
+    mostrar um erro amigável.
+    """
+    if canal not in CANAIS_VALIDOS:
+        raise ValueError(f"Canal desconhecido: {canal!r}. Use um de {CANAIS_VALIDOS}.")
+
     client, owns_client = _get_client(client)
 
     try:
-        prompt = PROMPT_ABORDAGEM_TEMPLATE.format(dados_lead=_montar_contexto_lead(lead))
+        dados_lead = _montar_contexto_lead(lead)
+        template = PROMPT_ABORDAGEM_EMAIL_TEMPLATE if canal == "email" else PROMPT_ABORDAGEM_WHATSAPP_TEMPLATE
+        prompt = template.format(dados_lead=dados_lead)
 
         resp = client.post(
             ANTHROPIC_MESSAGES_URL,
@@ -221,9 +313,20 @@ def gerar_mensagem_abordagem(lead: dict, client: httpx.Client | None = None) -> 
 
         blocos = resp.json().get("content") or []
         texto_resposta = next((b.get("text", "") for b in blocos if b.get("type") == "text"), "")
-        return texto_resposta.strip()
+
+        if canal == "whatsapp":
+            return MensagemGerada(conteudo=texto_resposta.strip(), assunto=None)
+
+        dados = _extrair_json(texto_resposta)
+        if dados is None:
+            return MensagemGerada(conteudo="", assunto=None)
+
+        corpo = str(dados.get("corpo") or "").strip()
+        assunto_bruto = dados.get("assunto")
+        assunto = str(assunto_bruto).strip() or None if assunto_bruto else None
+        return MensagemGerada(conteudo=corpo, assunto=assunto)
     except httpx.HTTPError:
-        return ""
+        return MensagemGerada(conteudo="", assunto=None)
     finally:
         if owns_client:
             client.close()
@@ -234,35 +337,6 @@ class InferenciaSiteResult:
     rqe_mencionado: bool
     rqe_numero: str | None
     servicos: list[str]
-
-
-def _extrair_json(texto: str) -> dict | None:
-    """
-    Tenta parsear `texto` como um objeto JSON. A IA pode variar o formato
-    mesmo instruída a responder só em JSON — às vezes embrulha em bloco
-    de código markdown (```json ... ```), às vezes acrescenta uma frase
-    antes/depois do objeto. Tenta essas variações antes de desistir.
-    Devolve None se nenhuma delas funcionar (nunca lança exceção).
-    """
-    candidatos = [texto.strip()]
-
-    bloco_codigo = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", texto, re.DOTALL)
-    if bloco_codigo:
-        candidatos.append(bloco_codigo.group(1))
-
-    primeiro_objeto = re.search(r"\{.*\}", texto, re.DOTALL)
-    if primeiro_objeto:
-        candidatos.append(primeiro_objeto.group(0))
-
-    for candidato in candidatos:
-        try:
-            resultado = json.loads(candidato)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(resultado, dict):
-            return resultado
-
-    return None
 
 
 def inferir_dados_site(texto_site: str, client: httpx.Client | None = None) -> InferenciaSiteResult:

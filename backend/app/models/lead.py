@@ -92,8 +92,12 @@ class Lead(Base):
     motivo_perda: Mapped[str | None] = mapped_column(Text, nullable=True)  # só relevante quando kanban_status == "perdido"
 
     # --- Abordagem ---
-    # Só o espaço reservado nesta sessão -- a geração via IA (e o
-    # endpoint/task que preenche este campo) fica pra uma sessão futura.
+    # ⚠️ DEPRECATED (20/08/2026) -- substituído por app/models/lead_message.py::LeadMessage,
+    # que guarda uma mensagem por CANAL (email/whatsapp) com histórico completo (nunca
+    # sobrescreve), em vez de uma única mensagem genérica sobrescrita a cada regeneração.
+    # Mantido só pra não perder dado de teste já gravado; sem uso novo -- não remover a
+    # coluna, mas não escrever nem ler daqui em código novo. Ver "Suggested approach
+    # message generation" no CLAUDE.md pro histórico completo da migração pra LeadMessage.
     mensagem_abordagem: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

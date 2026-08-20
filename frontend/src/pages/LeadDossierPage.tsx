@@ -1,6 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { fetchLead, gerarAbordagem, UnauthorizedError, type Lead } from "../api";
+import {
+  fetchLead,
+  fetchMensagens,
+  gerarAbordagemCanal,
+  UnauthorizedError,
+  type CanalAbordagem,
+  type Lead,
+  type LeadMessage,
+} from "../api";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
@@ -15,13 +23,17 @@ export function LeadDossierPage() {
   const navigate = useNavigate();
 
   const [lead, setLead] = useState<Lead | null>(null);
+  const [mensagens, setMensagens] = useState<LeadMessage[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token || !id) return;
-    fetchLead(token, id)
-      .then(setLead)
+    Promise.all([fetchLead(token, id), fetchMensagens(token, id)])
+      .then(([leadData, mensagensData]) => {
+        setLead(leadData);
+        setMensagens(mensagensData);
+      })
       .catch((e) => {
         if (e instanceof UnauthorizedError) {
           logout();
@@ -31,6 +43,10 @@ export function LeadDossierPage() {
       })
       .finally(() => setCarregando(false));
   }, [token, id, logout]);
+
+  function registrarNovaMensagem(mensagem: LeadMessage) {
+    setMensagens((atuais) => [mensagem, ...atuais.filter((m) => m.canal !== mensagem.canal)]);
+  }
 
   return (
     <div className="dossier-page">
@@ -108,7 +124,14 @@ export function LeadDossierPage() {
             <SecaoRqe confirmado={lead.rqe_confirmado} fonte={lead.rqe_fonte} />
           </div>
 
-          <SecaoAbordagem leadId={lead.id} mensagem={lead.mensagem_abordagem} onGerada={setLead} />
+          <SecaoAbordagem
+            leadId={lead.id}
+            email={lead.email}
+            temWhatsapp={!!lead.whatsapp_ativo}
+            telefone={lead.telefone}
+            mensagens={mensagens}
+            onGerada={registrarNovaMensagem}
+          />
 
           <SecaoBreakdown scoreDetalhes={lead.score_detalhes} />
         </>
@@ -188,12 +211,79 @@ function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: 
 
 function SecaoAbordagem({
   leadId,
-  mensagem,
+  email,
+  temWhatsapp,
+  telefone,
+  mensagens,
   onGerada,
 }: {
   leadId: string;
-  mensagem?: string | null;
-  onGerada: (lead: Lead) => void;
+  email?: string | null;
+  temWhatsapp: boolean;
+  telefone?: string | null;
+  mensagens: LeadMessage[];
+  onGerada: (mensagem: LeadMessage) => void;
+}) {
+  const mostrarEmail = !!email;
+  // WhatsApp aqui exige o sinal *confirmado ativo* (whatsapp_ativo),
+  // não só ter um telefone cadastrado -- gerar mensagem pra um número
+  // que nem confirmamos ter WhatsApp não faz sentido.
+  const mostrarWhatsapp = temWhatsapp;
+
+  if (!mostrarEmail && !mostrarWhatsapp) {
+    return (
+      <section className="dossier-card">
+        <h2>Abordagem sugerida</h2>
+        <p className="dossier-muted">Nenhum canal disponível ainda (sem e-mail nem WhatsApp confirmado pra este lead).</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="dossier-card">
+      <h2>Abordagem sugerida</h2>
+      <div className="dossier-abordagem-canais">
+        {mostrarEmail && (
+          <CanalAbordagemCard
+            leadId={leadId}
+            canal="email"
+            titulo="E-mail"
+            mensagem={mensagens.find((m) => m.canal === "email") ?? null}
+            onGerada={onGerada}
+            email={email}
+          />
+        )}
+        {mostrarWhatsapp && (
+          <CanalAbordagemCard
+            leadId={leadId}
+            canal="whatsapp"
+            titulo="WhatsApp"
+            mensagem={mensagens.find((m) => m.canal === "whatsapp") ?? null}
+            onGerada={onGerada}
+            telefone={telefone}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function CanalAbordagemCard({
+  leadId,
+  canal,
+  titulo,
+  mensagem,
+  onGerada,
+  email,
+  telefone,
+}: {
+  leadId: string;
+  canal: CanalAbordagem;
+  titulo: string;
+  mensagem: LeadMessage | null;
+  onGerada: (mensagem: LeadMessage) => void;
+  email?: string | null;
+  telefone?: string | null;
 }) {
   const { token, logout } = useAuth();
   const [gerando, setGerando] = useState(false);
@@ -204,8 +294,8 @@ function SecaoAbordagem({
     setGerando(true);
     setErro(null);
     try {
-      const leadAtualizado = await gerarAbordagem(token, leadId);
-      onGerada(leadAtualizado);
+      const nova = await gerarAbordagemCanal(token, leadId, canal);
+      onGerada(nova);
     } catch (e) {
       if (e instanceof UnauthorizedError) {
         logout();
@@ -217,15 +307,43 @@ function SecaoAbordagem({
     }
   }
 
+  const numeroWhatsapp = formatarNumeroWhatsapp(telefone);
+
   return (
-    <section className="dossier-card">
-      <h2>Abordagem sugerida</h2>
+    <div className="dossier-abordagem-canal">
+      <h3 className="dossier-abordagem-canal-titulo">{titulo}</h3>
+
       {mensagem ? (
         <>
-          <p className="dossier-abordagem-texto">{mensagem}</p>
-          <button type="button" className="dossier-abordagem-btn-secundario" onClick={gerar} disabled={gerando}>
-            {gerando ? "Gerando..." : "Gerar novamente"}
-          </button>
+          {canal === "email" && mensagem.assunto && (
+            <p className="dossier-abordagem-assunto">
+              <strong>Assunto:</strong> {mensagem.assunto}
+            </p>
+          )}
+          <p className="dossier-abordagem-texto">{mensagem.conteudo}</p>
+          <div className="dossier-abordagem-acoes">
+            {canal === "email" && email && (
+              <a
+                className="dossier-abordagem-btn-acao"
+                href={`mailto:${email}?subject=${encodeURIComponent(mensagem.assunto ?? "")}&body=${encodeURIComponent(mensagem.conteudo)}`}
+              >
+                Abrir no e-mail
+              </a>
+            )}
+            {canal === "whatsapp" && numeroWhatsapp && (
+              <a
+                className="dossier-abordagem-btn-acao"
+                href={`https://wa.me/${numeroWhatsapp}?text=${encodeURIComponent(mensagem.conteudo)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Enviar mensagem gerada
+              </a>
+            )}
+            <button type="button" className="dossier-abordagem-btn-secundario" onClick={gerar} disabled={gerando}>
+              {gerando ? "Gerando..." : "Gerar novamente"}
+            </button>
+          </div>
         </>
       ) : (
         <>
@@ -236,7 +354,7 @@ function SecaoAbordagem({
         </>
       )}
       {erro && <p className="dossier-abordagem-erro">{erro}</p>}
-    </section>
+    </div>
   );
 }
 

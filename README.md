@@ -386,13 +386,77 @@ interno do Docker.
   *sandbox de desenvolvimento* não permite chamada de rede autenticada
   (ver "Network access from Bash is blocked" no CLAUDE.md) — mas essa
   ressalva é sobre o ambiente onde o código foi *escrito*, não sobre o
-  ambiente onde ele *roda*. Uma vez em produção, `POST
-  /api/leads/{lead_id}/gerar-abordagem` é chamada pelo navegador do
-  usuário final contra o backend real, que tem a `ANTHROPIC_API_KEY` de
-  produção configurada — o botão "Gerar mensagem com IA" na tela do
-  dossiê **é a validação real**, não fica pendente pra uma sessão
-  futura com outro ambiente/ferramental como as demais.
-- ✅ 243 testes automatizados passando (`pytest`) + 12 testes no
+  ambiente onde ele *roda*. Uma vez em produção, o endpoint de geração é
+  chamado pelo navegador do usuário final contra o backend real, que tem
+  a `ANTHROPIC_API_KEY` de produção configurada — o botão "Gerar
+  mensagem com IA" na tela do dossiê **é a validação real**, não fica
+  pendente pra uma sessão futura com outro ambiente/ferramental como as
+  demais (essa nota continua valendo integralmente — ver bullet abaixo
+  pra onde esse endpoint mora agora).
+
+  **⚠️ Superseded pela sessão seguinte** (mesmo dia — ver bullet
+  abaixo): `POST /api/leads/{lead_id}/gerar-abordagem` (sem canal) e a
+  persistência em `Lead.mensagem_abordagem` descritos acima **não
+  existem mais** — substituídos por um endpoint por canal e uma tabela
+  de histórico (`LeadMessage`). `Lead.mensagem_abordagem` continua na
+  tabela (deprecated, dado antigo preservado), mas a rota foi removida
+  de propósito, não apenas esquecida.
+- ✅ **Abordagem multi-canal (e-mail + WhatsApp, com histórico)** —
+  substitui a mensagem genérica única do bullet anterior por uma
+  mensagem própria por canal, cada geração virando um registro novo
+  (nunca sobrescreve). Modelo novo, `LeadMessage`
+  (`app/models/lead_message.py`): `id`, `lead_id` (FK pra `leads.id`,
+  indexado), `canal` (`"email"` \| `"whatsapp"`, enum `CanalMensagem`),
+  `conteudo`, `assunto` (só preenchido no canal e-mail), `gerado_em`.
+  Migration `c47a9e2b1d05_cria_tabela_lead_messages.py` (encadeada
+  depois de `fbd6142f0632`) — **validada contra Postgres 16 real**,
+  mesmo processo de sempre (cluster temporário, upgrade encadeado de
+  todas as cinco migrations/downgrade -1/re-upgrade/schema conferido,
+  cluster apagado ao final).
+
+  `app/services/ai_enrichment.py::gerar_mensagem_abordagem` ganhou um
+  parâmetro `canal` obrigatório que muda tom/tamanho/formato do prompt:
+  **e-mail** — mais formal, corpo com 3-4 frases, IA responde em JSON
+  (`{"assunto": ..., "corpo": ...}`, parseado com o mesmo `_extrair_json`
+  tolerante a formato já usado por `inferir_dados_site`); **WhatsApp** —
+  mais direto/casual, 1-2 frases, resposta em texto puro, sem assunto. A
+  mesma regra de tom consultivo pra dívida ativa PGFN (nunca acusatória)
+  vale pros dois canais. `canal` fora de `"email"`/`"whatsapp"` levanta
+  `ValueError` (erro de programação — a rota já valida antes de chamar).
+
+  Dois endpoints novos, substituindo o antigo:
+  - `POST /api/leads/{lead_id}/gerar-abordagem/{canal}` — gera e cria
+    um `LeadMessage` novo (nunca sobrescreve; 422 canal inválido, 404
+    lead inexistente, 502 se a IA não gerar nada, sem criar registro
+    vazio).
+  - `GET /api/leads/{lead_id}/mensagens` — devolve só a mensagem mais
+    recente de cada canal (o histórico completo fica no banco, não
+    exposto por essa rota); 404 se o lead não existir.
+
+  Testes por canal reescritos/expandidos em `test_ai_enrichment.py` (tom
+  e formato distintos por canal, JSON malformado no canal e-mail, canal
+  inválido) e em `test_leads_routes.py` (geração por canal, histórico
+  não sobrescrito ao regenerar, listagem só com a mais recente por
+  canal, 404 nos dois endpoints novos) — suite total subiu de 243 pra
+  253 testes.
+
+  No dossiê (`LeadDossierPage.tsx`, só a seção "Abordagem sugerida"
+  mexida): a seção agora mostra um card por canal — "E-mail" só aparece
+  se `lead.email` existir, "WhatsApp" só se `lead.whatsapp_ativo` for
+  `true` (nunca os dois ausentes ao mesmo tempo sem uma mensagem clara
+  de "nenhum canal disponível"; Instagram de propósito fora, como
+  pedido). Cada card tem seu próprio "Gerar mensagem com IA"/"Gerar
+  novamente", mesmo padrão de loading/erro já existente. Card de e-mail,
+  depois de gerado: botão "Abrir no e-mail"
+  (`mailto:{email}?subject=...&body=...`, `encodeURIComponent` cuidando
+  de acentos/quebra de linha/caracteres especiais). Card de WhatsApp,
+  depois de gerado: botão "Enviar mensagem gerada"
+  (`wa.me/{numero}?text=...`, mesma codificação, mesmo `formatarNumeroWhatsapp`
+  já usado na ação rápida do topo do dossiê) — distinto do link "Abrir
+  WhatsApp" que já existia na seção de Contato (aquele abre uma conversa
+  vazia, esse pré-preenche com a mensagem gerada). `npm run
+  build`/`npm run lint`/`npm run test` limpos.
+- ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)

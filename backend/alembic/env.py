@@ -12,7 +12,7 @@ from alembic import context
 
 from app.core.config import settings
 from app.core.database import Base
-from app.models import lead, user  # noqa: F401  (registra os modelos no metadata)
+from app.models import lead, lead_message, user  # noqa: F401  (registra os modelos no metadata)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

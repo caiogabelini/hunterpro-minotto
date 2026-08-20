@@ -342,6 +342,65 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.dossier-abordagem-canais {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.dossier-abordagem-canal {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.dossier-abordagem-canal-titulo {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  font-size: 14px;
+  color: var(--gold);
+  text-transform: uppercase;
+  margin: 0 0 10px;
+}
+
+.dossier-abordagem-assunto {
+  font-size: 13px;
+  color: var(--gray);
+  margin: 0 0 6px;
+}
+
+.dossier-abordagem-assunto strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+.dossier-abordagem-acoes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dossier-abordagem-btn-acao {
+  display: inline-block;
+  background: var(--gold);
+  color: var(--navy-dark);
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-body);
+  text-decoration: none;
+}
+
+.dossier-abordagem-btn-acao:hover {
+  background: var(--gold-dim);
+}
+
 .dossier-abordagem-texto {
   font-size: 14px;
   line-height: 1.6;

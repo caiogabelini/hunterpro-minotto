@@ -1,12 +1,16 @@
 """
 Testes de integração de GET /api/leads (filtro por kanban_status),
-GET /api/leads/{lead_id} (dossiê) e PATCH /api/leads/{lead_id}/status.
+GET /api/leads/{lead_id} (dossiê), PATCH /api/leads/{lead_id}/status,
+POST /api/leads/{lead_id}/gerar-abordagem/{canal} e
+GET /api/leads/{lead_id}/mensagens.
 
 Mesmo padrão de fixtures de test_auth_routes.py: SQLite em memória
 (StaticPool + check_same_thread=False, ver docstring lá pro porquê),
 injetado via app.dependency_overrides[get_db] -- não precisa de Postgres
 real rodando.
 """
+from datetime import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -17,8 +21,10 @@ from app.core.database import Base, get_db
 from app.core.security import create_access_token, hash_password
 from app.main import app
 from app.models.lead import KanbanStatus, Lead
+from app.models.lead_message import LeadMessage
 from app.models.user import User, UserRole
 from app.scoring.compute_lead_score import montar_score_lead
+from app.services.ai_enrichment import MensagemGerada
 
 SENHA = "senha-forte-123"
 
@@ -210,62 +216,178 @@ def test_get_lead_sem_token_retorna_401(client, db_session):
     assert resp.status_code == 401
 
 
-# --- POST /api/leads/{lead_id}/gerar-abordagem ---
+# --- POST /api/leads/{lead_id}/gerar-abordagem/{canal} ---
 #
 # `gerar_mensagem_abordagem` (a chamada real à Anthropic) é mockada aqui
 # via monkeypatch no módulo da rota (app.api.routes.leads), mesmo padrão
 # de app/workers/celery_app.py mockar as etapas do pipeline por nome --
-# o contrato da própria função (prompt/parsing/tratamento de erro) já é
-# coberto em tests/test_ai_enrichment.py.
+# o contrato da própria função (prompt/parsing/tratamento de erro por
+# canal) já é coberto em tests/test_ai_enrichment.py.
 
 
-def test_gerar_abordagem_com_sucesso(client, db_session, token, monkeypatch):
+def test_gerar_abordagem_email_com_sucesso_cria_lead_message(client, db_session, token, monkeypatch):
     lead = _criar_lead(db_session, razao_social="Clínica Exemplo")
     monkeypatch.setattr(
         "app.api.routes.leads.gerar_mensagem_abordagem",
-        lambda dados_lead: "Olá! Vimos que a Clínica Exemplo pode se beneficiar de uma conversa rápida.",
+        lambda dados_lead, canal: MensagemGerada(conteudo="Corpo do e-mail gerado.", assunto="Assunto gerado"),
     )
 
-    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem/email", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 200
     corpo = resp.json()
-    assert corpo["mensagem_abordagem"] == "Olá! Vimos que a Clínica Exemplo pode se beneficiar de uma conversa rápida."
+    assert corpo["canal"] == "email"
+    assert corpo["conteudo"] == "Corpo do e-mail gerado."
+    assert corpo["assunto"] == "Assunto gerado"
+    assert corpo["lead_id"] == lead.id
+
+    linhas = db_session.query(LeadMessage).filter_by(lead_id=lead.id).all()
+    assert len(linhas) == 1
+    assert linhas[0].canal == "email"
 
 
-def test_gerar_abordagem_mensagem_e_persistida_no_banco(client, db_session, token, monkeypatch):
+def test_gerar_abordagem_whatsapp_sem_assunto(client, db_session, token, monkeypatch):
     lead = _criar_lead(db_session)
-    monkeypatch.setattr("app.api.routes.leads.gerar_mensagem_abordagem", lambda dados_lead: "Mensagem gerada pela IA.")
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_mensagem_abordagem",
+        lambda dados_lead, canal: MensagemGerada(conteudo="Mensagem curta de WhatsApp.", assunto=None),
+    )
 
-    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem/whatsapp", headers={"Authorization": f"Bearer {token}"})
+
     assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["canal"] == "whatsapp"
+    assert corpo["assunto"] is None
 
-    db_session.refresh(lead)
-    assert lead.mensagem_abordagem == "Mensagem gerada pela IA."
+
+def test_gerar_abordagem_chama_service_com_canal_correto(client, db_session, token, monkeypatch):
+    """Confirma que a rota passa o canal certo pra
+    gerar_mensagem_abordagem -- pegaria um bug de tom trocado entre
+    email/whatsapp."""
+    canais_recebidos = []
+
+    def fake(dados_lead, canal):
+        canais_recebidos.append(canal)
+        return MensagemGerada(conteudo="Mensagem.", assunto=None)
+
+    monkeypatch.setattr("app.api.routes.leads.gerar_mensagem_abordagem", fake)
+    lead = _criar_lead(db_session)
+
+    client.post(f"/api/leads/{lead.id}/gerar-abordagem/whatsapp", headers={"Authorization": f"Bearer {token}"})
+    client.post(f"/api/leads/{lead.id}/gerar-abordagem/email", headers={"Authorization": f"Bearer {token}"})
+
+    assert canais_recebidos == ["whatsapp", "email"]
+
+
+def test_gerar_abordagem_nao_sobrescreve_historico(client, db_session, token, monkeypatch):
+    """Cada geração cria um LeadMessage novo -- gerar duas vezes pro
+    mesmo canal deixa as duas linhas no banco (histórico), não
+    sobrescreve a anterior."""
+    lead = _criar_lead(db_session)
+    respostas = iter(["Primeira versão.", "Segunda versão, regenerada."])
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_mensagem_abordagem",
+        lambda dados_lead, canal: MensagemGerada(conteudo=next(respostas), assunto=None),
+    )
+
+    client.post(f"/api/leads/{lead.id}/gerar-abordagem/whatsapp", headers={"Authorization": f"Bearer {token}"})
+    resp2 = client.post(f"/api/leads/{lead.id}/gerar-abordagem/whatsapp", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp2.status_code == 200
+    linhas = db_session.query(LeadMessage).filter_by(lead_id=lead.id, canal="whatsapp").all()
+    assert len(linhas) == 2
+    assert {l.conteudo for l in linhas} == {"Primeira versão.", "Segunda versão, regenerada."}
+
+
+def test_gerar_abordagem_canal_invalido_retorna_422(client, db_session, token):
+    lead = _criar_lead(db_session)
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem/instagram", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 422
 
 
 def test_gerar_abordagem_lead_inexistente_retorna_404(client, token):
-    resp = client.post("/api/leads/id-que-nao-existe/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    resp = client.post("/api/leads/id-que-nao-existe/gerar-abordagem/email", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 404
 
 
-def test_gerar_abordagem_resposta_vazia_da_ia_retorna_502_sem_persistir(client, db_session, token, monkeypatch):
-    """gerar_mensagem_abordagem nunca lança -- devolve "" em erro/resposta
-    vazia (ver test_ai_enrichment.py). A rota trata isso como 502, sem
-    sobrescrever mensagem_abordagem com uma string vazia."""
-    lead = _criar_lead(db_session, mensagem_abordagem="Mensagem antiga, não deve ser apagada")
-    monkeypatch.setattr("app.api.routes.leads.gerar_mensagem_abordagem", lambda dados_lead: "")
+def test_gerar_abordagem_resposta_vazia_da_ia_retorna_502_sem_criar_registro(client, db_session, token, monkeypatch):
+    """gerar_mensagem_abordagem nunca lança -- devolve conteudo="" em
+    erro/resposta vazia (ver test_ai_enrichment.py). A rota trata isso
+    como 502, sem criar um LeadMessage vazio no banco."""
+    lead = _criar_lead(db_session)
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_mensagem_abordagem",
+        lambda dados_lead, canal: MensagemGerada(conteudo="", assunto=None),
+    )
 
-    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem", headers={"Authorization": f"Bearer {token}"})
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem/email", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 502
-    db_session.refresh(lead)
-    assert lead.mensagem_abordagem == "Mensagem antiga, não deve ser apagada"
+    assert db_session.query(LeadMessage).filter_by(lead_id=lead.id).count() == 0
 
 
 def test_gerar_abordagem_sem_token_retorna_401(client, db_session):
     lead = _criar_lead(db_session)
-    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem")
+    resp = client.post(f"/api/leads/{lead.id}/gerar-abordagem/email")
+    assert resp.status_code == 401
+
+
+# --- GET /api/leads/{lead_id}/mensagens ---
+
+
+def test_listar_mensagens_retorna_so_a_mais_recente_por_canal(client, db_session, token):
+    # gerado_em explícito (não o default() do modelo) pra garantir ordem
+    # determinística entre as duas mensagens de email -- não depender da
+    # resolução do relógio entre dois datetime.utcnow() em sequência.
+    lead = _criar_lead(db_session)
+    db_session.add(
+        LeadMessage(
+            lead_id=lead.id,
+            canal="email",
+            conteudo="E-mail antigo",
+            assunto="Assunto antigo",
+            gerado_em=datetime(2026, 1, 1, 10, 0, 0),
+        )
+    )
+    db_session.add(
+        LeadMessage(
+            lead_id=lead.id,
+            canal="email",
+            conteudo="E-mail mais recente",
+            assunto="Assunto novo",
+            gerado_em=datetime(2026, 1, 2, 10, 0, 0),
+        )
+    )
+    db_session.add(LeadMessage(lead_id=lead.id, canal="whatsapp", conteudo="WhatsApp único"))
+    db_session.commit()
+
+    resp = client.get(f"/api/leads/{lead.id}/mensagens", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert len(corpo) == 2  # uma por canal, não as 3 linhas do histórico
+
+    por_canal = {m["canal"]: m for m in corpo}
+    assert por_canal["email"]["conteudo"] == "E-mail mais recente"
+    assert por_canal["whatsapp"]["conteudo"] == "WhatsApp único"
+
+
+def test_listar_mensagens_lead_sem_mensagens_retorna_lista_vazia(client, db_session, token):
+    lead = _criar_lead(db_session)
+    resp = client.get(f"/api/leads/{lead.id}/mensagens", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_listar_mensagens_lead_inexistente_retorna_404(client, token):
+    resp = client.get("/api/leads/id-que-nao-existe/mensagens", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+
+
+def test_listar_mensagens_sem_token_retorna_401(client, db_session):
+    lead = _criar_lead(db_session)
+    resp = client.get(f"/api/leads/{lead.id}/mensagens")
     assert resp.status_code == 401
 
 

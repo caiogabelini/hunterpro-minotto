@@ -5,13 +5,33 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.models.lead import KanbanStatus, Lead
+from app.models.lead_message import CanalMensagem, LeadMessage
 from app.models.user import User
 from app.schemas.lead import LeadRead, LeadStatusUpdate
+from app.schemas.lead_message import LeadMessageRead
 from app.services.ai_enrichment import gerar_mensagem_abordagem
 
 router = APIRouter()
 
 _KANBAN_STATUS_VALIDOS = {status_.value for status_ in KanbanStatus}
+_CANAIS_VALIDOS = {canal.value for canal in CanalMensagem}
+
+
+def _montar_dados_lead(lead: Lead) -> dict:
+    """Extrai do ORM só os campos que `gerar_mensagem_abordagem` usa pra
+    montar o prompt — mesmo dict simples nos dois endpoints de
+    abordagem, pra não duplicar a lista de campos."""
+    return {
+        "razao_social": lead.razao_social,
+        "decisor_nome": lead.decisor_nome,
+        "municipio": lead.municipio,
+        "uf": lead.uf,
+        "divida_ativa_qtd_inscricoes": lead.divida_ativa_qtd_inscricoes,
+        "rqe_confirmado": lead.rqe_confirmado,
+        "google_rating": lead.google_rating,
+        "google_avaliacoes": lead.google_avaliacoes,
+        "situacao_cadastral": lead.situacao_cadastral,
+    }
 
 
 @router.get("", response_model=list[LeadRead])
@@ -99,48 +119,87 @@ def update_lead_status(
     return lead
 
 
-@router.post("/{lead_id}/gerar-abordagem", response_model=LeadRead)
+@router.post("/{lead_id}/gerar-abordagem/{canal}", response_model=LeadMessageRead)
 def gerar_abordagem(
     lead_id: str,
+    canal: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Gera (ou regenera) a mensagem de abordagem sugerida via IA
-    (`app/services/ai_enrichment.py::gerar_mensagem_abordagem`) e
-    persiste em `Lead.mensagem_abordagem`. Requer autenticação (qualquer
-    papel), mesma proteção do resto das rotas de lead.
+    Gera uma NOVA mensagem de abordagem pro canal indicado ("email" ou
+    "whatsapp") via IA (`app/services/ai_enrichment.py::gerar_mensagem_abordagem`)
+    e cria um registro novo em `lead_messages` — nunca sobrescreve um
+    registro existente, cada geração fica no histórico (ver `GET
+    /{lead_id}/mensagens` pra só a mais recente de cada canal). Requer
+    autenticação (qualquer papel), mesma proteção do resto das rotas de
+    lead. Substitui o antigo `POST /{lead_id}/gerar-abordagem` (sem
+    canal, escrevia em `Lead.mensagem_abordagem` — deprecated, ver
+    app/models/lead.py).
 
+    422 pra canal fora de `CanalMensagem`. 404 se o lead não existir.
     502 se a IA não conseguir gerar nada — `gerar_mensagem_abordagem`
-    nunca lança, devolve `""` tanto em erro de rede/HTTP quanto em
-    resposta vazia/sem bloco de texto; é aqui que isso vira um erro
-    explícito pro frontend tratar (mostrar mensagem amigável), em vez de
-    silenciosamente persistir uma mensagem vazia.
+    nunca lança, devolve `conteudo=""` tanto em erro de rede/HTTP quanto
+    em resposta vazia/malformada; é aqui que isso vira um erro explícito
+    pro frontend tratar (mostrar mensagem amigável), em vez de
+    silenciosamente criar um `LeadMessage` vazio.
     """
+    if canal not in _CANAIS_VALIDOS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Canal inválido. Valores aceitos: {sorted(_CANAIS_VALIDOS)}",
+        )
+
     lead = db.get(Lead, lead_id)
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
-    dados_lead = {
-        "razao_social": lead.razao_social,
-        "decisor_nome": lead.decisor_nome,
-        "municipio": lead.municipio,
-        "uf": lead.uf,
-        "divida_ativa_qtd_inscricoes": lead.divida_ativa_qtd_inscricoes,
-        "rqe_confirmado": lead.rqe_confirmado,
-        "google_rating": lead.google_rating,
-        "google_avaliacoes": lead.google_avaliacoes,
-        "situacao_cadastral": lead.situacao_cadastral,
-    }
-    mensagem = gerar_mensagem_abordagem(dados_lead)
+    resultado = gerar_mensagem_abordagem(_montar_dados_lead(lead), canal=canal)
 
-    if not mensagem:
+    if not resultado.conteudo:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Não foi possível gerar a mensagem agora. Tente novamente.",
         )
 
-    lead.mensagem_abordagem = mensagem
+    mensagem = LeadMessage(
+        lead_id=lead.id,
+        canal=canal,
+        conteudo=resultado.conteudo,
+        assunto=resultado.assunto,
+    )
+    db.add(mensagem)
     db.commit()
-    db.refresh(lead)
-    return lead
+    db.refresh(mensagem)
+    return mensagem
+
+
+@router.get("/{lead_id}/mensagens", response_model=list[LeadMessageRead])
+def listar_mensagens(
+    lead_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Devolve a mensagem mais recente de cada canal já gerado pro lead —
+    uma por canal, não o histórico completo (o histórico continua no
+    banco, só não é exposto por esta rota). 404 se o lead não existir.
+
+    Filtra "mais recente por canal" em Python, não com uma query
+    `DISTINCT ON`/window function — mais simples e portável (SQLite nos
+    testes, Postgres em produção) pro volume esperado (no máximo 2
+    canais por lead hoje).
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    todas = db.execute(
+        select(LeadMessage).where(LeadMessage.lead_id == lead_id).order_by(LeadMessage.gerado_em.desc())
+    ).scalars().all()
+
+    mais_recente_por_canal: dict[str, LeadMessage] = {}
+    for msg in todas:
+        mais_recente_por_canal.setdefault(msg.canal, msg)
+
+    return list(mais_recente_por_canal.values())

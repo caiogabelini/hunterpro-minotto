@@ -178,25 +178,53 @@ def test_erro_http_propaga_excecao():
 LEAD_BASE = {"razao_social": "Clínica Exemplo Ltda"}
 
 
-def test_gera_mensagem_com_sucesso():
-    texto_gerado = "Olá! Vimos que a Clínica Exemplo tem uma presença digital forte. Podemos conversar 15 minutos essa semana?"
+def test_gera_mensagem_email_com_sucesso():
+    """Canal "email" pede JSON (assunto + corpo) -- MensagemGerada.assunto
+    vem preenchido."""
+    json_ia = json.dumps({
+        "assunto": "Uma ideia pra Clínica Exemplo",
+        "corpo": "Olá! Vimos que a Clínica Exemplo tem uma presença digital forte. Podemos conversar 15 minutos essa semana?",
+    })
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/messages"
         corpo = json.loads(request.content)
         assert corpo["model"] == ANTHROPIC_MODEL
         assert "Clínica Exemplo Ltda" in corpo["messages"][0]["content"]
+        assert "E-MAIL" in corpo["messages"][0]["content"]
+        assert "3 a 4 frases" in corpo["messages"][0]["content"]
+        return httpx.Response(200, json=_resposta_anthropic(json_ia))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="email", client=client)
+
+    assert resultado.assunto == "Uma ideia pra Clínica Exemplo"
+    assert resultado.conteudo == "Olá! Vimos que a Clínica Exemplo tem uma presença digital forte. Podemos conversar 15 minutos essa semana?"
+
+
+def test_gera_mensagem_whatsapp_com_sucesso():
+    """Canal "whatsapp" pede texto puro (sem JSON) -- MensagemGerada.assunto
+    fica sempre None."""
+    texto_gerado = "Oi! Vi que vocês têm ótimas avaliações no Google, topam bater um papo rápido?"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        corpo = json.loads(request.content)
+        assert "WHATSAPP" in corpo["messages"][0]["content"]
+        assert "1 a 2 frases" in corpo["messages"][0]["content"]
         return httpx.Response(200, json=_resposta_anthropic(texto_gerado))
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="whatsapp", client=client)
 
-    assert resultado == texto_gerado
+    assert resultado.conteudo == texto_gerado
+    assert resultado.assunto is None
 
 
 def test_gera_mensagem_inclui_sinais_relevantes_no_prompt():
     """Sinais presentes no lead (dívida PGFN, RQE, rating) entram no
-    prompt; a regra de tom consultivo pra PGFN também vai junto."""
+    prompt; a regra de tom consultivo pra PGFN também vai junto. Testado
+    só uma vez (canal email) -- os dois canais compartilham
+    _montar_contexto_lead, não precisa duplicar por canal."""
     lead = {
         "razao_social": "Clínica Exemplo Ltda",
         "decisor_nome": "Dr. Fulano",
@@ -211,10 +239,10 @@ def test_gera_mensagem_inclui_sinais_relevantes_no_prompt():
     def handler(request: httpx.Request) -> httpx.Response:
         corpo = json.loads(request.content)
         prompt_recebido["texto"] = corpo["messages"][0]["content"]
-        return httpx.Response(200, json=_resposta_anthropic("Mensagem gerada."))
+        return httpx.Response(200, json=_resposta_anthropic(json.dumps({"assunto": "Oi", "corpo": "Mensagem gerada."})))
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    gerar_mensagem_abordagem(lead, client=client)
+    gerar_mensagem_abordagem(lead, canal="email", client=client)
 
     prompt = prompt_recebido["texto"]
     assert "Dr. Fulano" in prompt
@@ -224,27 +252,46 @@ def test_gera_mensagem_inclui_sinais_relevantes_no_prompt():
     assert "tom consultivo" in prompt  # instrução de tom junto ao dado de dívida
 
 
+def test_gera_mensagem_canal_invalido_levanta_value_error():
+    with pytest.raises(ValueError):
+        gerar_mensagem_abordagem(LEAD_BASE, canal="instagram")
+
+
+def test_gera_mensagem_email_resposta_sem_json_valido_nao_quebra():
+    """Resposta que não é JSON válido (formato inesperado da IA pro
+    canal email) -- devolve conteudo="" em vez de lançar."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_resposta_anthropic("Desculpe, não consigo ajudar com isso."))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="email", client=client)
+
+    assert resultado.conteudo == ""
+    assert resultado.assunto is None
+
+
 def test_gera_mensagem_resposta_vazia_nao_quebra():
-    """Content vazio (sem bloco de texto) -- devolve "" em vez de lançar."""
+    """Content vazio (sem bloco de texto) -- devolve conteudo="" em vez
+    de lançar, nos dois canais."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"content": []})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
 
-    assert resultado == ""
+    assert gerar_mensagem_abordagem(LEAD_BASE, canal="email", client=client).conteudo == ""
+    assert gerar_mensagem_abordagem(LEAD_BASE, canal="whatsapp", client=client).conteudo == ""
 
 
 def test_gera_mensagem_erro_http_nao_quebra():
     """Diferente de inferir_dados_site, erro HTTP aqui NÃO propaga --
-    devolve "" pra rota decidir o que fazer."""
+    devolve conteudo="" pra rota decidir o que fazer."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="whatsapp", client=client)
 
-    assert resultado == ""
+    assert resultado.conteudo == ""
 
 
 def test_gera_mensagem_erro_de_rede_nao_quebra():
@@ -252,6 +299,6 @@ def test_gera_mensagem_erro_de_rede_nao_quebra():
         raise httpx.ConnectError("conexão recusada", request=request)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    resultado = gerar_mensagem_abordagem(LEAD_BASE, client=client)
+    resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="email", client=client)
 
-    assert resultado == ""
+    assert resultado.conteudo == ""

@@ -15,6 +15,22 @@ export interface ScoreDetalhes {
   breakdown: ScoreBreakdownItem[];
 }
 
+/** Mesmo shape de LeadMessageRead em app/schemas/lead_message.py --
+ * uma mensagem de abordagem gerada, já persistida (uma linha de
+ * histórico por canal em LeadMessage). `canal` tipado como união
+ * literal porque é o mesmo conjunto fechado de CanalMensagem no
+ * backend (app/models/lead_message.py) -- Instagram de propósito fora. */
+export type CanalAbordagem = "email" | "whatsapp";
+
+export interface LeadMessage {
+  id: string;
+  lead_id: string;
+  canal: CanalAbordagem;
+  conteudo: string;
+  assunto?: string | null;
+  gerado_em: string;
+}
+
 export interface Lead {
   id: string;
   cnpj: string;
@@ -114,8 +130,15 @@ export async function fetchLead(token: string, leadId: string): Promise<Lead> {
   return res.json();
 }
 
-export async function gerarAbordagem(token: string, leadId: string): Promise<Lead> {
-  const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-abordagem`, {
+export async function fetchMensagens(token: string, leadId: string): Promise<LeadMessage[]> {
+  const res = await fetch(`${API_URL}/api/leads/${leadId}/mensagens`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function gerarAbordagemCanal(token: string, leadId: string, canal: CanalAbordagem): Promise<LeadMessage> {
+  const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-abordagem/${canal}`, {
     method: "POST",
     headers: authHeaders(token),
   });

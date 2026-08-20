@@ -72,7 +72,7 @@ backend/app/
   api/deps.py     auth dependencies (get_current_user, require_admin)
   core/           settings (Pydantic BaseSettings from .env) + SQLAlchemy engine/session
                   + security.py (password hashing, JWT)
-  models/         SQLAlchemy models (Lead, User)
+  models/         SQLAlchemy models (Lead, LeadMessage, User)
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
   services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
@@ -1032,15 +1032,200 @@ Firecrawl are all marked "not tested against the real API" because
 *this development sandbox* blocks authenticated outbound network calls
 (see "Network access from Bash is blocked in this sandbox" above) —
 that limitation is about where the code was *written*, not where it
-*runs*. `POST /api/leads/{lead_id}/gerar-abordagem` is called by the
-end user's own browser against the real deployed backend, which holds
-the production `ANTHROPIC_API_KEY` — clicking "Gerar mensagem com IA"
-in the actual dossier screen **is** the live validation, performed by
-someone who already has legitimate access to that key. Don't add a
-"pending validation" caveat for this endpoint in README/CLAUDE.md the
-way the other integrations have one; if the user reports the button
+*runs*. Clicking "Gerar mensagem com IA" in the actual dossier screen
+**is** the live validation, performed by someone who already has
+legitimate access to the production `ANTHROPIC_API_KEY` — this
+principle still holds after the follow-up session below, it's just a
+different endpoint now doing the calling. Don't add a "pending
+validation" caveat for approach-message generation in README/CLAUDE.md
+the way the other integrations have one; if the user reports a button
 doesn't work, that's a real bug report against a live call, not a
 "still needs testing" gap.
+
+**⚠️ Superseded by the follow-up session below (same day)**:
+`POST /api/leads/{lead_id}/gerar-abordagem` (no `{canal}` segment) and
+writing to `Lead.mensagem_abordagem` — both described above — **no
+longer exist in the code**. Replaced by a per-channel endpoint and a
+`LeadMessage` history table; see "Multi-channel suggested approach"
+immediately below. `Lead.mensagem_abordagem` itself is still a column
+(deprecated, old data preserved), but the route that wrote to it was
+deleted outright, not kept as a compatibility shim — its underlying
+`gerar_mensagem_abordagem(dict)` signature doesn't exist anymore either
+(now requires `canal`), so keeping the old route would have meant
+either breaking it or forking the prompt logic. Everything above this
+box is accurate as a record of what that session built; just don't
+treat the endpoint path as currently live.
+
+### Multi-channel suggested approach (`LeadMessage`, email/WhatsApp, follow-up session, 2026-08-20)
+
+Replaces the single generic `mensagem_abordagem` (previous session,
+above) with a proper per-channel history: each generation creates a new
+row, never overwrites, and email/WhatsApp get distinct tone, length,
+and format instead of one generic message reused for both.
+
+**Model** (`app/models/lead_message.py`, new file): `LeadMessage` —
+`id` (uuid), `lead_id` (FK → `leads.id`, indexed — queries always
+filter by it), `canal` (`String(10)`, `CanalMensagem.value` —
+`"email"` | `"whatsapp"`, same plain-string-plus-Python-Enum convention
+as `Lead.kanban_status`/`User.role`), `conteudo` (`Text`, `NOT NULL` —
+the route only ever creates a row once the AI produced something
+non-empty), `assunto` (`Text`, nullable — only the `"email"` channel
+fills it), `gerado_em` (`DateTime`, `default=datetime.utcnow`, no
+`server_default` — same convention as `leads.created_at`/`updated_at`,
+not the `server_default="novo_lead"` pattern `kanban_status` needed for
+backfill). `CanalMensagem(str, Enum)` lives in this same file, not
+`lead.py` — it's specific to messages, not the lead itself.
+**Instagram deliberately excluded** from the enum — explicit
+instruction this session, don't add it without a follow-up request.
+
+**Migration** `c47a9e2b1d05_cria_tabela_lead_messages.py` chains after
+`fbd6142f0632` (mensagem_abordagem/PGFN valor/ajuizado — the head at
+the time). A new **table**, not new columns on `leads` — deliberately,
+since this is a one-to-many relationship (a lead can have many
+generated messages over time) that a single-row-per-lead column
+couldn't represent. Registered in `alembic/env.py`'s model-import list
+(`from app.models import lead, lead_message, user`) alongside the other
+two. **Validated against a real Postgres 16** — same throwaway-cluster
+technique as all four previous migrations (port 5435 this time, short
+socket dir per the now-familiar 107-byte-path lesson): all five
+migrations upgrade cleanly in chain order, `downgrade -1` reverts only
+this one (the FK and everything before it stay intact — verified `leads`
+still has its `mensagem_abordagem`/PGFN columns untouched after the
+downgrade), re-upgrade is clean, and the resulting schema (FK to
+`leads.id`, index on `lead_id`, `conteudo` `NOT NULL`, `assunto`
+nullable) matches the model exactly. Cluster stopped and deleted
+immediately after.
+
+**`app/services/ai_enrichment.py::gerar_mensagem_abordagem`** signature
+changed from `(lead: dict, client=None) -> str` to `(lead: dict, canal:
+str, client=None) -> MensagemGerada` (new dataclass: `conteudo: str`,
+`assunto: str | None = None`) — a **breaking change**, deliberate, not
+maintained alongside a backward-compatible overload. `canal` outside
+`CANAIS_VALIDOS` (`("email", "whatsapp")`) raises `ValueError` — this
+is treated as a programming error (the route validates against
+`CanalMensagem` before ever calling this function), not a case to
+handle gracefully like a bad AI response.
+
+Two prompt templates, built from a shared `_REGRAS_DE_TOM` string (the
+PGFN-consultive-tone instruction — same wording as before, now
+literally shared text instead of duplicated) via `.format()` at
+*module load time*, not per-call:
+- `PROMPT_ABORDAGEM_EMAIL_TEMPLATE` — 3-4 sentences, formal, asks for
+  JSON (`{"assunto": ..., "corpo": ...}`), parsed with `_extrair_json`
+  (the same tolerant-to-markdown-wrapping helper `inferir_dados_site`
+  uses — moved earlier in the file, right after `_get_client`, so both
+  functions can reach it without relying on Python's late name
+  resolution to paper over a forward reference; purely cosmetic, no
+  behavior change).
+- `PROMPT_ABORDAGEM_WHATSAPP_TEMPLATE` — 1-2 sentences, casual, plain
+  text response (no JSON) — same shape `gerar_mensagem_abordagem`
+  already used for the single-channel version.
+
+**Double-`.format()` gotcha worth knowing if you touch these
+templates**: both are built as `"""...""".format(regras_de_tom=...)` at
+import time, but still need `{dados_lead}` to survive that call
+un-substituted for the *second*, per-request `.format(dados_lead=...)`
+in `gerar_mensagem_abordagem`. That's why the source has `{{dados_lead}}`
+(doubled braces) and the JSON block in the email template has
+`{{{{`/`}}}}` (quadrupled) — each doubling survives exactly one
+`.format()` pass. Verified empirically this session
+(`PROMPT_ABORDAGEM_EMAIL_TEMPLATE.format(dados_lead=...)` printed and
+eyeballed) after getting the brace count right on the first try but not
+trusting it blindly — get this wrong and it's a `KeyError` at import
+time (module fails to load at all), not a subtle runtime bug, so it's
+at least a loud failure if a future edit miscounts the braces.
+
+Both endpoints below build the `dict` passed to `gerar_mensagem_abordagem`
+via a new shared helper, `_montar_dados_lead(lead: Lead) -> dict`, in
+`app/api/routes/leads.py` — the exact same field list the old single
+endpoint used to build inline; only route to call it is `gerar_abordagem`
+now, but keeping it as a named function avoids the list getting
+silently forked if a third endpoint needs it later.
+
+**`POST /api/leads/{lead_id}/gerar-abordagem/{canal}`** (`get_current_user`,
+same protection as the rest of the leads routes) — 422 for a `canal`
+outside `CanalMensagem`'s values, 404 if the lead doesn't exist, 502
+(without creating any row) if `gerar_mensagem_abordagem` returns an
+empty `conteudo`. On success, **always creates a new `LeadMessage`** —
+this route never does an `UPDATE`, that's the whole point of the
+history model. `response_model=LeadMessageRead`
+(`app/schemas/lead_message.py`, new file, mirrors the
+one-schema-file-per-model convention `app/schemas/lead.py` already
+established).
+
+**`GET /api/leads/{lead_id}/mensagens`** (same protection) — 404 if the
+lead doesn't exist, otherwise the *most recent* `LeadMessage` per
+channel (never the full history — that stays queryable directly against
+the table if a future session needs it, just not through this route).
+Implemented by fetching all of a lead's messages ordered by
+`gerado_em.desc()` and taking the first one seen per `canal` in Python
+(`dict.setdefault`), not a `DISTINCT ON`/window-function query —
+deliberately simple, since Postgres-only `DISTINCT ON` would also break
+the SQLite test suite, and the realistic row count per lead (at most a
+few dozen across two channels) makes the Python-side approach's
+O(n) scan a non-issue.
+
+**Frontend (`LeadDossierPage.tsx`, only `SecaoAbordagem` and its
+children touched)**:
+- `SecaoAbordagem` now fetches `GET /mensagens` in parallel with `GET
+  /leads/{id}` (`Promise.all` in the page's main `useEffect`, both
+  results land together) instead of relying on `lead.mensagem_abordagem`
+  — the page's `mensagens: LeadMessage[]` state holds at most one entry
+  per channel (`registrarNovaMensagem` replaces-not-appends by `canal`
+  on every successful generation), matching what the backend's `GET
+  /mensagens` already guarantees, so the frontend never has to
+  reconcile a real history client-side.
+- Channel visibility: the "E-mail" card renders only if `lead.email` is
+  truthy; "WhatsApp" only if `lead.whatsapp_ativo === true` (**not**
+  just having a phone number — same reasoning as `CampoWhatsapp`
+  elsewhere on this page: generating a message for a number nobody's
+  confirmed has WhatsApp doesn't make sense). If neither channel is
+  available, the section renders a single explanatory line instead of
+  two empty cards. Instagram never appears here, matching the backend's
+  `CanalMensagem` enum not having a third value.
+- Each channel is its own `CanalAbordagemCard`, self-contained
+  (`gerando`/`erro` local state, `useAuth()` directly) — same
+  self-contained-subcomponent pattern as `CampoEmail`'s copy button.
+  Empty state: "Gerar mensagem com IA". Populated state: the
+  message (plus `assunto` line, email only) with "Gerar novamente"
+  below it. A request error renders under the button without clearing
+  whatever was already showing — same "always leave a next action"
+  principle as the single-channel version had.
+- **Channel-specific action buttons**, both `encodeURIComponent`-encoded
+  (handles accented characters and line breaks correctly — a raw
+  template-literal URL would break on either):
+  - Email: `mailto:{email}?subject={assunto}&body={conteudo}` — an
+    ordinary link (`<a href="mailto:...">`), no `target="_blank"` since
+    `mailto:` links don't open a browser tab, they hand off to whatever
+    mail client is registered.
+  - WhatsApp: `https://wa.me/{numero}?text={conteudo}` (`target="_blank"`,
+    `numero` from the same `formatarNumeroWhatsapp` helper — see "Lead
+    dossier enrichment" above — used by the unrelated "Abrir WhatsApp"
+    quick-action link in the Contato card). **These are two different
+    buttons with two different purposes**: the Contato card's "Abrir
+    WhatsApp" opens an empty conversation regardless of any generated
+    message; this section's "Enviar mensagem gerada" pre-fills the
+    `text` param with the specific `LeadMessage.conteudo` just
+    generated. Don't merge them — they answer different questions ("do
+    I have a way to reach this lead on WhatsApp at all" vs. "send this
+    specific AI-drafted message").
+- `api.ts`: old single-canal `gerarAbordagem(token, leadId): Promise<Lead>`
+  removed outright (the backend route it called no longer exists) and
+  replaced with `fetchMensagens(token, leadId): Promise<LeadMessage[]>`
+  and `gerarAbordagemCanal(token, leadId, canal): Promise<LeadMessage>`.
+  `Lead.mensagem_abordagem` stays in the TS `Lead` interface (the
+  backend schema still returns it, deprecated-but-present) but nothing
+  reads it anymore.
+- Same standing sandbox limitation as every other frontend screen —
+  not tested in an actual browser; validated via `tsc -b`, `npm run
+  build`, `npm run lint`, `npm run test` (unchanged: this session didn't
+  add new frontend unit tests, since the changed logic — channel
+  visibility, mailto/wa.me URL construction — is straightforward JSX/
+  string-templating without the kind of subtle heuristic
+  (`getScoreBreakdown`, `formatarNumeroWhatsapp`) that earned
+  `leadScore.test.ts`/`format.test.ts` their own pure-function tests in
+  prior sessions; reconsider if a bug report ever traces back to this
+  section).
 
 ### Migrations (`backend/alembic/`)
 
@@ -1118,6 +1303,20 @@ lesson above): all four migrations upgrade in chain order, `downgrade
 model exactly (all three columns nullable, no default — unlike
 `kanban_status`, `NULL` is already the correct value here, no backfill
 needed). Cluster stopped and deleted immediately after.
+
+A **fifth** migration was added 2026-08-20 (same day, a further
+follow-up session): `c47a9e2b1d05_cria_tabela_lead_messages.py`
+(`down_revision="fbd6142f0632"`, creates the `lead_messages` table for
+`LeadMessage` — see "Multi-channel suggested approach" above). Unlike
+the previous three, this one creates a **new table** rather than adding
+columns to `leads` (one-to-many: a lead can have many generated
+messages). Same throwaway-cluster validation (port 5435, short socket
+dir): all five migrations upgrade cleanly in chain order, `downgrade
+-1` reverts only this one (confirmed `leads`' own columns from the
+fourth migration are untouched after), re-upgrade is clean, schema
+(FK to `leads.id`, index on `lead_id`, `conteudo` `NOT NULL`, `assunto`
+nullable) matches the model exactly. Cluster stopped and deleted
+immediately after.
 
 ### Deployment note (EasyPanel)
 
