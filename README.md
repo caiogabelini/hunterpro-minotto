@@ -536,6 +536,21 @@ interno do Docker.
     build`/`npm run lint`/`npm run test` confirmam que nada quebrou
     tecnicamente (TypeScript, lint, os 12 testes de `vitest` já
     existentes), não que o resultado visual está correto.
+- ✅ **Bugfix: campos de login com fundo branco do navegador** —
+  exatamente o tipo de problema que a ressalva acima ("sem validação
+  visual real") previa; reportado pelo usuário ao olhar a tela de
+  verdade. Os `<input>` de e-mail/senha usavam um fundo translúcido
+  (`rgba(0,0,0,0.25)`) que o autofill do Chrome simplesmente ignora —
+  ele pinta um fundo branco/amarelo próprio em campo autofilled, não
+  respeitando `background`/`color` do CSS. Corrigido com uma cor sólida
+  nova, `--bg-elevated` (`index.css`), e o override específico de
+  autofill em `LoginPage.css` (`input:-webkit-autofill` com
+  `box-shadow` inset gigante + `-webkit-text-fill-color`, mais
+  `input:autofill` pro Firefox). `color-scheme: dark` também adicionado
+  globalmente. Escopo só na tela de Login, único lugar com `<input>`
+  (o campo do modal de "motivo da perda" é um `<textarea>`, não afetado
+  por esse comportamento de autofill). Ver CLAUDE.md "Visual polish
+  pass" pro detalhe completo do porquê de cada peça da correção.
 - ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 

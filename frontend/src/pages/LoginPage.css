@@ -66,20 +66,58 @@
 }
 
 .login-field input {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-elevated);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   padding: 11px 13px;
   font-size: 14px;
   color: #fff;
+  caret-color: var(--gold);
   font-family: var(--font-body);
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.login-field input::placeholder {
+  color: var(--gray);
 }
 
 .login-field input:focus {
   outline: none;
   border-color: var(--gold);
   box-shadow: 0 0 0 3px rgba(245, 200, 66, 0.14);
+}
+
+/* Override do autofill do Chrome/Edge/Safari (WebKit) -- por padrão o
+   navegador ignora `background`/`color` num campo autofilled e pinta um
+   fundo branco/amarelo próprio, que não dá pra sobrescrever com essas
+   duas propriedades direto. O truque é um `box-shadow` inset gigante
+   (cobre todo o campo) com a MESMA cor sólida de --bg-elevated, mais
+   `-webkit-text-fill-color` (não `color`) pro texto -- WebKit ignora
+   `color` em campo autofilled, mas respeita essa propriedade específica.
+   `transition` bem longa no background-color atrasa o flash de branco
+   que o Chrome aplica no instante do autofill, antes do CSS "vencer". */
+.login-field input:-webkit-autofill,
+.login-field input:-webkit-autofill:hover,
+.login-field input:-webkit-autofill:focus,
+.login-field input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px var(--bg-elevated) inset;
+  box-shadow: 0 0 0 1000px var(--bg-elevated) inset;
+  -webkit-text-fill-color: #fff;
+  caret-color: var(--gold);
+  transition: background-color 9999s ease-in-out 0s, box-shadow 9999s ease-in-out 0s;
+}
+
+.login-field input:-webkit-autofill:focus {
+  border-color: var(--gold);
+}
+
+/* Firefox usa a pseudo-classe `:autofill` (sem prefixo) e, diferente do
+   WebKit, respeita `background-color`/`color` normais aqui -- não
+   precisa do truque do box-shadow, mas precisa da regra mesmo assim
+   (senão o autofill do Firefox também cai no branco padrão dele). */
+.login-field input:autofill {
+  background-color: var(--bg-elevated);
+  color: #fff;
 }
 
 .login-error {

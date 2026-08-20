@@ -7,9 +7,25 @@
   --gold-dim: #c9a227;
   --gray: #6c6f94;
   --bg: #0b0d22;
+  /* Superfície sólida pra campo de formulário (input/textarea) -- tom
+     escuro sólido, não translúcido, propositalmente: o truque de
+     override do autofill do Chrome (ver LoginPage.css) precisa de uma
+     cor sólida no `box-shadow` inset, uma cor com alpha deixaria o
+     fundo branco do autofill vazar nas bordas. Equivale visualmente ao
+     rgba(0,0,0,0.25) sobre --navy-dark já usado nos campos antes desta
+     correção. */
+  --bg-elevated: #141737;
 
   --font-display: "Bebas Neue", "Segoe UI", sans-serif;
   --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Avisa o navegador que a página é escura -- ajuda elementos de UI
+     nativos (scrollbar, dropdown de autocomplete/autofill em alguns
+     navegadores, controles de formulário não estilizados) a já
+     renderizar num esquema escuro por padrão, em vez de claro. Não
+     troca o tema em si (ver aviso em tokens.css) -- só alinha o chrome
+     nativo do navegador com o tema escuro que a página já usa. */
+  color-scheme: dark;
 }
 
 * {

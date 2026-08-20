@@ -1424,6 +1424,55 @@ that confirms TypeScript types, lint rules, and the 12 pre-existing
 that the visual result matches intent. Treat this whole session's
 output as "implemented and self-consistent, pending a real look."
 
+**Follow-up bug found by the user's real look (2026-08-20, same day)**:
+exactly the kind of gap the caveat above predicted. The Login email/
+password `<input>` fields rendered with the browser's native light
+background instead of the dark theme — `.login-field input` had
+`background: rgba(0,0,0,0.25)` (a translucent black over the dark card),
+which is fine for the normal state, but browser-native form-control
+chrome and autofill styling don't reliably respect a translucent
+background, and Chrome's autofill specifically **ignores
+`background`/`color` on `<input>` entirely** once a field is
+autofilled, painting its own white/yellow background no matter what
+CSS is set. Fixed:
+- Added `--bg-elevated: #141737` to `index.css`'s `:root` — a **solid**
+  hex color (not translucent), deliberately: the WebKit autofill
+  override trick (below) paints via `box-shadow` inset, and an
+  alpha-blended color there lets the browser's own autofill background
+  show through at the edges. `#141737` is a solid approximation of what
+  the old `rgba(0,0,0,0.25)` over `--navy-dark` actually rendered as
+  (same visual weight, just baked into one opaque value so it works as
+  an inset-shadow fill too). `.login-field input` now uses this instead
+  of the translucent black.
+- Added `color-scheme: dark` to `:root` (`index.css`) — nudges browser-
+  native UI (scrollbars, unstyled form chrome, some autofill dropdown
+  affordances) toward dark rendering by default, independent of the
+  autofill-specific fix below.
+- The actual autofill fix (`LoginPage.css`): `input:-webkit-autofill`
+  (plus `:hover`/`:focus`/`:active` variants, since Chrome/Safari apply
+  the autofill background per-state and a plain unstated rule doesn't
+  cover all of them) gets `-webkit-box-shadow: 0 0 0 1000px
+  var(--bg-elevated) inset` (a shadow spread wide enough to fill the
+  entire input, functionally replacing the background WebKit refuses to
+  let CSS override directly) plus `-webkit-text-fill-color: #fff` (WebKit
+  also ignores plain `color` on autofilled text — this specific
+  property is the one it respects) and a **very long `transition` on
+  `background-color`/`box-shadow`** (`9999s`) — this is the standard
+  trick to delay/suppress the brief white flash Chrome paints the
+  instant autofill fires, before the CSS above "wins." A separate
+  `input:autofill` rule (unprefixed — Firefox's pseudo-class, which
+  unlike WebKit *does* respect plain `background-color`/`color`, so no
+  box-shadow trick needed there, but the rule still has to exist or
+  Firefox's own default autofill background applies instead).
+- `.login-field input:-webkit-autofill:focus` additionally reasserts
+  `border-color: var(--gold)` — without it, an autofilled-and-focused
+  field would keep whatever border the autofill state left it in
+  instead of showing the normal focus ring.
+- Scoped to `LoginPage.css` only, matching the report — no other screen
+  has a bare `<input>` styled this way (`LossReasonModal`'s field is a
+  `<textarea>`, not subject to browser autofill styling the same way,
+  and wasn't part of the report).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
