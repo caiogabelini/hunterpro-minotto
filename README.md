@@ -28,8 +28,11 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 
 frontend/         React + Vite + TypeScript
   src/
-    api.ts          cliente HTTP pro backend
-    App.tsx          tela inicial (placeholder da tabela de leads)
+    api.ts                cliente HTTP pro backend (leads, login, PATCH status)
+    context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
+    components/           ProtectedRoute, KanbanColumn, KanbanCard, LossReasonModal, PriorityBadge
+    pages/                LoginPage, KanbanPage
+    App.tsx                React Router: /login (público) e / (Kanban, protegida)
 ```
 
 **Deploy (EasyPanel):** backend, worker (Celery) e frontend como **App
@@ -203,9 +206,58 @@ interno do Docker.
   `requirements.txt`. Escopo deliberadamente enxuto — ver "O que falta"
   pro que ficou de fora conscientemente (refresh token, recuperação de
   senha, registro público).
-- ✅ Frontend conecta no backend, mostra status online/offline e uma
-  tabela (vazia até o pipeline popular o banco)
-- ✅ 219 testes automatizados passando (`pytest`)
+- ✅ **Kanban de leads no `Lead`** (`app/models/lead.py::KanbanStatus`) —
+  campo `kanban_status` (string, default `"novo_lead"`, 9 valores fixos
+  de funil) e `motivo_perda` (opcional, só relevante quando
+  `kanban_status == "perdido"`), migration
+  `a3f7c1d92b4e_adiciona_kanban_status_e_motivo_perda.py` (encadeada
+  depois de `6102ef9fc509`/users, escrita à mão como as duas anteriores —
+  **validada contra Postgres 16 real** num cluster temporário e
+  descartável, mesmo padrão das duas migrations anteriores: upgrade
+  encadeado (`leads` → `users` → esta), `downgrade -1` reverte só esta,
+  re-upgrade limpo, schema final de `kanban_status`/`motivo_perda`
+  conferido exato contra `app/models/lead.py`; ver "Migrations" no
+  CLAUDE.md pro relato completo). `PATCH
+  /api/leads/{lead_id}/status` (protegida, qualquer papel) muda a coluna
+  do lead; valida o valor de `kanban_status` contra o enum e exige
+  `motivo_perda` quando o destino é `"perdido"` (422 se faltar). `GET
+  /api/leads` ganhou filtro opcional `kanban_status`. 9 testes novos em
+  `tests/test_leads_routes.py`.
+- ✅ **Primeira tela do frontend: Login + Kanban** — React Router
+  (`/login` público, `/` protegida). Token JWT guardado **só em memória**
+  (`React Context`, `context/AuthContext.tsx`), nunca em
+  `localStorage`/`sessionStorage`/cookie — recarregar a página desloga de
+  propósito, evita o risco de um script malicioso (XSS) ler o token de um
+  storage persistente. `ProtectedRoute` redireciona pro `/login`
+  automaticamente sem token válido. Kanban com as 9 colunas fixas do
+  funil (Novo Lead → ... → Ganho/Perdido, ordem em
+  `src/kanbanStatuses.ts`, espelhando o enum do backend), cada card com
+  razão social, badge de prioridade (A/B/C colorido) e score. Arrastar
+  pra "Perdido" abre um modal pedindo `motivo_perda` antes de confirmar a
+  chamada ao PATCH — nas outras colunas o PATCH dispara direto
+  (otimista, com rollback se a API falhar/401). Biblioteca de
+  drag-and-drop: **`@dnd-kit/core`** (ver justificativa abaixo). Paleta e
+  tipografia da identidade visual do material de apresentação do cliente
+  (navy `#292C5D`, fundo `#0B0D22`, dourado `#F5C842`, Bebas Neue +
+  Inter via Google Fonts) centralizadas em `src/index.css`. `npm run
+  build` e `npm run lint` passam limpos; **não testado num navegador de
+  verdade** — este sandbox não tem acesso de rede/browser pra exercitar
+  o fluxo de login→drag-and-drop manualmente (mesma limitação de rede já
+  registrada nas notas de Google Places/Firecrawl/Anthropic), só
+  validado via `tsc`/build + revisão de código.
+  **Escolha do `@dnd-kit/core`** (não `react-beautiful-dnd`, `react-dnd`
+  nem HTML5 drag-and-drop nativo): `react-beautiful-dnd` está
+  arquivado/sem manutenção desde 2023 (Atlassian descontinuou); `react-dnd`
+  é mais antigo e mais verboso pra um Kanban simples de colunas fixas
+  (precisa configurar backend de HTML5 manualmente, API mais baixo
+  nível); drag-and-drop nativo do HTML5 tem suporte mobile/touch fraco,
+  ruim pra uma ferramenta comercial que pode ser usada em tablet. O
+  `@dnd-kit` é ativamente mantido, sem dependência de `react-dom`
+  legado, tem suporte a touch/teclado de acessibilidade nativo, e a API
+  (`useDraggable`/`useDroppable`/`DndContext`) é pequena o bastante pra
+  um board de 9 colunas sem precisar de virtualização ou reordenação
+  dentro da mesma coluna (não pedido nesta tela).
+- ✅ 228 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -256,8 +308,18 @@ Em ordem de prioridade combinada com o cliente:
     - **Rotas administrativas**: `require_admin` existe e está testado,
       mas não protege nenhuma rota ainda — nenhuma rota admin-only
       foi criada nesta sessão.
-    - Telas do frontend (Kanban, exportação CSV/Excel pedida pela
-      Sulamita) — segue pendente, não é relacionado a auth.
+12. ~~Primeira tela do frontend (Login + Kanban)~~ ✅ feito
+    (20/08/2026) — ver acima. Deliberadamente fora de escopo **desta**
+    sessão, não esquecido (telas seguintes, uma por sessão, validando
+    cada uma antes da próxima):
+    - **Exportação CSV/Excel** (pedida pela Sulamita) — nenhuma tela
+      nem endpoint de export existe ainda.
+    - **Dossiê detalhado do lead** — hoje o card do Kanban só mostra
+      razão social/prioridade/score; não há tela de detalhe por lead
+      (breakdown do score, histórico de enriquecimento, etc.).
+    - **Cadastro de usuário pelo frontend** — continua só via
+      `scripts/create_user.py` (ver item 11 acima); nenhuma tela de
+      admin foi criada.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
@@ -355,6 +417,10 @@ npm install
 cp .env.example .env
 npm run dev
 ```
+
+Pra logar, é preciso ter um usuário criado no backend primeiro (ver
+`python scripts/create_user.py` acima) — não há cadastro público pelo
+frontend, de propósito.
 
 ---
 

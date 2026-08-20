@@ -12,11 +12,28 @@ sessões, seguindo o mesmo padrão do projeto anterior.
 """
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+
+
+class KanbanStatus(str, Enum):
+    """Colunas fixas do quadro Kanban (frontend) — ordem de funil, não
+    ordem alfabética. `motivo_perda` só faz sentido quando o status é
+    PERDIDO (validado na rota, não a nível de banco)."""
+
+    NOVO_LEAD = "novo_lead"
+    QUALIFICACAO = "qualificacao"
+    CONTATADO = "contatado"
+    RESPONDEU = "respondeu"
+    REUNIAO = "reuniao"
+    PROPOSTA_ENVIADA = "proposta_enviada"
+    NEGOCIACAO = "negociacao"
+    GANHO = "ganho"
+    PERDIDO = "perdido"
 
 
 class Lead(Base):
@@ -64,6 +81,10 @@ class Lead(Base):
     score_total: Mapped[float | None] = mapped_column(Float, nullable=True)
     score_detalhes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     prioridade: Mapped[str | None] = mapped_column(String(1), nullable=True)  # A | B | C
+
+    # --- Kanban (pipeline comercial) ---
+    kanban_status: Mapped[str] = mapped_column(String(20), default=KanbanStatus.NOVO_LEAD.value)
+    motivo_perda: Mapped[str | None] = mapped_column(Text, nullable=True)  # só relevante quando kanban_status == "perdido"
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -78,8 +78,12 @@ backend/scripts/  one-off CLI scripts (create_user.py — the only way to create
 backend/tests/    pytest suite, one file per module under test
 
 frontend/src/
-  api.ts          typed HTTP client to the backend (health check + leads fetch)
-  App.tsx         placeholder leads table UI
+  api.ts               typed HTTP client to the backend (health, login, leads, PATCH status)
+  context/AuthContext.tsx  JWT held only in memory (React Context) — see "Frontend: Login + Kanban" below
+  components/          ProtectedRoute, KanbanColumn, KanbanCard, LossReasonModal, PriorityBadge
+  pages/                LoginPage, KanbanPage (+ co-located .css)
+  kanbanStatuses.ts     column order/labels, mirrors app/models/lead.py::KanbanStatus
+  App.tsx               React Router root (/login public, / protected)
 ```
 
 ### Lead scoring engine (`app/scoring/rules.py`)
@@ -607,6 +611,112 @@ test that spins up a `TestClient` against SQLite; `test_process_lead_pipeline.py
 never needed this because it calls task functions directly, never
 through `TestClient`'s threadpool.
 
+### Kanban (`app/models/lead.py::KanbanStatus`, `PATCH /api/leads/{id}/status`)
+
+Added 2026-08-20, alongside the first frontend screen (see below). `Lead`
+gained two columns: `kanban_status` (plain `String(20)`, default
+`KanbanStatus.NOVO_LEAD.value` — same string-enum convention as
+`User.role`/`Lead.prioridade`) and `motivo_perda` (`Text`, nullable,
+only meaningful when `kanban_status == "perdido"`). `KanbanStatus` is a
+9-value `str, Enum` in `app/models/lead.py` (not a separate file) —
+funnel order: `novo_lead → qualificacao → contatado → respondeu →
+reuniao → proposta_enviada → negociacao → ganho → perdido`.
+
+`PATCH /api/leads/{lead_id}/status` (`app/api/routes/leads.py`,
+`get_current_user`, any role — matches `GET /api/leads`'s protection
+level, not admin-only) validates `kanban_status` against
+`KanbanStatus`'s values (422 if not a member) and requires
+`motivo_perda` non-empty when the target is `"perdido"` (422 if
+missing) — both checks happen in the route, not at the DB/model level,
+since the column itself stays nullable (only meaningful in one status).
+Moving a lead *out* of `"perdido"` clears `motivo_perda` back to `None`
+(the route always sets it to `dados.motivo_perda if target ==
+PERDIDO else None`, never leaves a stale reason from a previous loss).
+`GET /api/leads` gained an optional `kanban_status` query filter,
+same pattern as `prioridade`/`zona_franca`. Tests in
+`tests/test_leads_routes.py` (9 new).
+
+Migration `a3f7c1d92b4e_adiciona_kanban_status_e_motivo_perda.py`
+chains after `6102ef9fc509` (users, the head at the time) — also
+hand-written, same reason as the other two (`settings.DATABASE_URL`
+still unreachable). Unlike the `leads`/`users` baseline migrations,
+**this one has not been validated against any real Postgres** (not even
+a throwaway cluster) — only `alembic`'s own upgrade/downgrade logic was
+exercised via the SQLite-backed pytest suite, which doesn't run Alembic
+at all. If a future session wants that extra validation, repeat the
+throwaway-cluster technique described in "Migrations" below.
+`kanban_status` uses `server_default="novo_lead"` (not just the
+model-level Python default) specifically so `upgrade()` backfills
+existing rows instead of leaving them `NULL` on a `NOT NULL` column.
+
+### Frontend: Login + Kanban (`frontend/src/`)
+
+Added 2026-08-20 — the **first** frontend screen, built deliberately
+scoped to just these two (see README "O que falta" item 12 for what was
+left out on purpose: CSV/Excel export, lead detail/dossier screen,
+user registration UI). Screens are being built one at a time, each
+validated before the next — don't preemptively build screens beyond
+what a given session asks for, even if it looks fast.
+
+- **Routing**: `react-router-dom`, `App.tsx` is just the router root —
+  `/login` (public, `LoginPage`) and `/` (`KanbanPage`, wrapped in
+  `ProtectedRoute`). Any unmatched path redirects to `/`.
+- **Auth token storage — deliberately in-memory only**
+  (`context/AuthContext.tsx`, plain `useState` inside a `React.Context`
+  provider): **not** `localStorage`, `sessionStorage`, or a cookie, by
+  explicit user instruction ("evitar problema de segurança básico" — a
+  script running on the page via XSS can't read a token that isn't in
+  any persistent browser storage). Trade-off, worth knowing: a page
+  reload logs the user out (no token survives it) — accepted
+  deliberately for this session, not a bug. `ProtectedRoute` reads
+  `useAuth().isAuthenticated` and redirects to `/login` if there's no
+  token; it does not attempt to refresh or restore a session on reload.
+- **Kanban board** (`pages/KanbanPage.tsx` + `kanbanStatuses.ts`): 9
+  fixed columns, hardcoded order (mirrors `KanbanStatus` — if a value is
+  ever added to the backend enum, add it to `kanbanStatuses.ts` too,
+  nothing keeps them in sync automatically). Cards
+  (`components/KanbanCard.tsx`) show razão social, a colored A/B/C
+  priority badge (`components/PriorityBadge.tsx`), and `score_total`.
+  Dragging into a column other than "Perdido" applies the move
+  optimistically (local state updates immediately, `PATCH` fires in the
+  background, rolled back on failure); dragging into "Perdido" instead
+  opens `components/LossReasonModal.tsx` and only calls `PATCH` (with
+  `motivo_perda`) on confirm — cancelling leaves the card in its
+  original column, since local state was never touched before confirm.
+  A `401` from any Kanban API call (`UnauthorizedError` in `api.ts`)
+  calls `logout()` — the next render falls through `ProtectedRoute` to
+  `/login`, no explicit `navigate()` call needed for that path.
+- **Drag-and-drop: `@dnd-kit/core` + `@dnd-kit/utilities`** — chosen
+  over `react-beautiful-dnd` (archived/unmaintained since Atlassian
+  dropped it in 2023), `react-dnd` (more verbose low-level API, manual
+  HTML5 backend setup, overkill for 9 fixed columns with no
+  within-column reordering), and native HTML5 drag-and-drop (weak
+  mobile/touch support — a real constraint for a commercial tool that
+  might run on a tablet). Full justification is in the README, not
+  duplicated here.
+- **Visual identity** (`src/index.css`, palette + font custom
+  properties consumed by every page/component CSS file): navy
+  `#292C5D`/`#1B1F4A` (dark variant), background `#0B0D22`, gold
+  `#F5C842`/`#C9A227` (dim variant), Bebas Neue (`--font-display`,
+  headings) + Inter (`--font-body`, everything else) loaded via Google
+  Fonts `<link>` tags in `index.html` — matches the client's own
+  presentation-deck identity (referenced by the user, not itself a file
+  in this repo). The old placeholder `App.css` (leads-table demo UI)
+  was deleted — superseded by the Kanban screen, nothing imports it
+  anymore.
+- **Not tested in an actual browser** — this sandbox has no
+  network/browser access to click through login → drag-and-drop
+  manually (same limitation already documented for Google
+  Places/Firecrawl/Anthropic). Validated instead via `tsc -b` (clean
+  compile), `npm run build` (clean production build), `npm run lint`
+  (oxlint, one harmless `react/only-export-components` warning on
+  `AuthContext.tsx` for co-locating the `useAuth` hook with the
+  provider — accepted, common pattern), and code review of the
+  drag/rollback/modal logic. If a future session has real browser
+  access, exercising the actual login → drag → drop-into-Perdido flow
+  is the natural next validation step before trusting this UI in
+  front of the client.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -645,6 +755,32 @@ Postgres reachable some other way.
 a future `--autogenerate` run (once the real DB is reachable) picks up
 both — and, per the above, would now correctly recognize the schema as
 already up to date rather than trying to create `leads` a second time.
+
+A **third** migration was added 2026-08-20 (same day, later session):
+`a3f7c1d92b4e_adiciona_kanban_status_e_motivo_perda.py`
+(`down_revision="6102ef9fc509"`, adds `Lead.kanban_status`/
+`Lead.motivo_perda` — see "Kanban" above). Also hand-written for the
+same `DATABASE_URL`-unreachable reason. **Now validated against a real
+Postgres 16** too (same session, later request): another throwaway
+cluster was provisioned (`initdb`/`pg_ctl`, own data dir under the
+scratchpad, port 5433, Unix socket only) — one snag worth knowing for
+next time: the socket directory can't live inside the deep
+scratchpad path (`/tmp/claude-<uid>/-<project>/<session-uuid>/scratchpad/...`)
+because Postgres's Unix-socket path has a hard 107-byte limit and that
+path exceeds it (`could not create any Unix-domain sockets`) — the fix
+was to put just the socket dir under a short `mktemp -d /tmp/pgsock_kb.XXXXXX`
+while keeping the actual data dir in the scratchpad. Confirmed: `alembic
+upgrade head` applies all three migrations in the correct chained order
+(`leads` → `users` → this one), `alembic downgrade -1` reverts only this
+one (back to the `users` revision, `leads`/`users` tables and their
+indexes untouched), `alembic upgrade head` re-applies cleanly, and the
+resulting `leads.kanban_status`/`leads.motivo_perda` columns
+(`character varying(20) NOT NULL DEFAULT 'novo_lead'` /
+nullable `text`) match `app/models/lead.py` exactly, both before and
+after the downgrade/re-upgrade round-trip. Cluster stopped and its data
+dir + socket dir fully deleted immediately after — same
+not-the-project's-real-`DATABASE_URL` caveat as the other two
+migrations still applies.
 
 ### Deployment note (EasyPanel)
 

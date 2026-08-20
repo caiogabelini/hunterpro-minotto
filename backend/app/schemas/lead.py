@@ -22,4 +22,11 @@ class LeadRead(BaseModel):
     score_total: float | None = None
     score_detalhes: dict | None = None
     prioridade: str | None = None
+    kanban_status: str
+    motivo_perda: str | None = None
     created_at: datetime
+
+
+class LeadStatusUpdate(BaseModel):
+    kanban_status: str
+    motivo_perda: str | None = None
