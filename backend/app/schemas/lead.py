@@ -41,6 +41,8 @@ class LeadRead(BaseModel):
     kanban_status: str
     motivo_perda: str | None = None
     mensagem_abordagem: str | None = None
+    insights_ia: dict | None = None
+    insights_gerado_em: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

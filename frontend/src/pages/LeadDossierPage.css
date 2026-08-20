@@ -833,3 +833,155 @@
   color: var(--gold);
   white-space: nowrap;
 }
+
+/* Aba "Insights" -- análise estratégica gerada sob demanda. Cabeçalho
+   com o botão "Gerar novamente" alinhado à direita de
+   `.dossier-section-heading` (justamente por isso `.dossier-card` não
+   dá margin-bottom no heading aqui, ver `.dossier-insights-header`
+   sobrescrevendo). Resto do card segue o mesmo empilhamento vertical dos
+   outros blocos da aba "Análise IA" (`.dossier-subheading` reaproveitado
+   pros títulos internos). */
+.dossier-insights-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.dossier-insights-header .dossier-section-heading {
+  margin-bottom: 0;
+}
+
+.dossier-insights-data {
+  font-size: 12px;
+  color: var(--gray);
+  margin: var(--space-2) 0 0;
+}
+
+/* Resumo estratégico "em destaque no topo" (pedido explícito) -- fonte
+   maior e cor branca cheia, não o cinza discreto de `.dossier-muted`,
+   pra funcionar como a primeira coisa que o olho lê na aba. */
+.dossier-insights-resumo {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #fff;
+  margin: var(--space-4) 0 0;
+}
+
+.dossier-insights-potencial {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.dossier-insights-potencial-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--gray);
+}
+
+/* Badge de potencial_oportunidade -- verde/dourado/cinza, mesma
+   linguagem de cor de `.indicador-on`/`.rqe-alta-confianca`/
+   `.layer-estruturado` já usadas no resto do dossiê (verde = sinal forte,
+   dourado = sinal médio/de atenção, cinza = sinal fraco ou desconhecido).
+   "Médio" reaproveita a cor dourada (`--gold`) em vez de introduzir um
+   amarelo separado -- a paleta do projeto é navy/dourado e o dourado já
+   lê como "atenção/médio" em outros badges desta tela (ex.:
+   rqe-inferencia). */
+.dossier-potencial-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 5px 14px;
+}
+
+.potencial-alto {
+  background: rgba(124, 215, 156, 0.18);
+  color: #8ee6ab;
+  border: 1px solid rgba(124, 215, 156, 0.4);
+}
+
+.potencial-medio {
+  background: rgba(245, 200, 66, 0.16);
+  color: var(--gold);
+  border: 1px solid rgba(245, 200, 66, 0.35);
+}
+
+.potencial-baixo,
+.potencial-desconhecido {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--gray);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.dossier-insights-bloco {
+  margin-top: var(--space-6);
+}
+
+.dossier-insights-recomendacao-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dossier-insights-recomendacao-lista li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 14px;
+  color: #fff;
+  line-height: 1.5;
+}
+
+.dossier-insights-recomendacao-lista li svg {
+  flex-shrink: 0;
+  color: #8ee6ab;
+  margin-top: 3px;
+}
+
+.dossier-insights-texto {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #fff;
+  margin: 0;
+}
+
+/* CTA sugerido -- "card destacado, fundo diferenciado, como um call to
+   action visual" (pedido explícito). Reaproveita o dourado cheio dos
+   botões de ação primários (`.dossier-abordagem-btn-acao`) como fundo do
+   CARD inteiro, não só de um botão -- é o único bloco desta tela com
+   fundo dourado sólido, de propósito, pra destoar visualmente de todo o
+   resto (cards escuros com texto branco) e ler como "isto é uma ação a
+   tomar", não mais um dado informativo. */
+.dossier-insights-cta {
+  margin-top: var(--space-6);
+  background: var(--gold);
+  border-radius: 12px;
+  padding: var(--space-4) var(--space-5);
+}
+
+.dossier-insights-cta-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(27, 31, 74, 0.7);
+  margin-bottom: 4px;
+}
+
+.dossier-insights-cta-texto {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--navy-dark);
+  margin: 0;
+  line-height: 1.5;
+}

@@ -333,6 +333,140 @@ def test_gerar_abordagem_sem_token_retorna_401(client, db_session):
     assert resp.status_code == 401
 
 
+# --- POST /api/leads/{lead_id}/gerar-insights ---
+#
+# `gerar_insights_estrategicos` (a chamada real à Anthropic) é mockada
+# aqui via monkeypatch no módulo da rota, mesmo padrão de
+# gerar_mensagem_abordagem acima -- o contrato da própria função (prompt/
+# parsing/tratamento de erro) já é coberto em tests/test_ai_enrichment.py.
+
+
+_INSIGHTS_GERADOS = {
+    "resumo_estrategico": "Lead com bom potencial, RQE confirmado e boa presença digital.",
+    "potencial_oportunidade": "alto",
+    "recomendacao_abordagem": ["Mencionar o rating no Google", "Focar em WhatsApp"],
+    "estrategia_comunicacao": "Tom consultivo, direto ao ponto.",
+    "cta_sugerido": "Podemos conversar 15 minutos essa semana?",
+}
+
+
+def test_gerar_insights_com_sucesso_persiste_e_retorna_lead(client, db_session, token, monkeypatch):
+    lead = _criar_lead(db_session, razao_social="Clínica Exemplo")
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_insights_estrategicos",
+        lambda dados_lead: dict(_INSIGHTS_GERADOS),
+    )
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-insights", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["insights_ia"] == _INSIGHTS_GERADOS
+    assert corpo["insights_gerado_em"] is not None
+
+    db_session.refresh(lead)
+    assert lead.insights_ia == _INSIGHTS_GERADOS
+    assert lead.insights_gerado_em is not None
+
+
+def test_gerar_insights_regenerar_sobrescreve_o_anterior(client, db_session, token, monkeypatch):
+    """Diferente de LeadMessage (histórico completo), insights_ia não
+    guarda histórico -- "Gerar novamente" sobrescreve o valor anterior."""
+    lead = _criar_lead(db_session, insights_ia={"resumo_estrategico": "Antigo"}, insights_gerado_em=datetime(2026, 1, 1))
+    monkeypatch.setattr(
+        "app.api.routes.leads.gerar_insights_estrategicos",
+        lambda dados_lead: dict(_INSIGHTS_GERADOS),
+    )
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-insights", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["insights_ia"] == _INSIGHTS_GERADOS
+    assert corpo["insights_gerado_em"] != "2026-01-01T00:00:00"
+
+
+def test_gerar_insights_passa_dados_completos_do_lead(client, db_session, token, monkeypatch):
+    """Confirma que a rota alimenta gerar_insights_estrategicos com o
+    contexto rico (score, PGFN, presença digital etc.), não só o
+    subconjunto usado por gerar_mensagem_abordagem."""
+    lead = _criar_lead(
+        db_session,
+        score_total=82.0,
+        prioridade="A",
+        divida_ativa_qtd_inscricoes=1,
+        site="https://clinica.com.br",
+        anos_mercado=9,
+    )
+    dados_recebidos = {}
+
+    def fake(dados_lead):
+        dados_recebidos.update(dados_lead)
+        return dict(_INSIGHTS_GERADOS)
+
+    monkeypatch.setattr("app.api.routes.leads.gerar_insights_estrategicos", fake)
+
+    client.post(f"/api/leads/{lead.id}/gerar-insights", headers={"Authorization": f"Bearer {token}"})
+
+    assert dados_recebidos["score_total"] == 82.0
+    assert dados_recebidos["prioridade"] == "A"
+    assert dados_recebidos["divida_ativa_qtd_inscricoes"] == 1
+    assert dados_recebidos["site"] == "https://clinica.com.br"
+    assert dados_recebidos["anos_mercado"] == 9
+
+
+def test_gerar_insights_lead_inexistente_retorna_404(client, token):
+    resp = client.post("/api/leads/id-que-nao-existe/gerar-insights", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+
+
+def test_gerar_insights_resposta_vazia_da_ia_retorna_502_sem_persistir(client, db_session, token, monkeypatch):
+    """gerar_insights_estrategicos nunca lança -- devolve {} em erro/
+    resposta malformada (ver test_ai_enrichment.py). A rota trata isso
+    como 502, sem sobrescrever insights_ia no banco."""
+    lead = _criar_lead(db_session)
+    monkeypatch.setattr("app.api.routes.leads.gerar_insights_estrategicos", lambda dados_lead: {})
+
+    resp = client.post(f"/api/leads/{lead.id}/gerar-insights", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 502
+    db_session.refresh(lead)
+    assert lead.insights_ia is None
+    assert lead.insights_gerado_em is None
+
+
+def test_gerar_insights_sem_token_retorna_401(client, db_session):
+    lead = _criar_lead(db_session)
+    resp = client.post(f"/api/leads/{lead.id}/gerar-insights")
+    assert resp.status_code == 401
+
+
+def test_get_lead_expoe_insights_ia_e_insights_gerado_em(client, db_session, token):
+    lead = _criar_lead(
+        db_session,
+        insights_ia=dict(_INSIGHTS_GERADOS),
+        insights_gerado_em=datetime(2026, 8, 20, 12, 0, 0),
+    )
+
+    resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["insights_ia"] == _INSIGHTS_GERADOS
+    assert corpo["insights_gerado_em"] is not None
+
+
+def test_get_lead_sem_insights_gerados_retorna_null(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.get(f"/api/leads/{lead.id}", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["insights_ia"] is None
+    assert corpo["insights_gerado_em"] is None
+
+
 # --- GET /api/leads/{lead_id}/mensagens ---
 
 

@@ -9,7 +9,12 @@ import json
 import httpx
 import pytest
 
-from app.services.ai_enrichment import ANTHROPIC_MODEL, gerar_mensagem_abordagem, inferir_dados_site
+from app.services.ai_enrichment import (
+    ANTHROPIC_MODEL,
+    gerar_insights_estrategicos,
+    gerar_mensagem_abordagem,
+    inferir_dados_site,
+)
 
 TEXTO_COM_RQE = "Somos especialistas em cardiologia. RQE 98765. Atendemos com hora marcada."
 TEXTO_SEM_RQE = "Clínica geral, atendimento de segunda a sexta."
@@ -302,3 +307,160 @@ def test_gera_mensagem_erro_de_rede_nao_quebra():
     resultado = gerar_mensagem_abordagem(LEAD_BASE, canal="email", client=client)
 
     assert resultado.conteudo == ""
+
+
+# --- gerar_insights_estrategicos ---
+
+
+LEAD_INSIGHTS_COMPLETO = {
+    "razao_social": "Clínica Exemplo Ltda",
+    "decisor_nome": "Dr. Fulano",
+    "municipio": "São Paulo",
+    "uf": "SP",
+    "anos_mercado": 12,
+    "situacao_cadastral": "ATIVA",
+    "score_total": 78.5,
+    "prioridade": "A",
+    "score_detalhes": {
+        "breakdown": [
+            {"key": "rqe_especialista", "label": "RQE / Especialista", "weight": 20, "points": 20, "layer": "estruturado"},
+        ]
+    },
+    "divida_ativa_qtd_inscricoes": 2,
+    "divida_ativa_valor_total": 15000.0,
+    "divida_ativa_ajuizado": True,
+    "zona_franca": False,
+    "rqe_confirmado": True,
+    "rqe_fonte": "cnes",
+    "site": "https://clinica.exemplo.com.br",
+    "instagram": None,
+    "google_rating": 4.7,
+    "google_avaliacoes": 150,
+}
+
+
+def _insights_ia_json(**overrides) -> str:
+    base = {
+        "resumo_estrategico": "Lead forte, com RQE confirmado via CNES e boa presença digital.",
+        "potencial_oportunidade": "alto",
+        "recomendacao_abordagem": ["Mencionar a revisão financeira", "Elogiar o rating no Google"],
+        "estrategia_comunicacao": "Tom consultivo, focado em oportunidade.",
+        "cta_sugerido": "Podemos conversar 15 minutos essa semana?",
+    }
+    base.update(overrides)
+    return json.dumps(base)
+
+
+def test_gera_insights_com_sucesso():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/messages"
+        corpo = json.loads(request.content)
+        assert corpo["model"] == ANTHROPIC_MODEL
+        prompt = corpo["messages"][0]["content"]
+        assert "Clínica Exemplo Ltda" in prompt
+        assert "Dr. Fulano" in prompt
+        assert "78.5/100" in prompt
+        assert "RQE / Especialista: 20/20 pontos" in prompt
+        assert "2 inscrição" in prompt
+        assert "tom consultivo" in prompt
+        return httpx.Response(200, json=_resposta_anthropic(_insights_ia_json()))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado["resumo_estrategico"] == "Lead forte, com RQE confirmado via CNES e boa presença digital."
+    assert resultado["potencial_oportunidade"] == "alto"
+    assert resultado["recomendacao_abordagem"] == ["Mencionar a revisão financeira", "Elogiar o rating no Google"]
+    assert resultado["estrategia_comunicacao"] == "Tom consultivo, focado em oportunidade."
+    assert resultado["cta_sugerido"] == "Podemos conversar 15 minutos essa semana?"
+
+
+def test_gera_insights_normaliza_potencial_oportunidade():
+    """Maiúscula/espaço na resposta da IA não deve vazar pro frontend --
+    normalizado (strip + lowercase), mesmo se a IA responder "Alto "."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_resposta_anthropic(_insights_ia_json(potencial_oportunidade=" Médio ")))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado["potencial_oportunidade"] == "médio"
+
+
+def test_gera_insights_limita_recomendacao_a_tres_itens():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_resposta_anthropic(_insights_ia_json(recomendacao_abordagem=[f"Recomendação {i}" for i in range(6)])),
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert len(resultado["recomendacao_abordagem"]) == 3
+
+
+def test_gera_insights_resposta_nao_e_json_devolve_dict_vazio():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_resposta_anthropic("Desculpe, não consegui analisar esse lead."))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado == {}
+
+
+def test_gera_insights_json_com_sintaxe_invalida_devolve_dict_vazio():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_resposta_anthropic('{"resumo_estrategico": [invalido]}'))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado == {}
+
+
+def test_gera_insights_resposta_vazia_devolve_dict_vazio():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"content": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado == {}
+
+
+def test_gera_insights_erro_http_nao_quebra():
+    """Mesmo padrão defensivo de gerar_mensagem_abordagem -- erro HTTP
+    NÃO propaga, devolve {} pra rota decidir o que fazer."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado == {}
+
+
+def test_gera_insights_erro_de_rede_nao_quebra():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("conexão recusada", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos(LEAD_INSIGHTS_COMPLETO, client=client)
+
+    assert resultado == {}
+
+
+def test_gera_insights_com_lead_minimo_nao_quebra():
+    """Lead só com razao_social (sem score, sem PGFN, sem presença
+    digital) -- contexto reduzido, mas não deve lançar."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        assert "nenhuma confirmada" in prompt  # presença digital vazia
+        return httpx.Response(200, json=_resposta_anthropic(_insights_ia_json()))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    resultado = gerar_insights_estrategicos({"razao_social": "Clínica Mínima"}, client=client)
+
+    assert resultado["potencial_oportunidade"] == "alto"

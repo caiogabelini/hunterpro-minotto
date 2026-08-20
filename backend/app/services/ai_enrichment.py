@@ -72,6 +72,22 @@ validada de verdade pelo usuário final através da própria tela do
 dossiê** (os botões "Gerar mensagem com IA" por canal), já que ele
 acessa o sistema com a `ANTHROPIC_API_KEY` real configurada no ambiente
 de produção — não fica pendente de validação como `inferir_dados_site`.
+
+`gerar_insights_estrategicos` (adicionada 20/08/2026) alimenta a aba
+"Insights" do dossiê — uma análise estratégica de 5 campos
+(`resumo_estrategico`, `potencial_oportunidade`, `recomendacao_abordagem`,
+`estrategia_comunicacao`, `cta_sugerido`) gerada sob demanda, mesmo botão
+"Gerar"/"Gerar novamente" já usado pra abordagem. Diferente de
+`_montar_contexto_lead` (usada por `gerar_mensagem_abordagem`, que só
+lista um subconjunto de sinais pra não distrair o redator de um
+e-mail/WhatsApp curto), esta função usa `_montar_contexto_lead_insights`
+— contexto bem mais completo (score total, breakdown por critério,
+presença digital, anos de mercado, Zona Franca etc.), já que o propósito
+aqui é justamente apontar o que está mais forte/fraco *neste* lead
+específico. Mesmo padrão defensivo de `gerar_mensagem_abordagem`
+(chamada direto de dentro de um handler HTTP): nunca lança em erro de
+rede/HTTP nem em resposta malformada, devolve `{}` nesses casos — rota:
+`POST /api/leads/{lead_id}/gerar-insights`.
 """
 from __future__ import annotations
 
@@ -381,6 +397,185 @@ def inferir_dados_site(texto_site: str, client: httpx.Client | None = None) -> I
             rqe_numero=dados.get("rqe_numero") or None,
             servicos=servicos,
         )
+    finally:
+        if owns_client:
+            client.close()
+
+
+PROMPT_INSIGHTS_TEMPLATE = """Você é um analista de prospecção B2B pra uma empresa de contabilidade \
+(Minotto Contabilidade) que atende clínicas e consultórios médicos no Brasil. Analise o \
+lead abaixo e gere uma análise estratégica curta pra ajudar o time comercial a decidir \
+como abordá-lo.
+
+{regras_de_tom}
+
+Considere o que está mais forte e mais fraco NESTE lead especificamente \
+(ex.: score alto mas sem nenhuma presença digital confirmada, RQE \
+confirmado mas com dívida ativa na PGFN, muitos anos de mercado mas sem \
+canal de contato validado, etc.) -- a análise precisa refletir os dados \
+reais abaixo, não um texto genérico que serviria pra qualquer lead.
+
+Dados do lead:
+{{dados_lead}}
+
+Responda APENAS com um objeto JSON válido, sem texto antes ou depois, \
+sem bloco de código markdown, no formato exato abaixo:
+
+{{{{
+  "resumo_estrategico": "resumo em 2-3 frases da situação estratégica deste lead",
+  "potencial_oportunidade": "alto" ou "médio" ou "baixo",
+  "recomendacao_abordagem": ["1 a 3 recomendações curtas e objetivas de como abordar este lead"],
+  "estrategia_comunicacao": "1-2 frases sobre tom/canal/ângulo recomendado pra esse lead específico",
+  "cta_sugerido": "uma frase de call-to-action pronta pra usar no primeiro contato"
+}}}}
+""".format(regras_de_tom=_REGRAS_DE_TOM)
+
+
+def _montar_contexto_lead_insights(lead: dict) -> str:
+    """
+    Versão mais completa de `_montar_contexto_lead` -- inclui score
+    total, breakdown por critério, presença digital, anos de mercado e
+    Zona Franca, além de todo sinal já coberto pela versão "abordagem".
+    Usada só por `gerar_insights_estrategicos`: a análise estratégica
+    precisa do quadro inteiro do lead pra apontar o que está mais
+    forte/fraco, enquanto `_montar_contexto_lead` (mensagem de
+    e-mail/WhatsApp) usa de propósito um subconjunto menor, pra não
+    distrair o redator com dado irrelevante pro corpo de uma mensagem
+    curta.
+    """
+    linhas = [f"- Razão social: {lead.get('razao_social') or 'não informado'}"]
+
+    if lead.get("decisor_nome"):
+        linhas.append(f"- Nome do decisor/responsável: {lead['decisor_nome']}")
+
+    if lead.get("municipio"):
+        uf = lead.get("uf") or ""
+        linhas.append(f"- Localização: {lead['municipio']}/{uf}")
+
+    if lead.get("anos_mercado") is not None:
+        linhas.append(f"- Anos de mercado: {lead['anos_mercado']}")
+
+    if lead.get("situacao_cadastral"):
+        linhas.append(f"- Situação cadastral na Receita Federal: {lead['situacao_cadastral']}")
+
+    if lead.get("score_total") is not None:
+        linhas.append(
+            f"- Score geral do lead: {lead['score_total']}/100 (prioridade {lead.get('prioridade') or '—'})"
+        )
+
+    breakdown = (lead.get("score_detalhes") or {}).get("breakdown")
+    if isinstance(breakdown, list) and breakdown:
+        linhas.append("- Breakdown do score por critério:")
+        for item in breakdown:
+            label = item.get("label", item.get("key", "?"))
+            linhas.append(f"  - {label}: {item.get('points')}/{item.get('weight')} pontos")
+
+    qtd_pgfn = lead.get("divida_ativa_qtd_inscricoes")
+    if qtd_pgfn:
+        valor = lead.get("divida_ativa_valor_total")
+        valor_txt = f", valor total R$ {valor:.2f}" if valor else ""
+        ajuizado_txt = " (com execução judicial em andamento)" if lead.get("divida_ativa_ajuizado") else ""
+        linhas.append(
+            f"- Possui {qtd_pgfn} inscrição(ões) ativa(s) na dívida ativa da União (PGFN){valor_txt}{ajuizado_txt} "
+            "-- mencionar com tom consultivo, como oportunidade de revisão financeira, nunca como cobrança/acusação"
+        )
+
+    if lead.get("zona_franca"):
+        linhas.append("- Localizado em área de Zona Franca (incentivo fiscal)")
+
+    if lead.get("rqe_confirmado"):
+        fonte = "CNES" if lead.get("rqe_fonte") == "cnes" else "inferência de site"
+        linhas.append(f"- RQE (Registro de Qualificação de Especialista) confirmado (fonte: {fonte})")
+
+    presenca = []
+    if lead.get("site"):
+        presenca.append("site")
+    if lead.get("instagram"):
+        presenca.append("Instagram")
+    if lead.get("linkedin_empresa") or lead.get("linkedin_decisor"):
+        presenca.append("LinkedIn")
+    linhas.append(
+        f"- Presença digital confirmada: {', '.join(presenca)}" if presenca
+        else "- Presença digital: nenhuma confirmada (sem site/Instagram/LinkedIn)"
+    )
+
+    if lead.get("google_rating"):
+        avaliacoes = lead.get("google_avaliacoes") or 0
+        linhas.append(f"- Rating no Google: {lead['google_rating']} ({avaliacoes} avaliações)")
+
+    if lead.get("servicos"):
+        linhas.append(f"- Serviços/especialidades: {lead['servicos']}")
+
+    if lead.get("whatsapp_ativo"):
+        linhas.append("- WhatsApp ativo confirmado")
+
+    if lead.get("email_validado"):
+        linhas.append("- E-mail validado")
+
+    return "\n".join(linhas)
+
+
+def gerar_insights_estrategicos(lead: dict, client: httpx.Client | None = None) -> dict:
+    """
+    Gera a análise estratégica sob demanda da aba "Insights" do dossiê --
+    resumo, potencial de oportunidade, recomendação de abordagem,
+    estratégia de comunicação e CTA sugerido, derivados de TODOS os
+    sinais disponíveis do lead (ver `_montar_contexto_lead_insights`).
+
+    Mesmo padrão defensivo de `gerar_mensagem_abordagem` (não o de
+    `inferir_dados_site`): roda direto dentro de um handler de rota
+    HTTP, então nunca deixa `httpx.HTTPError` propagar nem lança em
+    resposta que não parseia como JSON via `_extrair_json` -- devolve
+    `{}` em qualquer uma dessas falhas. É a rota (`POST
+    /api/leads/{lead_id}/gerar-insights`) que decide o que fazer com um
+    dict vazio -- não persiste, devolve 502 pro frontend mostrar erro.
+
+    `potencial_oportunidade` é normalizado (strip + lowercase) mas NÃO
+    forçado pra um dos 3 valores esperados ("alto"/"médio"/"baixo") --
+    um valor fora do esperado só significa que o frontend não reconhece
+    a cor do badge (cai num visual neutro), preferível a inventar
+    silenciosamente "baixo" quando a IA respondeu outra coisa.
+    """
+    client, owns_client = _get_client(client)
+
+    try:
+        dados_lead = _montar_contexto_lead_insights(lead)
+        prompt = PROMPT_INSIGHTS_TEMPLATE.format(dados_lead=dados_lead)
+
+        resp = client.post(
+            ANTHROPIC_MESSAGES_URL,
+            headers={
+                "x-api-key": settings.ANTHROPIC_API_KEY,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+            },
+            json={
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": MAX_TOKENS_RESPOSTA,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+        )
+        resp.raise_for_status()
+
+        blocos = resp.json().get("content") or []
+        texto_resposta = next((b.get("text", "") for b in blocos if b.get("type") == "text"), "")
+
+        dados = _extrair_json(texto_resposta)
+        if dados is None:
+            return {}
+
+        recomendacao_bruta = dados.get("recomendacao_abordagem")
+        recomendacao = [str(r) for r in recomendacao_bruta][:3] if isinstance(recomendacao_bruta, list) else []
+
+        return {
+            "resumo_estrategico": str(dados.get("resumo_estrategico") or "").strip(),
+            "potencial_oportunidade": str(dados.get("potencial_oportunidade") or "").strip().lower(),
+            "recomendacao_abordagem": recomendacao,
+            "estrategia_comunicacao": str(dados.get("estrategia_comunicacao") or "").strip(),
+            "cta_sugerido": str(dados.get("cta_sugerido") or "").strip(),
+        }
+    except httpx.HTTPError:
+        return {}
     finally:
         if owns_client:
             client.close()

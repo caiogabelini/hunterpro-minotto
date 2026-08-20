@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,7 +11,7 @@ from app.models.lead_message import CanalMensagem, LeadMessage
 from app.models.user import User
 from app.schemas.lead import LeadRead, LeadStatusUpdate
 from app.schemas.lead_message import LeadMessageRead
-from app.services.ai_enrichment import gerar_mensagem_abordagem
+from app.services.ai_enrichment import gerar_insights_estrategicos, gerar_mensagem_abordagem
 
 router = APIRouter()
 
@@ -31,6 +33,42 @@ def _montar_dados_lead(lead: Lead) -> dict:
         "google_rating": lead.google_rating,
         "google_avaliacoes": lead.google_avaliacoes,
         "situacao_cadastral": lead.situacao_cadastral,
+    }
+
+
+def _montar_dados_lead_insights(lead: Lead) -> dict:
+    """Versão mais completa de `_montar_dados_lead` -- inclui score,
+    breakdown, presença digital e anos de mercado, além de tudo que a
+    versão "abordagem" já extrai. Só usada por `gerar_insights_estrategicos`,
+    que precisa do quadro inteiro do lead (ver docstring da função em
+    app/services/ai_enrichment.py) pra apontar o que está mais forte/fraco
+    -- diferente de `_montar_dados_lead`, que de propósito só extrai o
+    subconjunto relevante pro corpo de uma mensagem de e-mail/WhatsApp."""
+    return {
+        "razao_social": lead.razao_social,
+        "decisor_nome": lead.decisor_nome,
+        "municipio": lead.municipio,
+        "uf": lead.uf,
+        "anos_mercado": lead.anos_mercado,
+        "situacao_cadastral": lead.situacao_cadastral,
+        "score_total": lead.score_total,
+        "score_detalhes": lead.score_detalhes,
+        "prioridade": lead.prioridade,
+        "divida_ativa_qtd_inscricoes": lead.divida_ativa_qtd_inscricoes,
+        "divida_ativa_valor_total": lead.divida_ativa_valor_total,
+        "divida_ativa_ajuizado": lead.divida_ativa_ajuizado,
+        "zona_franca": lead.zona_franca,
+        "rqe_confirmado": lead.rqe_confirmado,
+        "rqe_fonte": lead.rqe_fonte,
+        "site": lead.site,
+        "instagram": lead.instagram,
+        "linkedin_empresa": lead.linkedin_empresa,
+        "linkedin_decisor": lead.linkedin_decisor,
+        "google_rating": lead.google_rating,
+        "google_avaliacoes": lead.google_avaliacoes,
+        "servicos": lead.servicos,
+        "whatsapp_ativo": lead.whatsapp_ativo,
+        "email_validado": lead.email_validado,
     }
 
 
@@ -172,6 +210,45 @@ def gerar_abordagem(
     db.commit()
     db.refresh(mensagem)
     return mensagem
+
+
+@router.post("/{lead_id}/gerar-insights", response_model=LeadRead)
+def gerar_insights(
+    lead_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera (ou regenera) a análise estratégica da aba "Insights" do dossiê
+    via IA (`app/services/ai_enrichment.py::gerar_insights_estrategicos`)
+    e sobrescreve `Lead.insights_ia`/`insights_gerado_em` -- diferente de
+    `gerar_abordagem`, não mantém histórico (não foi pedido; cada geração
+    substitui a anterior, mesmo padrão de "Gerar novamente"). Requer
+    autenticação (qualquer papel), mesma proteção do resto das rotas de
+    lead. 404 se o lead não existir.
+
+    502 se a IA não conseguir gerar nada -- `gerar_insights_estrategicos`
+    nunca lança, devolve `{}` tanto em erro de rede/HTTP quanto em
+    resposta vazia/malformada; é aqui que isso vira um erro explícito pro
+    frontend tratar, em vez de persistir um `insights_ia` vazio.
+    """
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    resultado = gerar_insights_estrategicos(_montar_dados_lead_insights(lead))
+
+    if not resultado:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Não foi possível gerar os insights agora. Tente novamente.",
+        )
+
+    lead.insights_ia = resultado
+    lead.insights_gerado_em = datetime.utcnow()
+    db.commit()
+    db.refresh(lead)
+    return lead
 
 
 @router.get("/{lead_id}/mensagens", response_model=list[LeadMessageRead])

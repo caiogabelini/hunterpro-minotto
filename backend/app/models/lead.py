@@ -100,5 +100,16 @@ class Lead(Base):
     # message generation" no CLAUDE.md pro histórico completo da migração pra LeadMessage.
     mensagem_abordagem: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # --- Insights estratégicos (IA) ---
+    # Objeto estruturado (resumo_estrategico, potencial_oportunidade,
+    # recomendacao_abordagem, estrategia_comunicacao, cta_sugerido) gerado
+    # sob demanda por app/services/ai_enrichment.py::gerar_insights_estrategicos,
+    # mesmo padrão de "botão Gerar" já usado pra LeadMessage -- não roda
+    # automaticamente no pipeline. insights_gerado_em fica None até a
+    # primeira geração; cada nova geração sobrescreve os dois campos (sem
+    # histórico, diferente de LeadMessage -- não foi pedido).
+    insights_ia: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    insights_gerado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

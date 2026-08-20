@@ -597,7 +597,35 @@ interno do Docker.
   (seção de acréscimo no final) pro relato completo, inclusive um aviso
   pra sessões futuras não repetirem esse vaivém. `npm run build`/`npm
   run lint`/`npm run test` limpos.
-- ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
+- ✅ **5ª aba "Insights" no Dossiê — análise estratégica gerada por IA
+  sob demanda** (20/08/2026, sessão seguinte à reestruturação em abas —
+  fecha a pendência do item 15 abaixo). Backend: `Lead.insights_ia`
+  (JSON — `resumo_estrategico`, `potencial_oportunidade`,
+  `recomendacao_abordagem`, `estrategia_comunicacao`, `cta_sugerido`) +
+  `Lead.insights_gerado_em` (migration validada contra Postgres real,
+  mesmo processo de sempre); `gerar_insights_estrategicos` em
+  `app/services/ai_enrichment.py` (Claude Haiku, mesmo padrão defensivo
+  de `gerar_mensagem_abordagem` — nunca lança, `{}` em erro/resposta
+  malformada), com um contexto de prompt bem mais completo que o da
+  mensagem de abordagem (`_montar_contexto_lead_insights` — inclui
+  score total, breakdown por critério, presença digital, anos de
+  mercado, Zona Franca, não só o subconjunto usado numa mensagem de
+  e-mail/WhatsApp curta); `POST /api/leads/{lead_id}/gerar-insights`
+  (protegida, 404/502 nos mesmos moldes de `gerar-abordagem`, sem
+  histórico — cada geração sobrescreve a anterior, diferente de
+  `LeadMessage`). Frontend: mesmo padrão de UX "Gerar"/"Gerando..."/
+  "Gerar novamente" já validado em Abordagem Sugerida; badge de
+  potencial (verde/dourado/cinza — "médio" reaproveita a cor dourada da
+  paleta em vez de introduzir amarelo novo), lista de recomendação com
+  ícone, CTA sugerido num card com fundo dourado sólido (único bloco da
+  tela com esse tratamento, de propósito, pra ler como ação a tomar), e
+  "Gerado há X" via `formatRelative`. `getInsights` (`src/insights.ts`)
+  faz o parsing defensivo de `insights_ia` vindo da rede, mesmo
+  raciocínio de `getScoreBreakdown` (bug de score já documentado abaixo)
+  — nunca deixa um shape inesperado quebrar a tela. `npm run build`/
+  `npm run lint`/`npm run test` e `pytest` limpos; sem validação visual
+  real, mesma ressalva de sempre.
+- ✅ 270 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -694,11 +722,9 @@ Em ordem de prioridade combinada com o cliente:
       na sidebar ("em breve", desabilitados) — nenhuma dessas telas
       existe, de propósito (não inventar rota falsa).
 15. ~~Dossiê reestruturado em abas (Dados/Contatos/Análise IA/Mensagens)~~
-    ✅ feito (20/08/2026) — ver acima. Pendência deixada de propósito:
-    - **Painel lateral "Insights da IA"** — parte da referência visual
-      (Radar Comercial) que o cliente compartilhou, mas explicitamente
-      combinado como fora de escopo desta sessão. Fica pra uma sessão
-      futura dedicada.
+    ✅ feito (20/08/2026) — ver acima. ~~Painel "Insights da IA"~~ ✅
+    também feito, numa sessão seguinte no mesmo dia (5ª aba "Insights",
+    ver bullet dedicado abaixo) — não mais pendência. Pendência restante:
     - **Validação visual real** — mesma ressalva do item 14: o layout
       das abas em si e os chips da aba Contatos foram validados só
       tecnicamente, nunca vistos numa tela de verdade. (O reposicionamento

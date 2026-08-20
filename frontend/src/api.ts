@@ -15,6 +15,21 @@ export interface ScoreDetalhes {
   breakdown: ScoreBreakdownItem[];
 }
 
+/** Mesmo shape do dict devolvido por
+ * app/services/ai_enrichment.py::gerar_insights_estrategicos e
+ * persistido em Lead.insights_ia. `potencial_oportunidade` chega já
+ * normalizado (lowercase/trim) pelo backend, mas NÃO é forçado a um dos
+ * 3 valores esperados -- um valor fora de "alto"/"médio"/"baixo" só cai
+ * num badge neutro no frontend (ver POTENCIAL_LABELS em
+ * LeadDossierPage.tsx), nunca quebra a tela. */
+export interface InsightsIA {
+  resumo_estrategico: string;
+  potencial_oportunidade: string;
+  recomendacao_abordagem: string[];
+  estrategia_comunicacao: string;
+  cta_sugerido: string;
+}
+
 /** Mesmo shape de LeadMessageRead em app/schemas/lead_message.py --
  * uma mensagem de abordagem gerada, já persistida (uma linha de
  * histórico por canal em LeadMessage). `canal` tipado como união
@@ -67,6 +82,8 @@ export interface Lead {
   kanban_status: string;
   motivo_perda?: string | null;
   mensagem_abordagem?: string | null;
+  insights_ia?: InsightsIA | null;
+  insights_gerado_em?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -139,6 +156,16 @@ export async function fetchMensagens(token: string, leadId: string): Promise<Lea
 
 export async function gerarAbordagemCanal(token: string, leadId: string, canal: CanalAbordagem): Promise<LeadMessage> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-abordagem/${canal}`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function gerarInsights(token: string, leadId: string): Promise<Lead> {
+  const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-insights`, {
     method: "POST",
     headers: authHeaders(token),
   });

@@ -1706,6 +1706,145 @@ rather than being told to move it. The resumo line is the part that's
 actually still open to editorial judgment (add/remove text items as
 requested); the corner score block is not.
 
+### AI-generated strategic insights (`gerar_insights_estrategicos`, "Insights" tab, follow-up session, 2026-08-20)
+
+Adds a 5th dossier tab, "Insights" — an on-demand AI strategic analysis,
+same "Gerar"/"Gerando..."/"Gerar novamente" UX already validated for the
+suggested-approach messages (see "Suggested approach message
+generation" above), but a different kind of output: not a message to
+send, a structured read of the lead's overall situation for the sales
+rep deciding how to prioritize/approach it.
+
+**Backend**:
+
+- `Lead.insights_ia` (`JSON`, nullable) — a dict with 5 keys:
+  `resumo_estrategico` (string), `potencial_oportunidade` (string,
+  expected "alto"/"médio"/"baixo" but **not enforced** as an enum — see
+  below), `recomendacao_abordagem` (list of up to 3 strings),
+  `estrategia_comunicacao` (string), `cta_sugerido` (string).
+  `Lead.insights_gerado_em` (`DateTime`, nullable) — timestamp of the
+  last generation. Migration: see "Migrations" below (sixth migration,
+  `f80919b2f7e2`).
+- `gerar_insights_estrategicos(lead: dict, client=None) -> dict` in
+  `app/services/ai_enrichment.py` — same model (`claude-haiku-4-5-20251001`)
+  and defensive pattern as `gerar_mensagem_abordagem` (runs inside an
+  HTTP request handler, so it never lets `httpx.HTTPError` propagate nor
+  raises on a malformed response — returns `{}` in either case, reusing
+  the same tolerant `_extrair_json` helper `inferir_dados_site` already
+  uses). What's different from `gerar_mensagem_abordagem`: the prompt
+  context. `_montar_contexto_lead` (used for approach messages)
+  deliberately lists only a small subset of signals, so the AI doesn't
+  get distracted padding out a 2-sentence WhatsApp message with
+  irrelevant detail. Insights needs the opposite — the whole picture, to
+  point out what's strong/weak about *this specific* lead — so a new,
+  much richer context builder, `_montar_contexto_lead_insights`, was
+  added instead of extending the existing one: score total, full
+  breakdown per criterion (from `score_detalhes.breakdown`), PGFN debt
+  (with value and ajuizado flag, not just the count), Zona Franca, RQE
+  + source, all digital-presence fields (site/Instagram/LinkedIn as a
+  presence summary, not raw URLs — the AI doesn't need the links
+  themselves), Google rating, `anos_mercado`, WhatsApp/e-mail validation
+  status. The route feeds this via a new, separate dict-builder,
+  `_montar_dados_lead_insights` in `app/api/routes/leads.py` — a
+  superset of the existing `_montar_dados_lead` (which stays as-is,
+  still used only by `gerar_abordagem`), not a replacement, since the
+  two callers genuinely need different amounts of context.
+- `potencial_oportunidade` is normalized (`.strip().lower()`) but
+  **deliberately not forced** into the 3 expected values — if the AI
+  responds with something else, the value passes through as-is and the
+  frontend's badge falls back to a neutral/gray visual (see below)
+  instead of the backend silently coercing an unrecognized value to
+  "baixo", which would misrepresent what the AI actually said.
+- `POST /api/leads/{lead_id}/gerar-insights` (protected, any role,
+  `response_model=LeadRead`) — generates and **overwrites**
+  `insights_ia`/`insights_gerado_em` (no history, unlike
+  `LeadMessage` — "Gerar novamente" replaces, not appends; wasn't
+  requested and doesn't fit the "single current analysis" nature of
+  this feature the way per-channel message history does). 404 for a
+  missing lead; 502 (same convention as `gerar_abordagem`) when
+  `gerar_insights_estrategicos` returns `{}`, without persisting
+  anything, so a failed generation never overwrites a previously good
+  `insights_ia` with an empty result.
+- `LeadRead` gained `insights_ia: dict | None` and
+  `insights_gerado_em: datetime | None` — `GET /api/leads/{id}` already
+  exposes both automatically (from-attributes model, no route change
+  needed there).
+- Tests: `tests/test_ai_enrichment.py` (function-level — success,
+  `potencial_oportunidade` normalization, recommendation list capped at
+  3, malformed/empty/non-JSON response → `{}`, HTTP error/network error
+  → `{}`, a lead with only `razao_social` filled in doesn't crash the
+  context builder) and `tests/test_leads_routes.py` (route-level —
+  success + persistence, regenerate overwrites rather than appending,
+  the route actually passes the richer context — not just the
+  `gerar_abordagem` subset — through to the service function, 404, 502
+  without persisting, 401, and that `GET` exposes both new fields
+  whether or not insights were ever generated). 17 new backend tests
+  total (9 + 8).
+
+**Frontend**:
+
+- 5th tab, `{ id: "insights", label: "Insights", icon: Lightbulb }` in
+  `ABAS` (`LeadDossierPage.tsx`) — `Lightbulb` confirmed present in this
+  project's `lucide-react` version (1.33) before use, same
+  due-diligence habit as the `Link2`-instead-of-`Linkedin` substitution
+  in the Contatos tab.
+- `AbaInsights` component mirrors `CanalAbordagemCard`'s generate/
+  loading/error pattern, but works on the whole `Lead` rather than a
+  single `LeadMessage`: `POST /gerar-insights` returns the **entire
+  updated lead** (not an isolated object), so `onGerado` receives a full
+  `Lead` and the page just does `setLead(leadAtualizado)` — no manual
+  merging of `insights_ia`/`insights_gerado_em` into existing state.
+  Empty state (`insights_ia` is `null`): explanatory paragraph + "Gerar
+  Insights com IA" button. Populated state, top to bottom: "Gerado
+  {formatRelative(insights_gerado_em)}" (reusing the same relative-time
+  helper already used for the header's "Atualizado há X"), the
+  `resumo_estrategico` in a larger/brighter paragraph than
+  `.dossier-muted` text elsewhere (explicitly asked to be "in
+  destaque"), a `potencial_oportunidade` badge, "Recomendação de
+  abordagem" as a bulleted list with a `CheckCircle2` icon per item,
+  "Estratégia de comunicação" as plain text, and `cta_sugerido` in a
+  visually distinct card. A small "Gerar novamente" button sits next to
+  the tab's section heading (reuses `.dossier-abordagem-btn-secundario`,
+  same small/outlined button already used for that exact label
+  elsewhere).
+- Badge color judgment call: verde (`#8ee6ab`, same green already used
+  by `.indicador-on`/`.rqe-alta-confianca`/`layer-estruturado`) for
+  "alto", **`var(--gold)` for "médio"** (not a new yellow — the
+  palette is navy/gold and gold already reads as "medium/attention" in
+  this UI, e.g. `.rqe-inferencia`), and the neutral gray tone
+  (`.indicador-off`'s sibling) for "baixo" **and** for any unrecognized
+  value — deliberately the same visual treatment for both, since an
+  unexpected string from the AI isn't necessarily "low", it's
+  "unclassified", and pretending otherwise would be a silent
+  misrepresentation on top of the backend's own (documented) decision
+  not to coerce that value either.
+- CTA card treatment ("fundo diferenciado, como um call-to-action
+  visual", per the request): the only block on this entire screen with
+  a solid `var(--gold)` background rather than the dark-navy-card +
+  gold-accent pattern everything else uses — deliberately so it reads
+  as "an action to take" rather than another piece of information,
+  reusing the same full-gold fill already established for primary
+  action buttons (`.dossier-abordagem-btn-acao`) but applied to a whole
+  card instead of a button.
+- `getInsights(insightsIa: unknown): InsightsIA | null` in a new
+  `frontend/src/insights.ts` — defensive runtime parsing of
+  `Lead.insights_ia`, same rationale as `getScoreBreakdown` in
+  `leadScore.ts` (`fetch().json()` returns `any`, so a shape mismatch
+  wouldn't be caught by TypeScript at compile time — see "Lead dossier
+  score breakdown bug" below for the precedent this follows). An
+  unexpected shape (including a JSON array, which is never a valid
+  `insights_ia` value) returns `null`, which the tab treats identically
+  to "not generated yet" rather than crashing. `recomendacao_abordagem`
+  is normalized to always be a string array even if the field is
+  missing or the wrong type. 6 new vitest tests in
+  `frontend/src/insights.test.ts`, same style as `leadScore.test.ts`.
+- `npm run build` / `npm run lint` / `npm run test` all clean (18
+  frontend tests total, up from 12). **Not validated in an actual
+  browser** — same standing limitation as every other frontend session
+  in this project; visual validation is on the user, per their explicit
+  instruction this session ("sem navegador — documente decisões,
+  validação visual fica comigo depois").
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -1796,6 +1935,20 @@ fourth migration are untouched after), re-upgrade is clean, schema
 (FK to `leads.id`, index on `lead_id`, `conteudo` `NOT NULL`, `assunto`
 nullable) matches the model exactly. Cluster stopped and deleted
 immediately after.
+
+A **sixth** migration was added 2026-08-20 (same day, a further
+follow-up session): `f80919b2f7e2_adiciona_insights_ia_e_insights_...py`
+(`down_revision="c47a9e2b1d05"`, adds `Lead.insights_ia`/
+`Lead.insights_gerado_em` — see "AI-generated strategic insights"
+below). Same throwaway-cluster validation as the previous five (port
+5433, short socket dir per the 107-byte lesson above): all six
+migrations upgrade cleanly in chain order, `downgrade -1` reverts only
+this one, re-upgrade is clean, and the resulting `leads.insights_ia`
+(`json`)/`leads.insights_gerado_em` (`timestamp without time zone`)
+columns match `app/models/lead.py` exactly — both nullable, no default
+(same reasoning as `mensagem_abordagem`/PGFN columns: `NULL` already
+means "not generated yet", no backfill needed). Cluster stopped and
+deleted immediately after.
 
 ### Deployment note (EasyPanel)
 

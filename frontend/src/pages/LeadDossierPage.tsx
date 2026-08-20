@@ -8,6 +8,7 @@ import {
   Gauge,
   Globe,
   Landmark,
+  Lightbulb,
   Link2,
   Loader2,
   Mail,
@@ -17,6 +18,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Target,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -26,26 +28,30 @@ import {
   fetchLead,
   fetchMensagens,
   gerarAbordagemCanal,
+  gerarInsights,
   UnauthorizedError,
   type CanalAbordagem,
+  type InsightsIA,
   type Lead,
   type LeadMessage,
 } from "../api";
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
+import { getInsights } from "../insights";
 import { KANBAN_COLUMNS, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
 import "./LeadDossierPage.css";
 
-type Aba = "dados" | "contatos" | "analise" | "mensagens";
+type Aba = "dados" | "contatos" | "analise" | "mensagens" | "insights";
 
 const ABAS: { id: Aba; label: string; icon: LucideIcon }[] = [
   { id: "dados", label: "Dados", icon: FileText },
   { id: "contatos", label: "Contatos", icon: Users },
   { id: "analise", label: "Análise IA", icon: Gauge },
   { id: "mensagens", label: "Mensagens", icon: MessageSquare },
+  { id: "insights", label: "Insights", icon: Lightbulb },
 ];
 
 export function LeadDossierPage() {
@@ -112,6 +118,15 @@ export function LeadDossierPage() {
               telefone={lead.telefone}
               mensagens={mensagens}
               onGerada={registrarNovaMensagem}
+            />
+          )}
+
+          {abaAtiva === "insights" && (
+            <AbaInsights
+              leadId={lead.id}
+              insights={getInsights(lead.insights_ia)}
+              geradoEm={lead.insights_gerado_em}
+              onGerado={setLead}
             />
           )}
         </>
@@ -651,6 +666,146 @@ function CanalAbordagemCard({
       )}
       {erro && <p className="dossier-abordagem-erro">{erro}</p>}
     </div>
+  );
+}
+
+// --- Aba "Insights" (análise estratégica via IA) ------------------------
+// Mesmo padrão de UX de "Gerar"/"Gerando..."/"Gerar novamente" já usado em
+// CanalAbordagemCard (Abordagem sugerida). Diferença: a rota
+// `POST /gerar-insights` devolve o Lead INTEIRO já atualizado (não um
+// objeto isolado como LeadMessage), então `onGerado` recebe o Lead
+// completo -- quem chama (LeadDossierPage) só faz `setLead` direto, sem
+// precisar mesclar `insights_ia`/`insights_gerado_em` manualmente.
+
+const POTENCIAL_LABELS: Record<string, string> = {
+  alto: "Alto potencial",
+  médio: "Médio potencial",
+  baixo: "Baixo potencial",
+};
+
+/** Verde=alto, dourado=médio, cinza=baixo -- mesma linguagem de cor do
+ * resto do dossiê (verde/dourado/cinza já usados em indicador-on/
+ * rqe-alta-confianca/layer-estruturado etc.). Um valor fora dos 3
+ * esperados (a IA não é forçada a um enum, ver InsightsIA em api.ts) cai
+ * no badge neutro/cinza "desconhecido" em vez de quebrar a tela. */
+function PotencialBadge({ potencial }: { potencial: string }) {
+  const chave = potencial.toLowerCase();
+  const classe =
+    chave === "alto" ? "potencial-alto" : chave === "médio" ? "potencial-medio" : chave === "baixo" ? "potencial-baixo" : "potencial-desconhecido";
+  return <span className={`dossier-potencial-badge ${classe}`}>{POTENCIAL_LABELS[chave] ?? potencial}</span>;
+}
+
+function AbaInsights({
+  leadId,
+  insights,
+  geradoEm,
+  onGerado,
+}: {
+  leadId: string;
+  insights: InsightsIA | null;
+  geradoEm?: string | null;
+  onGerado: (lead: Lead) => void;
+}) {
+  const { token, logout } = useAuth();
+  const [gerando, setGerando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function gerar() {
+    if (!token) return;
+    setGerando(true);
+    setErro(null);
+    try {
+      const leadAtualizado = await gerarInsights(token, leadId);
+      onGerado(leadAtualizado);
+    } catch (e) {
+      if (e instanceof UnauthorizedError) {
+        logout();
+        return;
+      }
+      setErro("Não foi possível gerar os insights agora. Tente novamente.");
+    } finally {
+      setGerando(false);
+    }
+  }
+
+  if (!insights) {
+    return (
+      <section className="dossier-card">
+        <SectionHeading icon={Lightbulb}>Insights estratégicos</SectionHeading>
+        <p className="dossier-muted">
+          Ainda não geramos uma análise estratégica pra este lead. A IA olha pro score, dívida PGFN, RQE,
+          presença digital e outros sinais já coletados e sugere como priorizar a abordagem.
+        </p>
+        <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
+          {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar Insights com IA"}
+        </button>
+        {erro && <p className="dossier-abordagem-erro">{erro}</p>}
+      </section>
+    );
+  }
+
+  return (
+    <section className="dossier-card dossier-insights">
+      <div className="dossier-insights-header">
+        <SectionHeading icon={Lightbulb}>Insights estratégicos</SectionHeading>
+        <button
+          type="button"
+          className="dossier-abordagem-btn-secundario"
+          onClick={gerar}
+          disabled={gerando}
+          aria-busy={gerando}
+        >
+          {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
+        </button>
+      </div>
+
+      {geradoEm && <p className="dossier-insights-data">Gerado {formatRelative(geradoEm)}</p>}
+
+      {insights.resumo_estrategico && <p className="dossier-insights-resumo">{insights.resumo_estrategico}</p>}
+
+      {insights.potencial_oportunidade && (
+        <div className="dossier-insights-potencial">
+          <span className="dossier-insights-potencial-label">Potencial de oportunidade</span>
+          <PotencialBadge potencial={insights.potencial_oportunidade} />
+        </div>
+      )}
+
+      {insights.recomendacao_abordagem.length > 0 && (
+        <div className="dossier-insights-bloco">
+          <h3 className="dossier-subheading">
+            <Target size={15} />
+            <span>Recomendação de abordagem</span>
+          </h3>
+          <ul className="dossier-insights-recomendacao-lista">
+            {insights.recomendacao_abordagem.map((item) => (
+              <li key={item}>
+                <CheckCircle2 size={14} />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {insights.estrategia_comunicacao && (
+        <div className="dossier-insights-bloco">
+          <h3 className="dossier-subheading">
+            <MessageSquare size={15} />
+            <span>Estratégia de comunicação</span>
+          </h3>
+          <p className="dossier-insights-texto">{insights.estrategia_comunicacao}</p>
+        </div>
+      )}
+
+      {insights.cta_sugerido && (
+        <div className="dossier-insights-cta">
+          <span className="dossier-insights-cta-label">CTA sugerido</span>
+          <p className="dossier-insights-cta-texto">{insights.cta_sugerido}</p>
+        </div>
+      )}
+
+      {erro && <p className="dossier-abordagem-erro">{erro}</p>}
+    </section>
   );
 }
 
