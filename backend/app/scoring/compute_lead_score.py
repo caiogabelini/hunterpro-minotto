@@ -11,24 +11,30 @@ confirmadas com o cliente**. Separar os dois arquivos deixa claro, só
 pelo import, o que é contrato fechado e o que ainda pode mudar numa
 conversa com o Douglas.
 
-⚠️ PRA CADA CRITÉRIO ABAIXO CUJA REGRA NÃO SAIU 100% FECHADA NAS
-REUNIÕES, A DECISÃO TOMADA AQUI ESTÁ COMENTADA NA FUNÇÃO CORRESPONDENTE.
+✅ `rqe_especialista_points` e `presenca_digital_points` — as duas
+regras abaixo que não saíram 100% fechadas nas reuniões com o cliente —
+foram CONFIRMADAS pelo Caio Gabelini (responsável pelo produto, 4Hands
+AI) em 19/08/2026. Essa é uma confirmação de produto, não do Douglas
+(cliente) — mantém a mesma decisão registrada nesta sessão, sem mudança
+na fórmula, só a marcação de "pendente" removida. Se o Douglas pedir uma
+régua diferente pra qualquer um dos dois critérios, ajustar aqui.
 Resumo rápido de onde isso se aplica:
   - `rqe_especialista_points`: como combinar o sinal da IA (menção a RQE
     no site) com o sinal do CNES (unidade de saúde registrada) quando as
-    duas fontes divergem — rules.py já registra que "a decisão de como
-    combinar os dois no score ainda não foi confirmada com o cliente"
-    (mesma nota em app/services/cnes.py). Pontuação graduada por
-    combinação, ver `_RQE_FRACAO_POR_COMBINACAO`.
+    duas fontes divergem — pontuação graduada por combinação, ver
+    `_RQE_FRACAO_POR_COMBINACAO`. rules.py e app/services/cnes.py ainda
+    registram que essa combinação nunca foi levada ao Douglas
+    explicitamente; a confirmação de 19/08/2026 é do responsável pelo
+    produto, suficiente pra manter a implementação como está.
   - `presenca_digital_points`: o critério "Presença digital forte" nunca
-    teve uma régua objetiva definida nas reuniões — só a fonte
-    ("Site + Instagram/LinkedIn ativos, lidos pela IA"). Regra escolhida
-    nesta sessão, ver a função.
-  - `rating_google_points`: peso já é 0 (confirmado: "pra mim não
-    importa"), mas a fórmula existe pro campo aparecer no breakdown por
-    consistência/histórico — `search_google_places` ainda não traz
-    rating nenhum (task NotImplementedError), então hoje esse critério
-    sempre entra como 0 na prática, independente da fórmula.
+    teve uma régua objetiva definida nas reuniões com o cliente — só a
+    fonte ("Site + Instagram/LinkedIn ativos, lidos pela IA"). Regra
+    confirmada pelo Caio em 19/08/2026, ver a função.
+  - `rating_google_points`: peso já é 0 (confirmado com o Douglas: "pra
+    mim não importa"), mas a fórmula existe pro campo aparecer no
+    breakdown por consistência/histórico — `search_google_places` ainda
+    não traz rating nenhum (task NotImplementedError), então hoje esse
+    critério sempre entra como 0 na prática, independente da fórmula.
 
 Os outros critérios (zona_franca_alc, whatsapp_ativo, email_validado,
 decisor_identificavel, unidade_cnpj_ativo) são binários — a fonte de
@@ -55,9 +61,9 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
     os cortes.
   - Não busca os resultados de enriquecimento sozinho (não bate CNPJ
     nenhum, não lê o banco) — `montar_score_lead` é uma função pura,
-    recebe os dados já prontos. Ver `compute_lead_score` em
-    app/workers/celery_app.py pra ressalva sobre a orquestração/
-    persistência desses resultados ainda não existir.
+    recebe os dados já prontos. Quem monta esse dict e persiste o
+    resultado é `process_lead_pipeline` em app/workers/celery_app.py
+    (adicionada em 20/08/2026).
 """
 from __future__ import annotations
 
@@ -81,8 +87,8 @@ def zona_franca_points(is_zona_franca: bool, weight: int | None = None) -> float
 
 
 # Combinação (rqe_mencionado via IA, encontrado_cnes) -> fração do peso
-# do critério. NÃO CONFIRMADO COM O CLIENTE (ver docstring do módulo) —
-# decisão desta sessão:
+# do critério. CONFIRMADO pelo Caio (responsável pelo produto) em
+# 19/08/2026 — ver docstring do módulo:
 #   - as duas fontes concordam que existe unidade/especialidade médica
 #     (True, True) -> confiança alta, peso cheio
 #   - só a IA menciona RQE no site, sem reforço estrutural do CNES
@@ -105,9 +111,9 @@ _RQE_FRACAO_POR_COMBINACAO: dict[tuple[bool, bool], float] = {
 
 def rqe_especialista_points(rqe_mencionado: bool, encontrado_cnes: bool, weight: int | None = None) -> float:
     """Cruza o sinal de IA (menção a RQE no site) com o sinal do CNES
-    (unidade de saúde registrada) — ver `_RQE_FRACAO_POR_COMBINACAO` e a
-    ressalva no topo do módulo sobre essa combinação não estar
-    confirmada com o cliente."""
+    (unidade de saúde registrada) — ver `_RQE_FRACAO_POR_COMBINACAO`.
+    Combinação confirmada pelo Caio (responsável pelo produto) em
+    19/08/2026 — ver ressalva no topo do módulo."""
     weight = _weight_or_default("rqe_especialista", weight)
     fracao = _RQE_FRACAO_POR_COMBINACAO[(bool(rqe_mencionado), bool(encontrado_cnes))]
     return weight * fracao
@@ -130,8 +136,8 @@ def email_validado_points(email_aprovado: bool, weight: int | None = None) -> fl
 
 def presenca_digital_points(tem_site: bool, tem_instagram: bool, weight: int | None = None) -> float:
     """
-    ⚠️ REGRA NÃO ESPECIFICADA COM EXATIDÃO NAS REUNIÕES — decisão desta
-    sessão, pendente de validação com o Douglas se necessário.
+    ✅ Regra não especificada com exatidão nas reuniões com o cliente —
+    confirmada pelo Caio (responsável pelo produto) em 19/08/2026.
 
     A fonte documentada em rules.py é "Site + Instagram/LinkedIn ativos,
     lidos pela IA" — LinkedIn ainda não tem etapa implementada no

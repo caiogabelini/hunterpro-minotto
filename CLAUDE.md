@@ -113,17 +113,19 @@ Each of the 8 non-PGFN criteria has a small `_points()` function (same
 shape as `pgfn_points`: takes the extracted signal, optional `weight`
 override). Most are straightforwardly binary (`zona_franca_alc`,
 `whatsapp_ativo`, `email_validado`, `decisor_identificavel`,
-`unidade_cnpj_ativo` — full weight or zero). Two are **not** client-confirmed
-and are flagged as such in the module docstring and each function:
+`unidade_cnpj_ativo` — full weight or zero). Two are session decisions,
+**confirmed by product (Caio Gabelini) on 2026-08-19 — not by the client
+(Douglas)**, keep that distinction when reading/writing docs about them:
 
 - `rqe_especialista_points`: combines the AI's `rqe_mencionado` (site
   content) with CNES's `encontrado_cnes` (health-facility registration,
   no specialty field). Graduated by combination — both agree positive →
   full weight; AI-only → 2/3 (a direct RQE mention is stronger evidence
   than CNES presence, which never actually confirms specialty); CNES-only
-  → 1/3; neither → 0. `rules.py` and `cnes.py` both already flag this
-  combination as unconfirmed with the client — this session's choice is
-  a specific, testable resolution of that open question, not a new gap.
+  → 1/3; neither → 0. `rules.py` and `cnes.py` still note this combination
+  was never taken to Douglas explicitly — the product confirmation is
+  enough to keep the implementation as-is; revisit only if Douglas asks
+  for a different rule.
 - `presenca_digital_points`: no objective rule existed for "strong digital
   presence" beyond the source list ("Site + Instagram/LinkedIn"). Decided:
   full weight if both site-with-real-content (`scrape_sucesso` +
@@ -138,13 +140,74 @@ function's threshold logic (`rating >= 4.0` → full weight) only matters
 once `search_google_places` actually returns a rating, which it doesn't
 yet (`NotImplementedError`).
 
-**`compute_lead_score` doesn't fetch `enriquecimentos` itself** — there's
-still no orchestration/persistence layer that runs a lead's enrichment
-tasks in sequence and stores results somewhere `compute_lead_score` could
-read from a bare `lead_id`. Its signature is
-`compute_lead_score(lead_id, enriquecimentos)`, not
-`compute_lead_score(lead_id)` alone — whoever calls it must already have
-the per-task results in hand (Celery chain/group, manual assembly, etc.).
+**`compute_lead_score` doesn't fetch `enriquecimentos` itself** — it stays
+a pure combination function. `process_lead_pipeline` (below) is what
+assembles `enriquecimentos` and calls it.
+
+### Pipeline orchestration (`process_lead_pipeline` in `celery_app.py`)
+
+Added 2026-08-20, resolving the gap noted above. Runs the enrichment
+stages for one CNPJ **in dependency order, not the fixed ETAPA-1-through-11
+list order** — the actual dependency graph is spelled out in a comment
+block right before the task:
+
+- `enrich_receita_federal(cnpj)` runs first — it's the source of
+  `municipio`/`uf` (→ `enrich_zona_franca`), `codigo_municipio_cnes`
+  (→ `enrich_cnes`), and `decisor_nome` (→ `enrich_email`, optional).
+- `enrich_pgfn_divida_ativa(cnpj)` is independent, runs anytime.
+- `enrich_zona_franca` and `enrich_cnes` are skipped (not attempted) if
+  `enrich_receita_federal` failed or didn't find the CNPJ — there's
+  nothing to pass them.
+- `enrich_site_firecrawl(site_url)` and `validate_whatsapp(telefone)`
+  need `site_url`/`telefone` that **no implemented pipeline stage
+  produces yet** (would come from `search_google_places`, still
+  `NotImplementedError`) — `process_lead_pipeline` accepts both as
+  optional params for a caller who already knows them; without them,
+  those stages are skipped with a logged reason, same treatment as a
+  missing API key.
+- `enrich_email(dominio, decisor_nome)`: **`decisor_nome` is optional,
+  not a hard dependency** — `enrich_email` already accepts `None` (falls
+  back to a domain-only Hunter.io search). Getting this distinction wrong
+  is an easy trap: an earlier draft of this task treated it as required
+  and a test caught the bug — see the comment block in `celery_app.py`
+  for the corrected graph. Only `dominio` (parsed from `site_url` via
+  `_extrair_dominio`) actually gates the step.
+- `search_google_places` is unconditionally skipped with a log warning —
+  never attempted at all, since it's guaranteed to raise. `enrich_site_firecrawl`
+  is skipped if `site_url` is missing OR `settings.FIRECRAWL_API_KEY` is
+  empty (checked separately, distinct log reasons).
+
+Each stage runs through `_rodar_etapa()`, which catches any exception,
+logs it, and returns `None` — one stage failing never stops the rest of
+the pipeline or the final persistence. The task calls sibling task
+functions directly (e.g. `enrich_receita_federal(cnpj)`, not `.delay()`)
+— Celery task objects are callable and run synchronously in-process when
+invoked that way, so no broker is needed to run or test this. Tests
+monkeypatch each sibling at the `app.workers.celery_app` module level
+(`monkeypatch.setattr(celery_app, "enrich_cnes", fake)`) rather than
+injecting them as parameters — simpler and consistent with how the rest
+of the module already calls siblings by bare name.
+
+**Persistence** (`_persistir_enriquecimento_lead`) upserts a `Lead` row
+by `cnpj` (unique/indexed on the model) — same client-injectable pattern
+as the HTTP modules, but for a SQLAlchemy `Session`: `db=None` creates a
+real `SessionLocal()` (`_get_db_session`, mirrors `_get_client`), tests
+inject an in-memory SQLite session instead (`create_engine("sqlite:///:memory:")`
++ `Base.metadata.create_all(engine)`) — no Postgres needed to test any of
+this. Each field group is only overwritten if its source stage actually
+ran this round, so a skipped/failed stage never blanks out data persisted
+by a previous successful run for the same lead. `razao_social` (`NOT NULL`
+on the model) falls back to the `razao_social` param or the bare CNPJ if
+`enrich_receita_federal` never succeeds, purely to avoid a constraint
+violation — overwritten for real once that stage works. Score fields are
+set in a second pass after `compute_lead_score` runs, using the real
+`lead.id` from the upsert (not the CNPJ) as `lead_id`.
+
+**What this doesn't do yet**: no task loops over `gerar_semente_leads`'s
+output calling `process_lead_pipeline` per CNPJ — that glue is still
+manual. No real Celery `chain`/`group` parallelism either; independent
+stages (PGFN vs. Receita Federal) just run sequentially in a fixed order
+for simplicity/testability, not concurrently.
 
 ### PGFN debt data (`app/services/pgfn.py`)
 
@@ -351,17 +414,21 @@ Federal → PGFN → Zona Franca → CNES → `enrich_site_firecrawl` (also
 covers what would've been a separate `enrich_instagram` step — the
 Instagram link comes out of the same scrape, no extra task needed) →
 LinkedIn → `validate_whatsapp` → `enrich_email` → `compute_lead_score`
-(now also implemented — see the "Lead score combination" section above;
-note its signature needs `enriquecimentos` passed in, since no
-orchestration layer exists yet to assemble that from just a `lead_id`).
+(see the "Lead score combination" section above). As of 2026-08-20,
+`process_lead_pipeline` (see "Pipeline orchestration" section above) is
+the actual entry point for running this whole sequence for one CNPJ —
+it calls the individual stage functions itself, in real dependency
+order, not the fixed ETAPA list order shown here (that list is the
+kickoff-doc reference ordering, not an execution contract).
 Implemented so far: `gerar_semente_leads`, `enrich_receita_federal`,
 `enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
 `refresh_pgfn_index`), `enrich_cnes`, `enrich_site_firecrawl`,
-`validate_whatsapp`, `enrich_email`, `compute_lead_score`. Only
-`search_google_places` raises `NotImplementedError` at this point —
-`enrich_linkedin` doesn't exist as a task at all yet (never even got a
-placeholder), unlike every other pipeline stage; it needs to be created
-from scratch, not just filled in, when picked up.
+`validate_whatsapp`, `enrich_email`, `compute_lead_score`,
+`process_lead_pipeline`. Only `search_google_places` raises
+`NotImplementedError` at this point — `enrich_linkedin` doesn't exist as
+a task at all yet (never even got a placeholder), unlike every other
+pipeline stage; it needs to be created from scratch, not just filled in,
+when picked up (and then wired into `process_lead_pipeline` too).
 
 ### `.env.example` is inaccessible in this sandbox
 

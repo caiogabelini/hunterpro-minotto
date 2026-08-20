@@ -149,14 +149,27 @@ interno do Docker.
   de `rules.py` e devolve o score total (0-100) + o breakdown por
   critério (label, peso, pontos, camada de confiabilidade), pro futuro
   dossiê do lead mostrar de onde vieram os pontos. Fórmula da PGFN
-  continua a única confirmada com o cliente; as outras 8 são decisões
-  desta sessão, documentadas caso a caso no arquivo — duas delas
+  continua a única confirmada com o Douglas (cliente); as outras 8 são
+  decisões de sessão, documentadas caso a caso no arquivo. Duas delas
   (`rqe_especialista`, cruzamento IA×CNES; `presenca_digital`, regra de
-  site+Instagram) não tinham régua fechada nas reuniões e ficam
-  marcadas como pendentes de validação com o Douglas.
+  site+Instagram) não tinham régua fechada nas reuniões com o cliente —
+  **confirmadas pelo Caio Gabelini (responsável pelo produto) em
+  19/08/2026** (confirmação de produto, não do Douglas).
+- ✅ **`process_lead_pipeline`** (`app/workers/celery_app.py`) — a task
+  orquestradora: dispara as etapas de enriquecimento pra um CNPJ na
+  ordem que respeita as dependências reais entre elas (mapeadas
+  explicitamente no arquivo — ex.: `enrich_cnes` só roda depois de
+  `enrich_receita_federal` resolver `codigo_municipio_cnes`), junta os
+  resultados, chama `compute_lead_score` e persiste tudo num `Lead`
+  (upsert por CNPJ). Uma etapa que lança exceção não derruba as outras;
+  uma etapa cuja etapa que a alimenta ainda não existe (Google Places),
+  não tem chave configurada (Firecrawl) ou não tem dado disponível
+  (`site_url`/`telefone`, que nenhuma etapa implementada produz ainda) é
+  pulada com aviso no log, registrada em `etapas_puladas` no resultado —
+  nunca quebra o pipeline inteiro.
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 176 testes automatizados passando (`pytest`)
+- ✅ 190 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -180,17 +193,21 @@ Em ordem de prioridade combinada com o cliente:
 7. ~~Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)~~
    ✅ feito
 8. ~~`compute_lead_score`~~ ✅ feito (`app/scoring/compute_lead_score.py`)
-   — falta: (a) validar com o Douglas as regras de `rqe_especialista`
-   (cruzamento IA×CNES) e `presenca_digital` (site+Instagram), que não
-   saíram fechadas das reuniões; (b) a camada de orquestração/persistência
-   que roda as tasks de enriquecimento em sequência pra um lead e
-   alimenta `compute_lead_score` com os resultados — hoje a task espera
-   receber `enriquecimentos` já prontos, não sabe buscá-los sozinha;
-   (c) implementar a task placeholder `enrich_linkedin`, que ainda não
-   existe — quando existir, revisar a graduação de `presenca_digital_points`
-   pra virar 3 sinais em vez de 2
-9. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
-   exportação CSV/Excel pedida pela Sulamita)
+   — regras de `rqe_especialista` e `presenca_digital` confirmadas pelo
+   Caio (produto) em 19/08/2026; se o Douglas pedir uma régua diferente
+   pra qualquer uma das duas, ajustar as funções correspondentes
+9. ~~Orquestração do pipeline (`process_lead_pipeline`) + persistência
+   no `Lead`~~ ✅ feito — falta: (a) implementar a task placeholder
+   `enrich_linkedin`, que ainda não existe — quando existir, revisar a
+   graduação de `presenca_digital_points` pra virar 3 sinais em vez de
+   2, e adicionar a etapa em `process_lead_pipeline`; (b) resolver o gap
+   de `site_url`/`telefone` (hoje sem fonte automática nenhuma no
+   pipeline — dependem de `search_google_places`, que segue
+   `NotImplementedError`); (c) rodar `gerar_semente_leads` e iterar
+   sobre os CNPJs chamando `process_lead_pipeline` pra cada um — hoje
+   isso é manual, não existe uma task que faça esse loop sozinha
+10. Autenticação (JWT, admin/client) e telas do frontend (Kanban,
+    exportação CSV/Excel pedida pela Sulamita)
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
