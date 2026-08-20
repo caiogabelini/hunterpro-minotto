@@ -18,9 +18,11 @@ export function KanbanColumn({ status, label, leads }: Props) {
         <span className="kanban-column-count">{leads.length}</span>
       </div>
       <div ref={setNodeRef} className="kanban-column-body">
-        {leads.map((lead) => (
-          <KanbanCard key={lead.id} lead={lead} />
-        ))}
+        {leads.length === 0 ? (
+          <div className="kanban-column-vazia">Nenhum lead aqui ainda</div>
+        ) : (
+          leads.map((lead) => <KanbanCard key={lead.id} lead={lead} />)
+        )}
       </div>
     </div>
   );

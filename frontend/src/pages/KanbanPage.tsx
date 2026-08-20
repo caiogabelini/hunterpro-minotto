@@ -72,13 +72,8 @@ export function KanbanPage() {
   return (
     <div className="kanban-page">
       <header className="kanban-header">
-        <div>
-          <div className="kanban-eyebrow">HunterPro</div>
-          <h1 className="kanban-title">Minotto Contabilidade</h1>
-        </div>
-        <button className="kanban-logout" onClick={logout}>
-          Sair
-        </button>
+        <div className="kanban-eyebrow">Pipeline comercial</div>
+        <h1 className="kanban-title">Kanban de Leads</h1>
       </header>
 
       {erro && <p className="kanban-erro">{erro}</p>}

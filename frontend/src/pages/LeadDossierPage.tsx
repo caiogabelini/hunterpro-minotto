@@ -1,3 +1,20 @@
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Building2,
+  ExternalLink,
+  Gauge,
+  Globe,
+  Landmark,
+  Loader2,
+  Mail,
+  Phone,
+  Send,
+  ShieldCheck,
+  Sparkles,
+  Stethoscope,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
@@ -51,7 +68,8 @@ export function LeadDossierPage() {
   return (
     <div className="dossier-page">
       <button className="dossier-voltar" onClick={() => navigate("/")}>
-        ← Voltar pro Kanban
+        <ArrowLeft size={15} />
+        <span>Voltar pro Kanban</span>
       </button>
 
       {carregando && <p className="dossier-status">Carregando...</p>}
@@ -61,16 +79,16 @@ export function LeadDossierPage() {
         <>
           <header className="dossier-header">
             <div>
-              <div className="dossier-eyebrow">HunterPro</div>
+              <div className="dossier-eyebrow">Dossiê do lead</div>
               <h1 className="dossier-razao">{lead.razao_social}</h1>
               {lead.nome_fantasia && <p className="dossier-fantasia">{lead.nome_fantasia}</p>}
               <p className="dossier-cnpj">{lead.cnpj}</p>
               <KanbanStatusBadge status={lead.kanban_status} motivoPerda={lead.motivo_perda} />
             </div>
             <div className="dossier-header-score">
-              <PriorityBadge prioridade={lead.prioridade} />
+              <PriorityBadge prioridade={lead.prioridade} size="lg" />
               <div className="dossier-score-total">{lead.score_total ?? "—"}</div>
-              <div className="dossier-score-label">pontos</div>
+              <div className="dossier-score-label">pontos de score</div>
             </div>
           </header>
 
@@ -86,7 +104,7 @@ export function LeadDossierPage() {
 
           <div className="dossier-grid">
             <section className="dossier-card">
-              <h2>Dados cadastrais</h2>
+              <SectionHeading icon={Building2}>Dados cadastrais</SectionHeading>
               <dl>
                 <Campo label="CNAE" valor={lead.cnae_principal} />
                 <Campo label="Município/UF" valor={lead.municipio ? `${lead.municipio}/${lead.uf ?? "—"}` : null} />
@@ -97,7 +115,7 @@ export function LeadDossierPage() {
             </section>
 
             <section className="dossier-card">
-              <h2>Contato</h2>
+              <SectionHeading icon={Phone}>Contato</SectionHeading>
               <dl>
                 <Campo label="Telefone" valor={lead.telefone} />
                 <CampoWhatsapp telefone={lead.telefone} ativo={lead.whatsapp_ativo} />
@@ -107,7 +125,7 @@ export function LeadDossierPage() {
             </section>
 
             <section className="dossier-card">
-              <h2>Presença digital</h2>
+              <SectionHeading icon={Globe}>Presença digital</SectionHeading>
               <dl>
                 <Campo label="Site" valor={lead.site} link={lead.site} />
                 <Campo label="Instagram" valor={lead.instagram} />
@@ -163,7 +181,10 @@ function SecaoPgfn({
   const temPendencia = !!qtdInscricoes && qtdInscricoes > 0;
   return (
     <section className={`dossier-pgfn ${temPendencia ? "dossier-pgfn-alerta" : "dossier-pgfn-ok"}`}>
-      <h2>Dívida ativa PGFN</h2>
+      <h2 className="dossier-pgfn-heading">
+        {temPendencia ? <Landmark size={17} /> : <ShieldCheck size={17} />}
+        <span>Dívida ativa PGFN</span>
+      </h2>
       {temPendencia ? (
         <>
           <p>
@@ -177,7 +198,12 @@ function SecaoPgfn({
             )}
             {" "}— verificar antes de avançar a negociação.
           </p>
-          {ajuizado && <span className="dossier-pgfn-ajuizado">⚠️ Execução judicial em andamento</span>}
+          {ajuizado && (
+            <span className="dossier-pgfn-ajuizado">
+              <AlertTriangle size={14} />
+              <span>Execução judicial em andamento</span>
+            </span>
+          )}
         </>
       ) : (
         <p>Nenhuma pendência encontrada na Receita/PGFN.</p>
@@ -203,7 +229,7 @@ function SecaoRqe({ confirmado, fonte }: { confirmado?: boolean | null; fonte?: 
 
   return (
     <section className="dossier-card">
-      <h2>RQE / Especialidade</h2>
+      <SectionHeading icon={Stethoscope}>RQE / Especialidade</SectionHeading>
       <span className={`dossier-rqe-badge ${classe}`}>{texto}</span>
     </section>
   );
@@ -233,7 +259,7 @@ function SecaoAbordagem({
   if (!mostrarEmail && !mostrarWhatsapp) {
     return (
       <section className="dossier-card">
-        <h2>Abordagem sugerida</h2>
+        <SectionHeading icon={Sparkles}>Abordagem sugerida</SectionHeading>
         <p className="dossier-muted">Nenhum canal disponível ainda (sem e-mail nem WhatsApp confirmado pra este lead).</p>
       </section>
     );
@@ -241,7 +267,7 @@ function SecaoAbordagem({
 
   return (
     <section className="dossier-card">
-      <h2>Abordagem sugerida</h2>
+      <SectionHeading icon={Sparkles}>Abordagem sugerida</SectionHeading>
       <div className="dossier-abordagem-canais">
         {mostrarEmail && (
           <CanalAbordagemCard
@@ -327,7 +353,8 @@ function CanalAbordagemCard({
                 className="dossier-abordagem-btn-acao"
                 href={`mailto:${email}?subject=${encodeURIComponent(mensagem.assunto ?? "")}&body=${encodeURIComponent(mensagem.conteudo)}`}
               >
-                Abrir no e-mail
+                <Mail size={14} />
+                <span>Abrir no e-mail</span>
               </a>
             )}
             {canal === "whatsapp" && numeroWhatsapp && (
@@ -337,19 +364,26 @@ function CanalAbordagemCard({
                 target="_blank"
                 rel="noreferrer"
               >
-                Enviar mensagem gerada
+                <Send size={14} />
+                <span>Enviar mensagem gerada</span>
               </a>
             )}
-            <button type="button" className="dossier-abordagem-btn-secundario" onClick={gerar} disabled={gerando}>
-              {gerando ? "Gerando..." : "Gerar novamente"}
+            <button
+              type="button"
+              className="dossier-abordagem-btn-secundario"
+              onClick={gerar}
+              disabled={gerando}
+              aria-busy={gerando}
+            >
+              {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
             </button>
           </div>
         </>
       ) : (
         <>
           <p className="dossier-muted">Mensagem ainda não gerada.</p>
-          <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando}>
-            {gerando ? "Gerando..." : "Gerar mensagem com IA"}
+          <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
+            {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar mensagem com IA"}
           </button>
         </>
       )}
@@ -362,7 +396,7 @@ function SecaoBreakdown({ scoreDetalhes }: { scoreDetalhes: unknown }) {
   const breakdown = getScoreBreakdown(scoreDetalhes);
   return (
     <section className="dossier-card">
-      <h2>Breakdown do score</h2>
+      <SectionHeading icon={Gauge}>Breakdown do score</SectionHeading>
       {breakdown.length ? (
         <ul className="dossier-breakdown-list">
           {breakdown.map((item) => (
@@ -379,6 +413,20 @@ function SecaoBreakdown({ scoreDetalhes }: { scoreDetalhes: unknown }) {
         <p className="dossier-muted">Score ainda não calculado pra este lead.</p>
       )}
     </section>
+  );
+}
+
+/** Título de seção com ícone -- usado em todo `<h2>` deste dossiê
+ * (exceto o de "Dívida ativa PGFN", que troca de ícone conforme
+ * pendência/ok, ver SecaoPgfn). `icon` recebe o componente do
+ * lucide-react direto (não um elemento já instanciado), pra poder
+ * controlar `size` num lugar só. */
+function SectionHeading({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+  return (
+    <h2 className="dossier-section-heading">
+      <Icon size={16} />
+      <span>{children}</span>
+    </h2>
   );
 }
 
@@ -456,7 +504,8 @@ function CampoWhatsapp({ telefone, ativo }: { telefone?: string | null; ativo?: 
         <Indicador ativo={ativo} textoAtivo="Ativo" textoInativo="Não confirmado" />
         {numero && (
           <a className="dossier-whatsapp-link" href={`https://wa.me/${numero}`} target="_blank" rel="noreferrer">
-            Abrir WhatsApp ↗
+            <span>Abrir WhatsApp</span>
+            <ExternalLink size={12} />
           </a>
         )}
       </dd>

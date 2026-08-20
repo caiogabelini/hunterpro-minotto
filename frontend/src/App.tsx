@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { KanbanPage } from "./pages/KanbanPage";
@@ -15,7 +16,9 @@ function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <KanbanPage />
+                <AuthenticatedLayout>
+                  <KanbanPage />
+                </AuthenticatedLayout>
               </ProtectedRoute>
             }
           />
@@ -23,7 +26,9 @@ function App() {
             path="/leads/:id"
             element={
               <ProtectedRoute>
-                <LeadDossierPage />
+                <AuthenticatedLayout>
+                  <LeadDossierPage />
+                </AuthenticatedLayout>
               </ProtectedRoute>
             }
           />

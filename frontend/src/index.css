@@ -18,7 +18,14 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* Gradiente radial sutil (token em tokens.css) em vez de --bg chapado
+     -- profundidade visual, mesmo tema escuro navy/dourado já validado
+     com o cliente. --bg continua definido acima pra qualquer uso pontual
+     que precise da cor sólida (ex.: fallback), mas o body usa o
+     gradiente. NÃO É mudança de tema -- ver aviso em tokens.css. */
+  background: var(--bg-gradient);
+  background-color: var(--bg);
+  background-attachment: fixed;
   color: #fff;
   font-family: var(--font-body);
 }
@@ -27,15 +34,44 @@ body {
   min-height: 100vh;
 }
 
-/* PriorityBadge -- compartilhado entre KanbanCard e LeadDossierPage */
+/* PriorityBadge -- compartilhado entre KanbanCard e LeadDossierPage.
+   Visual "pill" (raio bem arredondado) com mais contraste de cor que a
+   versão anterior -- fundo mais saturado, texto em negrito, ponto
+   colorido antes da letra pra reforçar a leitura rápida de prioridade
+   num quadro Kanban com vários cards. */
 .priority-badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   font-weight: 700;
-  border-radius: 6px;
-  padding: 2px 7px;
+  letter-spacing: 0.3px;
+  border-radius: 999px;
+  padding: 3px 10px 3px 8px;
 }
 
-.priority-a { background: rgba(124, 215, 156, 0.18); color: #7cd79c; }
-.priority-b { background: rgba(245, 200, 66, 0.18); color: var(--gold); }
-.priority-c { background: rgba(232, 131, 127, 0.18); color: #e8837f; }
+.priority-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.priority-a { background: rgba(124, 215, 156, 0.22); color: #8ee6ab; }
+.priority-b { background: rgba(245, 200, 66, 0.22); color: var(--gold); }
+.priority-c { background: rgba(232, 131, 127, 0.22); color: #f0938e; }
+
+/* Variante maior -- usada no cabeçalho do Dossiê (junto do score total,
+   que também ganhou mais destaque nesta sessão), onde a prioridade
+   precisa de mais presença visual do que a pill discreta do card do
+   Kanban. */
+.priority-badge-lg {
+  font-size: 13px;
+  padding: 5px 14px 5px 11px;
+}
+
+.priority-badge-lg::before {
+  width: 8px;
+  height: 8px;
+}

@@ -28,11 +28,15 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 
 frontend/         React + Vite + TypeScript
   src/
-    api.ts                cliente HTTP pro backend (leads, login, PATCH status)
+    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status)
+    tokens.css             sombra/transição/espaçamento/gradiente de fundo (design tokens)
+    index.css               paleta de cor (navy/dourado) + tipografia + badges compartilhados
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
-    components/           ProtectedRoute, KanbanColumn, KanbanCard, LossReasonModal, PriorityBadge
-    pages/                LoginPage, KanbanPage
-    App.tsx                React Router: /login (público) e / (Kanban, protegida)
+    components/           Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn,
+                          KanbanCard, LossReasonModal, PriorityBadge
+    pages/                LoginPage, KanbanPage, LeadDossierPage
+    App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id
+                          (protegidas, com sidebar via AuthenticatedLayout)
 ```
 
 **Deploy (EasyPanel):** backend, worker (Celery) e frontend como **App
@@ -456,6 +460,82 @@ interno do Docker.
   WhatsApp" que já existia na seção de Contato (aquele abre uma conversa
   vazia, esse pré-preenche com a mensagem gerada). `npm run
   build`/`npm run lint`/`npm run test` limpos.
+- ✅ **Polimento visual "premium SaaS" das 3 telas** (Login, Kanban,
+  Dossiê) — sessão só de frontend, nenhum arquivo de backend tocado.
+  **⚠️ Tema continua escuro (navy `#292C5D`/fundo `#0B0D22`/dourado
+  `#F5C842`)** — decisão já validada com o cliente desde a primeira
+  tela, esta sessão reforça profundidade (sombra, gradiente) dentro do
+  mesmo tema, **não troca pra tema claro**. Ver aviso equivalente (mais
+  detalhado) no topo de `frontend/src/tokens.css` — não reverter isso
+  numa sessão futura por engano.
+  - **Sidebar fixa** (`components/Sidebar.tsx` + `AuthenticatedLayout.tsx`,
+    novos) — presente em Kanban e Dossiê (não em Login). Logo "HunterPro"
+    no topo, item "Kanban" (destacado quando ativo), "Busca de Leads" e
+    "Dashboard" como itens desabilitados com selo "em breve" (essas
+    telas não existem — nenhuma rota falsa foi criada, só o espaço
+    reservado visualmente). Rodapé: papel do usuário logado (decodificado
+    do JWT — hoje o token só tem `user_id`/`role`, sem e-mail/nome; ver
+    comentário em `Sidebar.tsx` pra esse limite) + botão Sair, que saiu
+    do topo da página do Kanban e foi pra cá. "Fixa" é `position: sticky`
+    dentro de um layout flex (`AuthenticatedLayout.css`), não `position:
+    fixed` — mesmo resultado visual, sem precisar sincronizar manualmente
+    a largura da sidebar com uma margem no conteúdo.
+  - **`frontend/src/tokens.css`** (novo, importado antes de `index.css`
+    em `main.tsx`) — sombras sutis (`--shadow-sm/md/lg`, mais uma
+    `--shadow-gold-hover` pra hover de botão/card com brilho de marca),
+    transições (`--transition-fast` 150ms/`--transition-smooth` 250ms),
+    escala de espaçamento (`--space-1` a `--space-12`, múltiplos de
+    4px), e `--bg-gradient` (gradiente radial sutil, aplicado no `body`
+    em `index.css`, substituindo o fundo chapado anterior).
+  - **`lucide-react`** instalado — os 3 emojis/setas de texto que
+    existiam (⚠️ na seção de PGFN, ← no botão voltar, ↗ no link do
+    WhatsApp) viraram ícones vetoriais (`AlertTriangle`, `ArrowLeft`,
+    `ExternalLink`). Cada seção do Dossiê ganhou um ícone no cabeçalho
+    (`Building2`, `Phone`, `Globe`, `Stethoscope`, `Sparkles`, `Gauge`,
+    e `Landmark`/`ShieldCheck` alternando na PGFN conforme tem ou não
+    pendência) via um componente compartilhado, `SectionHeading`.
+  - **Badges mais "pill"** — prioridade (A/B/C), status do Kanban, e as
+    camadas do score (estruturado/inferência/validação, que antes eram
+    só texto cinza e agora são pills coloridas por camada) — raio bem
+    arredondado (`border-radius: 999px`), mais contraste de cor. Badge
+    de prioridade ganhou uma variante maior (`priority-badge-lg`) pro
+    cabeçalho do Dossiê.
+  - **Botões**: hover consistente (leve elevação + brilho dourado via
+    `--shadow-gold-hover` nos primários, borda/cor dourada nos
+    secundários), `:active`/`:disabled` bem definidos, transição em
+    todos usando os tokens.
+  - **Login**: gradiente de fundo (herdado do `body`, nenhuma mudança
+    local necessária), mais respiro (padding maior, `max-width` do card
+    subiu de 360px pra 400px), ícone (`Building2`) e subtítulo
+    acrescentados pra reforçar hierarquia visual, sombra `--shadow-lg`
+    no card.
+  - **Kanban**: colunas vazias mostram "Nenhum lead aqui ainda" (antes
+    ficava um espaço em branco); cards ganharam sombra + hover (leve
+    elevação, `translateY(-2px)`) sinalizando que são interativos, e
+    uma animação sutil de entrada (`kanban-card-entrar`, fade + leve
+    translate) toda vez que um card é montado — inclusive ao mudar de
+    coluna, já que mover pra outra coluna troca o pai do elemento no
+    DOM e React remonta o card ali (uma animação de posição de verdade,
+    tipo FLIP, precisaria de uma lib como framer-motion — fora de
+    escopo desta sessão).
+  - **Dossiê** (a tela mais trabalhada): ícone em cada `<h2>` de seção;
+    hierarquia tipográfica mais forte — `dt`/`dd` dos campos passaram a
+    ter tamanhos/pesos diferentes (label pequena/maiúscula/cinza, valor
+    maior/em negrito), e um divisor sutil (`border-bottom` fraco) separa
+    cada linha de campo dentro de um card, exceto a última; score total
+    saltou de 40px pra 60px com um leve `text-shadow` dourado, badge de
+    prioridade ganhou a variante `-lg`; loading da geração de mensagem
+    por IA trocou o texto "Gerando..." por um ícone `Loader2` girando
+    (`@keyframes spin` em `tokens.css`, classe `.spin` reutilizável).
+  - **Sem validação visual real** — este sandbox não tem navegador (ver
+    "Network access..." no CLAUDE.md, mesma limitação de sempre, agora
+    também relevante pra CSS/layout, não só chamadas de API). Todo
+    valor de cor/espaçamento/sombra foi escolhido com cuidado e
+    documentado, mas não foi visualmente conferido numa tela de
+    verdade — validação real fica por conta do usuário. `npm run
+    build`/`npm run lint`/`npm run test` confirmam que nada quebrou
+    tecnicamente (TypeScript, lint, os 12 testes de `vitest` já
+    existentes), não que o resultado visual está correto.
 - ✅ 253 testes automatizados passando (`pytest`) + 12 testes no
   frontend (`vitest`)
 
@@ -528,6 +608,30 @@ Em ordem de prioridade combinada com o cliente:
     - **Cadastro de usuário pelo frontend** — continua só via
       `scripts/create_user.py` (ver item 11 acima); nenhuma tela de
       admin foi criada.
+14. ~~Polimento visual "premium SaaS" (sidebar, tokens de design,
+    ícones, sombras/hover) nas 3 telas existentes~~ ✅ feito (20/08/2026)
+    — ver acima. Pendências deixadas de propósito:
+    - **Validação visual real** — este sandbox não tem navegador; todo
+      o polimento foi validado só tecnicamente (`build`/`lint`/`test`),
+      não visualmente. Primeira coisa a conferir numa sessão com acesso
+      a browser antes de confiar 100% no resultado.
+    - **Nome/e-mail real do usuário na sidebar** — hoje mostra só o
+      papel ("Administrador"/"Cliente"), decodificado do JWT, porque o
+      payload do token não carrega nome nem e-mail (ver
+      `app/api/routes/auth.py`). Exigiria adicionar esses campos ao
+      payload (ou um endpoint `GET /api/auth/me`) — não fica pendente
+      por complexidade, só não foi pedido nesta sessão de polimento
+      visual puro.
+    - **Animação de posição real ao mover card entre colunas do
+      Kanban** — o que existe hoje é uma animação de entrada (fade +
+      leve translate) no card remontado na coluna nova, não uma
+      transição de posição de verdade (tipo FLIP). Precisaria de uma
+      lib como `framer-motion` — avaliar se vale a pena numa sessão
+      futura, não foi adicionada agora pra não crescer o escopo de
+      dependências além do pedido (`lucide-react` foi a única nova).
+    - **"Busca de Leads" e "Dashboard"** continuam só itens reservados
+      na sidebar ("em breve", desabilitados) — nenhuma dessas telas
+      existe, de propósito (não inventar rota falsa).
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

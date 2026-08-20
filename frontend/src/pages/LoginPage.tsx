@@ -1,3 +1,4 @@
+import { Building2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -38,8 +39,12 @@ export function LoginPage() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
+        <div className="login-icon">
+          <Building2 size={22} />
+        </div>
         <div className="login-eyebrow">HunterPro</div>
         <h1 className="login-title">Minotto Contabilidade</h1>
+        <p className="login-subtitle">Entre com sua conta pra acessar o pipeline de leads.</p>
 
         <label className="login-field">
           <span>E-mail</span>

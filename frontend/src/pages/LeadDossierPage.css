@@ -1,11 +1,14 @@
 .dossier-page {
   min-height: 100vh;
-  padding: 24px 28px 56px;
-  max-width: 960px;
+  padding: var(--space-8) var(--space-8) var(--space-10);
+  max-width: 1040px;
   margin: 0 auto;
 }
 
 .dossier-voltar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.18);
   color: var(--gray);
@@ -14,12 +17,14 @@
   font-size: 13px;
   cursor: pointer;
   font-family: var(--font-body);
-  margin-bottom: 20px;
+  margin-bottom: var(--space-6);
+  transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
 }
 
 .dossier-voltar:hover {
   border-color: var(--gold);
   color: var(--gold);
+  background: rgba(245, 200, 66, 0.06);
 }
 
 .dossier-status {
@@ -28,7 +33,7 @@
 }
 
 .dossier-erro {
-  color: #e8837f;
+  color: #f0938e;
 }
 
 .dossier-header {
@@ -38,9 +43,10 @@
   gap: 20px;
   background: var(--navy-dark);
   border: 1px solid rgba(245, 200, 66, 0.18);
-  border-radius: 14px;
-  padding: 24px 28px;
-  margin-bottom: 16px;
+  border-radius: 16px;
+  padding: var(--space-6) var(--space-8);
+  margin-bottom: var(--space-4);
+  box-shadow: var(--shadow-md);
 }
 
 .dossier-eyebrow {
@@ -56,7 +62,7 @@
   font-family: var(--font-display);
   font-weight: 400;
   letter-spacing: 0.5px;
-  font-size: 28px;
+  font-size: 32px;
   margin: 0 0 2px;
   color: #fff;
 }
@@ -80,11 +86,11 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .dossier-kanban-status {
-  margin-top: 10px;
+  margin-top: var(--space-3);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -97,15 +103,15 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  border-radius: 6px;
-  padding: 3px 10px;
-  background: rgba(245, 200, 66, 0.14);
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: rgba(245, 200, 66, 0.16);
   color: var(--gold);
 }
 
 .dossier-kanban-pill-perdido {
-  background: rgba(232, 131, 127, 0.18);
-  color: #e8837f;
+  background: rgba(232, 131, 127, 0.2);
+  color: #f0938e;
 }
 
 .dossier-motivo-perda {
@@ -116,14 +122,18 @@
 .dossier-datas {
   font-size: 12px;
   color: var(--gray);
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
 }
 
+/* Score total -- o número mais importante da tela, precisa de presença
+   real (pedido explícito: "com mais presença visual, com destaque
+   real"). Bem maior que o resto da tipografia da página de propósito. */
 .dossier-score-total {
   font-family: var(--font-display);
-  font-size: 40px;
+  font-size: 60px;
   color: var(--gold);
   line-height: 1;
+  text-shadow: 0 0 24px rgba(245, 200, 66, 0.25);
 }
 
 .dossier-score-label {
@@ -134,24 +144,28 @@
 }
 
 .dossier-pgfn {
-  border-radius: 14px;
-  padding: 18px 24px;
-  margin-bottom: 16px;
+  border-radius: 16px;
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
   border: 1px solid;
+  box-shadow: var(--shadow-sm);
 }
 
-.dossier-pgfn h2 {
+.dossier-pgfn-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-family: var(--font-display);
   font-weight: 400;
   letter-spacing: 0.3px;
   font-size: 18px;
-  margin: 0 0 6px;
+  margin: 0 0 8px;
 }
 
 .dossier-pgfn p {
   margin: 0;
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .dossier-pgfn-ok {
@@ -159,8 +173,8 @@
   border-color: rgba(124, 215, 156, 0.3);
 }
 
-.dossier-pgfn-ok h2 {
-  color: #7cd79c;
+.dossier-pgfn-ok .dossier-pgfn-heading {
+  color: #8ee6ab;
 }
 
 .dossier-pgfn-alerta {
@@ -168,72 +182,108 @@
   border-color: rgba(232, 131, 127, 0.4);
 }
 
-.dossier-pgfn-alerta h2 {
-  color: #e8837f;
+.dossier-pgfn-alerta .dossier-pgfn-heading {
+  color: #f0938e;
 }
 
 .dossier-pgfn-ajuizado {
-  display: inline-block;
-  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
   font-size: 13px;
   font-weight: 700;
   color: #ff8f89;
   background: rgba(232, 131, 127, 0.22);
   border: 1px solid rgba(232, 131, 127, 0.5);
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 7px 14px;
 }
 
 .dossier-page > .dossier-card {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .dossier-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
 }
 
 .dossier-card {
   background: var(--navy-dark);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  padding: 20px 24px;
+  border-radius: 16px;
+  padding: var(--space-5) var(--space-6);
+  box-shadow: var(--shadow-sm);
 }
 
-.dossier-card h2 {
+/* Título de seção com ícone (components: SectionHeading em
+   LeadDossierPage.tsx). Mesma linguagem tipográfica de antes (display,
+   uppercase, gold-dim) -- só virou flex row pra acomodar o ícone. */
+.dossier-section-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   font-family: var(--font-display);
   font-weight: 400;
   letter-spacing: 0.3px;
   font-size: 16px;
   color: var(--gold-dim);
   text-transform: uppercase;
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-4);
+}
+
+.dossier-section-heading svg {
+  flex-shrink: 0;
+  color: var(--gold);
 }
 
 .dossier-card dl {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
 }
 
+/* Divisor sutil entre campos -- cada linha dt/dd é sua própria "seção"
+   dentro do card; uma linha muito fina separa uma da outra, exceto a
+   última (sem borda pra não duplicar com a borda do card). Efeito
+   "planilha/spec sheet" comum em dossiês de SaaS premium. */
 .dossier-campo {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 12px;
-  font-size: 13px;
+  gap: var(--space-3);
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.dossier-campo:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.dossier-campo:first-child {
+  padding-top: 0;
+}
+
+/* Label discreta, valor com mais peso -- hierarquia tipográfica label
+   vs. valor (pedido explícito da sessão). */
 .dossier-campo dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
   color: var(--gray);
+  flex-shrink: 0;
 }
 
 .dossier-campo dd {
   margin: 0;
   text-align: right;
+  font-size: 14px;
+  font-weight: 600;
   color: #fff;
   word-break: break-word;
 }
@@ -249,23 +299,24 @@
 
 .dossier-campo-vazio {
   color: var(--gray) !important;
+  font-weight: 400 !important;
 }
 
 .dossier-indicador {
   font-size: 11px;
   font-weight: 700;
-  border-radius: 6px;
-  padding: 2px 8px;
+  border-radius: 999px;
+  padding: 3px 10px;
 }
 
 .indicador-on {
-  background: rgba(124, 215, 156, 0.18);
-  color: #7cd79c;
+  background: rgba(124, 215, 156, 0.22);
+  color: #8ee6ab;
 }
 
 .indicador-off {
-  background: rgba(232, 131, 127, 0.18);
-  color: #e8837f;
+  background: rgba(232, 131, 127, 0.22);
+  color: #f0938e;
 }
 
 .indicador-desconhecido {
@@ -283,18 +334,24 @@
   display: flex !important;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .dossier-whatsapp-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
+  font-weight: 600;
   color: var(--gold);
   text-decoration: none;
   white-space: nowrap;
+  transition: color var(--transition-fast);
 }
 
 .dossier-whatsapp-link:hover {
+  color: var(--gold-dim);
   text-decoration: underline;
 }
 
@@ -309,6 +366,7 @@
   cursor: pointer;
   font-family: var(--font-body);
   white-space: nowrap;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .dossier-copy-btn:hover {
@@ -320,20 +378,20 @@
   display: inline-block;
   font-size: 13px;
   font-weight: 700;
-  border-radius: 8px;
-  padding: 8px 14px;
+  border-radius: 999px;
+  padding: 8px 16px;
 }
 
 .rqe-alta-confianca {
-  background: rgba(124, 215, 156, 0.16);
-  color: #7cd79c;
-  border: 1px solid rgba(124, 215, 156, 0.35);
+  background: rgba(124, 215, 156, 0.18);
+  color: #8ee6ab;
+  border: 1px solid rgba(124, 215, 156, 0.4);
 }
 
 .rqe-inferencia {
-  background: rgba(245, 200, 66, 0.14);
+  background: rgba(245, 200, 66, 0.16);
   color: var(--gold);
-  border: 1px solid rgba(245, 200, 66, 0.3);
+  border: 1px solid rgba(245, 200, 66, 0.35);
 }
 
 .rqe-desconhecido {
@@ -345,14 +403,14 @@
 .dossier-abordagem-canais {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .dossier-abordagem-canal {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  padding: 16px 18px;
+  border-radius: 12px;
+  padding: var(--space-4) var(--space-5);
 }
 
 .dossier-abordagem-canal-titulo {
@@ -362,7 +420,7 @@
   font-size: 14px;
   color: var(--gold);
   text-transform: uppercase;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
 }
 
 .dossier-abordagem-assunto {
@@ -380,11 +438,13 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .dossier-abordagem-btn-acao {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--gold);
   color: var(--navy-dark);
   border: none;
@@ -395,18 +455,29 @@
   cursor: pointer;
   font-family: var(--font-body);
   text-decoration: none;
+  transition: background-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .dossier-abordagem-btn-acao:hover {
   background: var(--gold-dim);
+  box-shadow: var(--shadow-gold-hover);
+  transform: translateY(-1px);
 }
 
 .dossier-abordagem-texto {
   font-size: 14px;
   line-height: 1.6;
   color: #fff;
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-4);
   white-space: pre-wrap;
+}
+
+.dossier-abordagem-btn,
+.dossier-abordagem-btn-secundario {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
 }
 
 .dossier-abordagem-btn {
@@ -419,11 +490,14 @@
   font-weight: 700;
   cursor: pointer;
   font-family: var(--font-body);
-  margin-top: 10px;
+  margin-top: var(--space-2);
+  transition: background-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .dossier-abordagem-btn:hover:not(:disabled) {
   background: var(--gold-dim);
+  box-shadow: var(--shadow-gold-hover);
+  transform: translateY(-1px);
 }
 
 .dossier-abordagem-btn-secundario {
@@ -436,6 +510,7 @@
   font-weight: 700;
   cursor: pointer;
   font-family: var(--font-body);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .dossier-abordagem-btn-secundario:hover:not(:disabled) {
@@ -445,14 +520,15 @@
 
 .dossier-abordagem-btn:disabled,
 .dossier-abordagem-btn-secundario:disabled {
-  opacity: 0.6;
+  opacity: 0.7;
   cursor: default;
+  transform: none;
 }
 
 .dossier-abordagem-erro {
-  color: #e8837f;
+  color: #f0938e;
   font-size: 13px;
-  margin: 10px 0 0;
+  margin: var(--space-3) 0 0;
 }
 
 .dossier-breakdown-list {
@@ -461,17 +537,22 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .dossier-breakdown-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 10px 14px;
   border-radius: 8px;
   border-left: 3px solid transparent;
   background: rgba(255, 255, 255, 0.03);
+  transition: background-color var(--transition-fast);
+}
+
+.dossier-breakdown-item:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .dossier-breakdown-item.layer-estruturado {
@@ -486,12 +567,36 @@
   border-left-color: #7ea6e8;
 }
 
+/* Badge de camada -- pill com fundo/cor da própria camada (mesmo tom da
+   borda esquerda do item), não mais só um texto cinza. Mais contraste e
+   visual "pill" arredondado, mesmo pedido do resto dos badges da
+   sessão. */
 .dossier-breakdown-layer-tag {
+  display: inline-block;
+  flex-shrink: 0;
   font-size: 10px;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--gray);
+  border-radius: 999px;
+  padding: 3px 10px;
   min-width: 78px;
+  text-align: center;
+}
+
+.layer-estruturado .dossier-breakdown-layer-tag {
+  background: rgba(124, 215, 156, 0.16);
+  color: #8ee6ab;
+}
+
+.layer-inferencia .dossier-breakdown-layer-tag {
+  background: rgba(245, 200, 66, 0.16);
+  color: var(--gold);
+}
+
+.layer-validacao .dossier-breakdown-layer-tag {
+  background: rgba(126, 166, 232, 0.18);
+  color: #a8c4f0;
 }
 
 .dossier-breakdown-label {

@@ -1,0 +1,73 @@
+/*
+ * Tokens de design compartilhados -- HunterPro Minotto Contabilidade.
+ *
+ * ⚠️ TEMA ESCURO É DECISÃO DELIBERADA, JÁ VALIDADA COM O CLIENTE --
+ * não trocar pra tema claro numa sessão futura "por engano" ou como
+ * efeito colateral de um polimento visual. O navy/dourado (--navy,
+ * --gold em index.css) é a identidade visual acordada com a Minotto
+ * Contabilidade desde a primeira tela (ver CLAUDE.md, "Frontend: Login
+ * + Kanban"). Esta sessão (polimento visual "premium SaaS") reforça o
+ * tema escuro com profundidade (sombras, gradiente de fundo) -- não o
+ * substitui.
+ *
+ * Importado globalmente em main.tsx, antes de index.css (que define a
+ * paleta de cor em si -- --navy/--gold/etc). Este arquivo cobre só o
+ * que é reutilizável entre várias telas e não é cor de marca: sombra,
+ * transição, espaçamento, gradiente de fundo.
+ */
+:root {
+  /* Sombras -- tema escuro pede sombras mais sutis que tema claro (o
+     fundo já é escuro, uma sombra forte some ou vira uma mancha preta
+     sem definição). Todas em preto puro com opacidade baixa/crescente,
+     nunca "pesadas". */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.42);
+
+  /* Sombra com leve brilho dourado -- usada em hover de botão primário/
+     card interativo, pra reforçar a identidade de marca no estado de
+     interação (não só uma sombra preta genérica). */
+  --shadow-gold-hover: 0 6px 20px rgba(245, 200, 66, 0.22);
+
+  /* Transições */
+  --transition-fast: 150ms ease;
+  --transition-smooth: 250ms ease;
+
+  /* Escala de espaçamento -- múltiplos de 4px, mesma convenção comum a
+     sistemas de design SaaS (Tailwind, Radix, etc.) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Fundo com gradiente radial sutil -- substitui o antigo fundo chapado
+     (var(--bg) sólido) em `body` (index.css). Ainda escuro, ainda dentro
+     da mesma paleta (o tom mais claro do gradiente é um navy ainda mais
+     escuro que --navy, não um azul genérico) -- profundidade, não
+     mudança de tema. */
+  --bg-gradient: radial-gradient(ellipse at top left, #1a1642 0%, #0b0d22 55%);
+
+  /* Largura da sidebar fixa (components/Sidebar.tsx) -- token porque
+     AuthenticatedLayout.css precisa do mesmo valor pro espaço reservado
+     ao conteúdo principal. */
+  --sidebar-width: 240px;
+}
+
+/* Ícone giratório (lucide-react Loader2) -- usado no estado de loading
+   da geração de mensagem por IA (LeadDossierPage) em vez do texto
+   "Gerando...". Definido aqui, não localmente, porque é genérico o
+   bastante pra qualquer spinner futuro reaproveitar. */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}

@@ -3,19 +3,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-6);
 }
 
 .login-card {
   width: 100%;
-  max-width: 360px;
+  max-width: 400px;
   background: var(--navy-dark);
   border: 1px solid rgba(245, 200, 66, 0.18);
-  border-radius: 14px;
-  padding: 36px 32px;
+  border-radius: 16px;
+  padding: var(--space-10) var(--space-8);
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-shadow: var(--shadow-lg);
+}
+
+.login-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(245, 200, 66, 0.12);
+  color: var(--gold);
+  margin-bottom: var(--space-5);
 }
 
 .login-eyebrow {
@@ -30,55 +43,77 @@
   font-family: var(--font-display);
   font-weight: 400;
   letter-spacing: 0.5px;
-  font-size: 30px;
-  margin: 4px 0 28px;
+  font-size: 32px;
+  margin: 4px 0 8px;
   color: #fff;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--gray);
+  margin: 0 0 var(--space-8);
+  line-height: 1.5;
 }
 
 .login-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
   font-size: 13px;
+  font-weight: 600;
   color: var(--gray);
-  margin-bottom: 18px;
+  margin-bottom: var(--space-5);
 }
 
 .login-field input {
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
-  padding: 10px 12px;
+  padding: 11px 13px;
   font-size: 14px;
   color: #fff;
   font-family: var(--font-body);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .login-field input:focus {
   outline: none;
   border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(245, 200, 66, 0.14);
 }
 
 .login-error {
-  color: #e8837f;
+  color: #f0938e;
   font-size: 13px;
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-5);
 }
 
 .login-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   background: var(--gold);
   color: var(--navy-dark);
   border: none;
   border-radius: 8px;
-  padding: 12px;
+  padding: 13px;
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   font-family: var(--font-body);
+  margin-top: var(--space-2);
+  transition: background-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .login-submit:hover:not(:disabled) {
   background: var(--gold-dim);
+  box-shadow: var(--shadow-gold-hover);
+  transform: translateY(-1px);
+}
+
+.login-submit:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .login-submit:disabled {

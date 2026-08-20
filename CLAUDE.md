@@ -84,13 +84,17 @@ backend/scripts/  one-off CLI scripts (create_user.py — the only way to create
 backend/tests/    pytest suite, one file per module under test
 
 frontend/src/
-  api.ts               typed HTTP client to the backend (health, login, leads, lead detail, PATCH status)
+  api.ts               typed HTTP client to the backend (health, login, leads, lead detail, PATCH status, mensagens)
+  tokens.css            shadow/transition/spacing/gradient design tokens — see "Visual polish pass" below
+  index.css              color palette (navy/gold — dark theme, deliberate, don't revert) + shared badges
   context/AuthContext.tsx  JWT held only in memory (React Context) — see "Frontend: Login + Kanban" below
-  components/          ProtectedRoute, KanbanColumn, KanbanCard, LossReasonModal, PriorityBadge
+  components/          Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn, KanbanCard,
+                       LossReasonModal, PriorityBadge
   pages/                LoginPage, KanbanPage, LeadDossierPage (+ co-located .css)
   kanbanStatuses.ts     column order/labels, mirrors app/models/lead.py::KanbanStatus
   scoreLayers.ts         SignalLayer label lookup, mirrors app/scoring/rules.py::SignalLayer
-  App.tsx               React Router root (/login public, / and /leads/:id protected)
+  App.tsx               React Router root (/login public, no sidebar; / and /leads/:id
+                        protected, wrapped in AuthenticatedLayout for the sidebar)
 ```
 
 ### Lead scoring engine (`app/scoring/rules.py`)
@@ -1226,6 +1230,199 @@ children touched)**:
   `leadScore.test.ts`/`format.test.ts` their own pure-function tests in
   prior sessions; reconsider if a bug report ever traces back to this
   section).
+
+### Visual polish pass — "premium SaaS" (Sidebar, design tokens, icons, follow-up session, 2026-08-20)
+
+Frontend-only session, all three existing screens (Login, Kanban, Lead
+dossier) touched, no backend file changed. Structural addition (a
+sidebar) plus a shared design-token layer plus per-screen depth/
+typography/icon polish — not a rewrite of any screen's logic.
+
+**⚠️ Dark theme is unchanged and deliberate — read this before touching
+palette code.** `frontend/src/tokens.css` carries the authoritative
+warning (top of file): the navy/gold dark theme (`--navy`, `--navy-dark`,
+`--gold`, `--bg` in `index.css`) has been the client-validated identity
+since the very first frontend session ("Frontend: Login + Kanban"
+above). This session's "premium SaaS" pass adds *depth within that
+theme* — shadows, a radial gradient background, sharper typography — it
+does **not** introduce a light theme, a theme toggle, or any
+`prefers-color-scheme` branching. If a future session is asked to "make
+it look more premium" again, that does not mean revisit light vs. dark;
+the dark theme is the answer, not an open question.
+
+**`frontend/src/tokens.css`** (new, imported in `main.tsx` before
+`index.css`): `--shadow-sm/md/lg` (dark-theme-appropriate — low-opacity
+black, deliberately lighter than a typical light-theme shadow scale,
+since a heavy shadow on an already-dark background just reads as a
+black smear with no definition), `--shadow-gold-hover` (a
+brand-colored shadow used on primary-button/interactive-card hover,
+distinct from the neutral shadows), `--transition-fast` (150ms)/
+`--transition-smooth` (250ms), a `--space-1`...`--space-12` scale
+(4px multiples), `--bg-gradient` (`radial-gradient(ellipse at top
+left, #1a1642 0%, #0b0d22 55%)` — applied to `body` in `index.css`,
+replacing the old flat `background: var(--bg)`; the gradient's lighter
+stop is still a dark navy, not a new hue), and `--sidebar-width`
+(240px — the single source of truth `Sidebar.css` and
+`AuthenticatedLayout.css` both read, though in practice only
+`Sidebar.css` uses it directly since the layout is flex-based, not
+margin-based — see below). Also defines the `.spin`/`@keyframes spin`
+utility class used by the AI-generation loading spinner (see "Suggested
+approach message generation" above) — centralized here because it's
+generic enough for any future spinner, not tied to one screen.
+
+**Sidebar** (`components/Sidebar.tsx` + `Sidebar.css`, new) — present on
+Kanban and the lead dossier, absent on Login (composed in per route, see
+below, not baked into every route unconditionally). Contents, top to
+bottom: brand block ("HunterPro" / "Minotto Contabilidade"), nav
+(`Link` to `/` labeled "Kanban", highlighted via `useLocation().pathname
+=== "/"`; two `aria-disabled` non-navigating `<span>` items — "Busca de
+Leads", "Dashboard" — each with an "em breve" pill; **no route exists
+for either**, and none should be added just because the sidebar has a
+slot for it — the slot is reserved space, not a promise pending
+implementation this session), footer (user role + `LogOut` button,
+moved here from the old Kanban page header).
+
+**User role, not user name, in the sidebar footer** — `Sidebar.tsx`
+has a local `decodeRole(token)` that base64-decodes the JWT payload
+client-side (no signature verification — there's nothing to verify
+against client-side anyway, and this is read-only display of a claim
+already trusted by virtue of a successful login, not a security check).
+The payload only carries `user_id` and `role` (`app/api/routes/auth.py`
+— no email, no name), so the footer shows "Administrador"/"Cliente",
+not a real name. Showing an actual name/email would need a backend
+change (payload field or a `GET /api/auth/me`) — explicitly out of
+scope for a visual-polish-only session; documented as a follow-up in
+README "O que falta" rather than silently faked with placeholder text.
+
+**`AuthenticatedLayout.tsx` + `.css`** (new) — a thin composition
+wrapper (`<div class="app-layout"><Sidebar/><main
+class="app-content">{children}</main></div>`), deliberately kept
+separate from `ProtectedRoute` (auth guard only). `App.tsx` composes
+them explicitly per protected route:
+`<ProtectedRoute><AuthenticatedLayout><KanbanPage
+/></AuthenticatedLayout></ProtectedRoute>` — two single-purpose
+wrappers, not one component doing both jobs. "Fixed" sidebar is
+implemented as `position: sticky; top: 0; height: 100vh` on `.sidebar`
+inside a flex row (`.app-layout { display: flex }`), **not** `position:
+fixed` with a manually-matched `margin-left` on the content — sticky-
+inside-flex lets the flex layout itself reserve the sidebar's width, so
+there's no second place that has to agree with `--sidebar-width` if it
+ever changes.
+
+**`lucide-react`** (new dependency, the only one added this session)
+replaces the three emoji/text-arrow glyphs that existed:
+`⚠️` (PGFN ajuizado warning) → `AlertTriangle`; `←` (dossier back
+button) → `ArrowLeft`; `↗` (WhatsApp quick-action link) → `ExternalLink`.
+Every dossier section `<h2>` gained an icon via a new shared component,
+`SectionHeading` (in `LeadDossierPage.tsx`, takes the icon *component*
+via `LucideIcon` type, not a pre-instantiated element, so size is
+controlled in one place): `Building2` (dados cadastrais), `Phone`
+(contato), `Globe` (presença digital), `Stethoscope` (RQE), `Sparkles`
+(abordagem sugerida — signals "AI-generated"), `Gauge` (breakdown do
+score). The PGFN section is the one exception with a static
+`SectionHeading` usage — its `<h2>` picks between `Landmark` (has
+active debt) and `ShieldCheck` (no pendency) inline, since the icon
+itself carries state, not just decoration.
+
+**Badges → pills, more contrast, across all three badge families**
+(explicit ask covered all three, not just priority):
+- `PriorityBadge` (`index.css`, shared) — already a pill before this
+  session; contrast bumped (`rgba(...,0.22)` fill, lighter foreground
+  hex per color) and a `::before` colored dot added. Gained a `size`
+  prop (`"sm" | "lg"`, default `"sm"`) — `"lg"` (`.priority-badge-lg`)
+  is used only in the dossier header, where the badge needs more
+  presence next to the enlarged score number (see below); the Kanban
+  card still uses the default small size.
+- Kanban status pill (`.dossier-kanban-pill`) — `border-radius` went
+  from a rounded-rect (6px) to a true pill (999px), background opacity
+  raised.
+- Score-breakdown layer tags (`.dossier-breakdown-layer-tag`) — this
+  one was previously **plain gray text**, not a badge at all, despite
+  being one of the three families the request named. Now a real pill,
+  colored to match its layer (green/gold/light-blue, same hues as the
+  item's left border) via `.layer-estruturado .dossier-breakdown-layer-tag`
+  etc. — the layer color is now readable at a glance in the badge
+  itself, not only inferred from a 3px border sliver.
+
+**Buttons** — every interactive button/link across all three screens
+picked up `transition` (using the new tokens), a `:hover` state
+(elevation via `transform: translateY(-1px)`/`-2px` plus
+`--shadow-gold-hover` on gold-background buttons, border/color shift on
+outlined ones), and an explicit `:disabled` state (`opacity: 0.7`,
+`transform: none` — so a disabled button doesn't also look "lifted").
+
+**Login** (`LoginPage.tsx`/`.css`) — gradient is inherited from `body`
+(no page-specific background rule needed, single source of truth).
+Card padding increased, `max-width` 360px → 400px, `box-shadow:
+var(--shadow-lg)` added, a `Building2` icon and a one-line subtitle
+inserted above the fields for stronger visual hierarchy. Submit button
+gained the same hover-elevation treatment as other primary buttons.
+
+**Kanban** (`KanbanPage.tsx`/`.css`, `KanbanColumn.tsx`) — old page
+header (eyebrow "HunterPro" / title "Minotto Contabilidade" / logout
+button) removed entirely — brand and logout both live in the sidebar
+now; replaced with a smaller, page-specific header ("Pipeline
+comercial" / "Kanban de Leads"). `KanbanColumn` renders "Nenhum lead
+aqui ainda" (`.kanban-column-vazia`, dashed border, muted text) when
+its `leads` array is empty, instead of a blank body — the `useDroppable`
+ref stays on the parent `.kanban-column-body` regardless of whether the
+placeholder or real cards render inside, so drop targets are unaffected.
+Cards gained `box-shadow` + hover elevation (`translateY(-2px)`,
+`--shadow-md`, brighter border) to read as interactive. **Column-move
+"transition" is a card mount-in animation, not a position transition**
+— `@keyframes kanban-card-entrar` (fade + slight translateY, on every
+`.kanban-card` mount) is the pragmatic version of "smooth transition
+between columns": moving a lead to a different column changes the
+card's DOM parent, so React unmounts/remounts it there — there's no
+single element whose position CSS can animate across that boundary
+without a FLIP-style library (`framer-motion` or similar), which
+wasn't added this session (documented as a deferred follow-up in
+README, not silently skipped).
+
+**Lead dossier** (`LeadDossierPage.tsx`/`.css`) — the most-touched
+screen, per the request calling it "a mais importante — é a 'vitrine'
+do produto":
+- Every section header now uses `SectionHeading` (see lucide-react
+  above).
+- `dt`/`dd` typographic hierarchy: `dt` (label) shrunk to 11px,
+  uppercase, letter-spaced, gray; `dd` (value) bumped to 14px,
+  `font-weight: 600`, white — previously both were the same 13px with
+  no weight distinction.
+- A subtle divider (`border-bottom: 1px solid rgba(255,255,255,0.05)`)
+  separates each `.dossier-campo` row from the next inside a card's
+  `<dl>` (removed on `:last-child` — no double border against the
+  card's own edge). This is the concrete interpretation of "divisores
+  sutis entre seções" — at the field-row level inside each card, not as
+  a separate divider element between the major page-level blocks
+  (header/PGFN/grid/abordagem/breakdown), which already have their own
+  card backgrounds/borders separating them structurally.
+- Score total: 40px → 60px, `text-shadow: 0 0 24px rgba(245,200,66,0.25)`
+  added — deliberately the single largest number on the page, per the
+  explicit "mais presença visual, com destaque real" request.
+  `PriorityBadge` in the header uses `size="lg"`.
+- AI-generation loading state: both "Gerar mensagem com IA" and "Gerar
+  novamente" buttons swap their label for a bare `Loader2` icon
+  (`.spin` from `tokens.css`) while `gerando` is true — **icon only,
+  no text alongside it** (the request said replace the text, not
+  augment it), with `aria-label`/`aria-busy` covering accessibility
+  since there's no longer a visible text cue. Buttons got a `min-width`
+  so swapping text↔icon doesn't visibly resize them.
+- `mailto:`/`wa.me` action links (added in the previous "multi-channel
+  suggested approach" session) gained `Mail`/`Send` icons; no logic
+  change to the URL construction itself.
+
+**Not visually validated — read this before assuming the result looks
+right.** This sandbox has no browser (same standing limitation as every
+other frontend session — see "Network access from Bash is blocked in
+this sandbox" above), and this is the first session where that
+limitation applies to *layout/CSS*, not just API calls. Every
+color/spacing/shadow value here was chosen deliberately and is
+documented, but none of it has been visually confirmed on an actual
+rendered page. `npm run build`/`npm run lint`/`npm run test` all pass —
+that confirms TypeScript types, lint rules, and the 12 pre-existing
+`vitest` cases (none of which cover rendering/CSS) are intact, **not**
+that the visual result matches intent. Treat this whole session's
+output as "implemented and self-consistent, pending a real look."
 
 ### Migrations (`backend/alembic/`)
 
