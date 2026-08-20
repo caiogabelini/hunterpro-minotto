@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     ZEROBOUNCE_API_KEY: str = ""
     SERP_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
+    FIRECRAWL_API_KEY: str = ""
 
     EVOLUTION_URL: str = ""
     EVOLUTION_KEY: str = ""

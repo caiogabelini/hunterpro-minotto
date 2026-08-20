@@ -130,9 +130,23 @@ interno do Docker.
   "aprovado" status `valid` ou `catch-all` do ZeroBounce; para cedo (sem
   gastar a consulta paga do ZeroBounce) se o Hunter.io não achar e-mail
   ou o domínio não tiver MX válido.
+- ✅ **Varredura de site + inferência via IA** (`app/services/site_scraping.py`
+  + `app/services/ai_enrichment.py`) — Firecrawl (`POST /v1/scrape`,
+  `Authorization: Bearer`) extrai o markdown do site; endpoint e schema
+  confirmados contra o `openapi.json` oficial do Firecrawl no GitHub
+  (não contra chamada real — sem `FIRECRAWL_API_KEY` disponível nesta
+  sessão pra testar, diferente do CNES/IBGE que são públicos e sem
+  chave). O link do Instagram é extraído por regex direto do markdown,
+  sem IA, ignorando paths reservados (`p`, `reel`, `reels`, `stories`,
+  `explore`, `accounts`, `share`). A inferência de RQE e
+  serviços/especialidades usa Claude Haiku (`claude-haiku-4-5-20251001`)
+  via chamada HTTP direta à Messages API (não o SDK — mantém o mesmo
+  padrão de client `httpx` injetável/testável do resto do projeto),
+  pedindo resposta em JSON; resposta malformada (a IA varia formato
+  mesmo instruída) nunca lança exceção, só devolve valores vazios.
 - ✅ Frontend conecta no backend, mostra status online/offline e uma
   tabela (vazia até o pipeline popular o banco)
-- ✅ 126 testes automatizados passando (`pytest`)
+- ✅ 152 testes automatizados passando (`pytest`)
 
 ## O que falta (próximas sessões)
 
@@ -148,7 +162,11 @@ Em ordem de prioridade combinada com o cliente:
    CNAE/UF) + junção com EMPRESAS pra razão social~~ ✅ feito — falta só
    implementar a chamada real à Places API em `search_google_places`
    (precisa de `GOOGLE_API_KEY` real pra validar)
-6. Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)
+6. ~~Inferência de RQE via Firecrawl + IA (leitura de site/Instagram)~~
+   ✅ feito — falta validar contra APIs reais (`FIRECRAWL_API_KEY` e
+   `ANTHROPIC_API_KEY` reais nesta sessão não estavam disponíveis; schema
+   do Firecrawl confirmado contra o `openapi.json` oficial, não por
+   chamada real)
 7. ~~Validação de WhatsApp (Evolution API) e e-mail (Hunter.io + ZeroBounce)~~
    ✅ feito
 8. `compute_lead_score` — juntar os pontos de todos os critérios (a
@@ -168,6 +186,12 @@ atualização mensal, publicados juntos no mesmo lote) — baixar manualmente
 e colocar os dois em `RECEITA_FEDERAL_DADOS_ABERTOS_DIR` antes de rodar
 `gerar_semente_leads`. Sem o(s) arquivo(s) EMPRESAS na pasta, a task
 ainda funciona (filtra e devolve os CNPJs), só que sem razão social.
+
+**Nota operacional (19/08/2026):** `FIRECRAWL_API_KEY` foi adicionada em
+`app/core/config.py` mas **não** em `backend/.env.example` — o sandbox
+desta sessão bloqueou leitura/escrita em qualquer arquivo `.env*`
+(inclusive `.example`). Adicionar manualmente uma linha
+`FIRECRAWL_API_KEY=` no `.env.example` (e preencher no `.env` local).
 
 ---
 

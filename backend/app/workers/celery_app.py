@@ -29,8 +29,18 @@ arquivo de Estabelecimentos da Receita Federal — ver ETAPA 0.
   5. enrich_cnes               → cruzamento por CNPJ (confirma unidade de
                                   saúde registrada; API não expõe especialidade,
                                   ver app/services/cnes.py)
-  6. enrich_site_firecrawl     → varredura de site + IA (serviços, RQE inferido)
-  7. enrich_instagram          → localizado a partir do site
+  6. enrich_site_firecrawl     → varredura de site (Firecrawl, ver
+                                  app/services/site_scraping.py) + IA
+                                  (Claude Haiku, ver
+                                  app/services/ai_enrichment.py) —
+                                  serviços/especialidades, RQE mencionado,
+                                  e o link do Instagram (extraído por
+                                  regex direto do markdown, cobre a
+                                  ETAPA 7 também — não precisou virar
+                                  task separada)
+  7. enrich_instagram          → coberta pela ETAPA 6 (extração de
+                                  Instagram já sai do mesmo scrape); sem
+                                  task própria
   8. enrich_linkedin           → busca por razão social/decisor
   9. validate_whatsapp         → Evolution API — normaliza o telefone
                                   (código do país por tamanho, não por
@@ -43,11 +53,15 @@ arquivo de Estabelecimentos da Receita Federal — ver ETAPA 0.
 
 Implementadas até agora: gerar_semente_leads, enrich_receita_federal,
 enrich_pgfn_divida_ativa (+ refresh_pgfn_index), enrich_zona_franca,
-enrich_cnes, validate_whatsapp, enrich_email. As demais continuam
-placeholder — implementação entra sessão a sessão. `search_google_places`
-tem a assinatura nova (recebe estabelecimentos já filtrados) mas a
-chamada real à Places API ainda não foi implementada (falta validar
-contra uma GOOGLE_API_KEY real).
+enrich_cnes, enrich_site_firecrawl, validate_whatsapp, enrich_email. As
+demais continuam placeholder — implementação entra sessão a sessão.
+`search_google_places` tem a assinatura nova (recebe estabelecimentos já
+filtrados) mas a chamada real à Places API ainda não foi implementada
+(falta validar contra uma GOOGLE_API_KEY real). `enrich_site_firecrawl`
+também não foi testada contra as APIs reais do Firecrawl/Anthropic nesta
+sessão (sem FIRECRAWL_API_KEY disponível; o schema do Firecrawl foi
+confirmado contra o openapi.json oficial, não por chamada real — ver
+app/services/site_scraping.py).
 """
 from celery import Celery
 
@@ -304,10 +318,50 @@ def enrich_cnes(cnpj: str, codigo_municipio: int) -> dict:
     }
 
 
+SITE_CONTENT_RESUMO_MAX_CARACTERES = 500
+
+
 @celery_app.task(name="enrich_site_firecrawl")
 def enrich_site_firecrawl(site_url: str) -> dict:
-    """TODO: varredura do site + IA (serviços oferecidos, RQE inferido)."""
-    raise NotImplementedError("Implementar na próxima sessão.")
+    """
+    Varre o site do lead via Firecrawl (ver app/services/site_scraping.py)
+    e infere, via IA (Claude Haiku, ver app/services/ai_enrichment.py),
+    menção a RQE e serviços/especialidades oferecidos. Também extrai o
+    link do Instagram por regex direto do markdown — não precisa de IA
+    pra isso.
+
+    `site_content_resumo` é só um recorte do markdown (primeiros
+    `SITE_CONTENT_RESUMO_MAX_CARACTERES` caracteres) pra referência —
+    o texto completo não é devolvido aqui, só usado internamente pra
+    montar o prompt da IA.
+    """
+    from app.services.ai_enrichment import inferir_dados_site
+    from app.services.site_scraping import extrair_instagram, scrape_site
+
+    resultado_scrape = scrape_site(site_url)
+    if not resultado_scrape.sucesso:
+        return {
+            "site_url": site_url,
+            "scrape_sucesso": False,
+            "site_content_resumo": "",
+            "instagram": None,
+            "rqe_mencionado": False,
+            "rqe_numero": None,
+            "servicos": [],
+        }
+
+    instagram = extrair_instagram(resultado_scrape.markdown)
+    inferencia = inferir_dados_site(resultado_scrape.markdown)
+
+    return {
+        "site_url": site_url,
+        "scrape_sucesso": True,
+        "site_content_resumo": resultado_scrape.markdown[:SITE_CONTENT_RESUMO_MAX_CARACTERES],
+        "instagram": instagram,
+        "rqe_mencionado": inferencia.rqe_mencionado,
+        "rqe_numero": inferencia.rqe_numero,
+        "servicos": inferencia.servicos,
+    }
 
 
 @celery_app.task(name="validate_whatsapp")

@@ -68,8 +68,8 @@ backend/app/
   schemas/        Pydantic serialization schemas
   scoring/        lead-score rules and niche-specific structured-data sources
   services/       external-data parsers/clients (PGFN + Receita Federal bulk-file
-                  parsers, CNES/Receita Federal/IBGE/Evolution/Hunter.io/ZeroBounce
-                  HTTP clients)
+                  parsers, CNES/Receita Federal/IBGE/Evolution/Hunter.io/ZeroBounce/
+                  Firecrawl/Anthropic HTTP clients)
   workers/        Celery tasks, one per pipeline stage
 backend/alembic/  DB migrations
 backend/tests/    pytest suite, one file per module under test
@@ -256,6 +256,39 @@ module in this project, it does **not** set `client.base_url` — Hunter.io
 and ZeroBounce are different hosts, so each function passes an absolute
 URL and a single client (real or injected) serves both.
 
+### Site scraping + AI inference (`app/services/site_scraping.py`, `app/services/ai_enrichment.py`)
+
+`site_scraping.py` calls Firecrawl (`POST api.firecrawl.dev/v1/scrape`,
+`Authorization: Bearer {FIRECRAWL_API_KEY}`, body `{"url", "formats": ["markdown"]}`,
+response `{"success", "data": {"markdown", "metadata"}}`). **Confirmed
+against Firecrawl's own `openapi.json` on GitHub, not against a live
+call** — no `FIRECRAWL_API_KEY` was available this session, unlike
+CNES/IBGE/BrasilAPI which are free/no-auth and got hit directly. A v2 API
+exists (`api.firecrawl.dev/v2`) that the docs site promotes as current,
+but its docs page is a JS SPA that doesn't render examples for scraping
+(same problem as the CNES Swagger UI) — v1 is what's grounded in the raw
+spec file, so that's what's implemented; validate against a real key
+before production and reconsider v2 then. `extrair_instagram()` is pure
+regex (no AI), matching `instagram\.com/([A-Za-z0-9_.]{2,30})` and
+discarding non-profile paths (`p`, `reel`, `reels`, `stories`, `explore`,
+`accounts`, `share`).
+
+`ai_enrichment.py` calls the Anthropic Messages API via **raw HTTP with
+`httpx`, not the `anthropic` SDK** — a deliberate deviation from the
+usual "prefer the official SDK" default, made to stay consistent with
+every other integration in this codebase (client-injectable, base-URL-less
+or base-URL'd `httpx.Client`, `httpx.MockTransport`-tested) and because
+that's explicitly the test pattern this project's sessions have asked
+for. Model is `claude-haiku-4-5-20251001` (cheapest tier, adequate for
+short classification/extraction). The prompt asks for a JSON object
+(`rqe_mencionado`, `rqe_numero`, `servicos`) — **not** the API's formal
+structured-output feature — because Claude's actual output format varies
+enough in practice that `_extrair_json()` needs to try a few fallbacks
+(raw parse, ```json fenced block, first `{...}` substring) before giving
+up; on total failure it returns empty/null fields, never raises. If a
+future session wants schema-guaranteed output, that's `output_config.format`
+on the Messages API — a bigger change than this session's scope.
+
 ### Celery pipeline (`app/workers/celery_app.py`)
 
 As of 2026-08-19 the pipeline no longer starts with a free-form Google
@@ -267,13 +300,26 @@ Google Places by `nome_busca_google_places()`'s pick, razão social
 preferred over nome_fantasia; the actual Places API call is still
 `NotImplementedError`, blocked on a real `GOOGLE_API_KEY` to validate
 against, unlike the free/no-auth CNES/IBGE/BrasilAPI sources) → Receita
-Federal → PGFN → Zona Franca → CNES → site/Firecrawl → Instagram →
+Federal → PGFN → Zona Franca → CNES → `enrich_site_firecrawl` (also
+covers what would've been a separate `enrich_instagram` step — the
+Instagram link comes out of the same scrape, no extra task needed) →
 LinkedIn → `validate_whatsapp` → `enrich_email` → `compute_lead_score`.
 Implemented so far: `gerar_semente_leads`, `enrich_receita_federal`,
 `enrich_zona_franca`, `enrich_pgfn_divida_ativa` (plus its prerequisite
-`refresh_pgfn_index`), `enrich_cnes`, `validate_whatsapp`, `enrich_email`.
-Everything else raises `NotImplementedError` — implement in the same
-task-per-pipeline-stage shape when picking up the next stage.
+`refresh_pgfn_index`), `enrich_cnes`, `enrich_site_firecrawl`,
+`validate_whatsapp`, `enrich_email`. Everything else raises
+`NotImplementedError` — implement in the same task-per-pipeline-stage
+shape when picking up the next stage.
+
+### `.env.example` is inaccessible in this sandbox
+
+Reads and writes to any `backend/.env*` file (including `.env.example`)
+are blocked by this environment's permission settings — confirmed
+repeatedly across sessions, not a one-off. When a new `Settings` field is
+added to `config.py` that needs a real value (e.g. `FIRECRAWL_API_KEY`,
+added 2026-08-19), it won't be reflected in `.env.example` — check
+`config.py` directly for the full settings surface, and flag the gap to
+the user rather than silently skipping it.
 
 ### Deployment note (EasyPanel)
 
