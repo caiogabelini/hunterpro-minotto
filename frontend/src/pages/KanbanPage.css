@@ -12,7 +12,7 @@
 .kanban-eyebrow {
   font-size: 12px;
   letter-spacing: 3px;
-  color: var(--gold);
+  color: var(--color-primary);
   font-weight: 700;
   text-transform: uppercase;
   margin-bottom: 6px;
@@ -24,17 +24,17 @@
   letter-spacing: 0.5px;
   font-size: 34px;
   margin: 0;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .kanban-erro {
-  color: #e8837f;
+  color: var(--color-danger);
   font-size: 14px;
   margin-bottom: 16px;
 }
 
 .kanban-carregando {
-  color: var(--gray);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
@@ -46,9 +46,12 @@
   padding-bottom: var(--space-3);
 }
 
+/* Colunas e cards usam o mesmo --bg-card (branco) -- a separação vem de
+   borda + sombra, não de um tom de cinza intermediário novo (padrão já
+   comum em quadros Kanban de tema claro, ex.: Linear/GitHub Projects). */
 .kanban-column {
-  background: var(--navy-dark);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 14px;
   min-width: 252px;
   max-width: 252px;
@@ -59,8 +62,8 @@
 }
 
 .kanban-column-over {
-  border-color: var(--gold);
-  box-shadow: var(--shadow-gold-hover);
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-primary-hover);
 }
 
 .kanban-column-header {
@@ -72,13 +75,13 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: var(--gold-dim);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
 }
 
 .kanban-column-count {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gray);
+  background: var(--bg-page);
+  color: var(--text-secondary);
   border-radius: 10px;
   padding: 1px 8px;
   font-size: 11px;
@@ -101,8 +104,8 @@
   text-align: center;
   padding: var(--space-4);
   font-size: 12px;
-  color: rgba(108, 111, 148, 0.7);
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
   border-radius: 10px;
 }
 
@@ -127,8 +130,8 @@
 }
 
 .kanban-card {
-  background: var(--navy);
-  border: 1px solid rgba(245, 200, 66, 0.14);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: var(--space-3);
   cursor: grab;
@@ -141,7 +144,7 @@
 .kanban-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
-  border-color: rgba(245, 200, 66, 0.35);
+  border-color: var(--color-primary);
 }
 
 .kanban-card:active {
@@ -158,15 +161,19 @@
 .kanban-card-score {
   font-size: 13px;
   font-weight: 700;
-  color: var(--gold);
+  color: var(--color-primary);
 }
 
 .kanban-card-nome {
   font-size: 13px;
-  color: #fff;
+  color: var(--text-primary);
   line-height: 1.4;
 }
 
+/* Overlay de fundo do modal -- preto semi-transparente escurecendo a
+   página por trás; convenção universal de scrim, independente de tema
+   claro/escuro (a página por trás continua precisando escurecer pra
+   destacar o modal, tema claro ou não). */
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -182,8 +189,8 @@
 .modal-card {
   width: 100%;
   max-width: 380px;
-  background: var(--navy-dark);
-  border: 1px solid rgba(245, 200, 66, 0.25);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: var(--space-6);
   display: flex;
@@ -196,22 +203,22 @@
   font-weight: 400;
   font-size: 20px;
   margin: 0 0 4px;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .modal-subtitle {
   font-size: 13px;
-  color: var(--gray);
+  color: var(--text-secondary);
   margin: 0 0 16px;
 }
 
 .modal-textarea {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 14px;
-  color: #fff;
+  color: var(--text-primary);
   font-family: var(--font-body);
   min-height: 90px;
   resize: vertical;
@@ -221,7 +228,7 @@
 
 .modal-textarea:focus {
   outline: none;
-  border-color: var(--gold);
+  border-color: var(--color-primary);
 }
 
 .modal-actions {
@@ -244,21 +251,21 @@
 
 .modal-btn-secondary {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
 }
 
 .modal-btn-secondary:hover {
-  border-color: rgba(255, 255, 255, 0.35);
-  color: #fff;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .modal-btn-primary {
-  background: var(--gold);
-  color: var(--navy-dark);
+  background: var(--color-primary);
+  color: #fff;
 }
 
 .modal-btn-primary:hover {
-  background: var(--gold-dim);
-  box-shadow: var(--shadow-gold-hover);
+  background: var(--color-primary-dark);
+  box-shadow: var(--shadow-primary-hover);
 }

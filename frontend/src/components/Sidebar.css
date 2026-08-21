@@ -9,6 +9,13 @@
  * `margin-left` manual no conteúdo com a largura da sidebar; o layout
  * flex já reserva o espaço sozinho. --sidebar-width (tokens.css) é o
  * único lugar que define a largura, os dois arquivos leem de lá.
+ *
+ * Retema (21/08/2026): era um painel escuro (--navy-dark) com item ativo
+ * em dourado; agora é um painel claro (--bg-card, branco) com uma borda
+ * fina à direita (--border) separando do conteúdo, e o item ativo usa
+ * --color-primary (navy) -- não dourado, per pedido explícito de manter
+ * dourado só em detalhes pequenos, não num destaque de navegação que
+ * aparece o tempo todo na tela.
  */
 .sidebar {
   width: var(--sidebar-width);
@@ -18,8 +25,8 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--navy-dark);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
   padding: var(--space-6) var(--space-4);
   overflow-y: auto;
 }
@@ -33,14 +40,14 @@
   font-weight: 400;
   letter-spacing: 1px;
   font-size: 24px;
-  color: var(--gold);
+  color: var(--color-primary);
   line-height: 1;
 }
 
 .sidebar-brand-nome {
   margin-top: 4px;
   font-size: 12px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 .sidebar-nav {
@@ -57,7 +64,7 @@
   padding: 10px var(--space-3) 10px calc(var(--space-3) - 3px);
   border-left: 3px solid transparent;
   border-radius: 8px;
-  color: var(--gray);
+  color: var(--text-secondary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 600;
@@ -65,18 +72,18 @@
 }
 
 .sidebar-nav-item:hover:not(.sidebar-nav-item-desabilitado) {
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  background: var(--overlay-primary-weak);
+  color: var(--text-primary);
 }
 
 .sidebar-nav-item-ativo {
-  background: rgba(245, 200, 66, 0.12);
-  color: var(--gold);
-  border-left-color: var(--gold);
+  background: var(--overlay-primary-medium);
+  color: var(--color-primary);
+  border-left-color: var(--color-primary);
 }
 
 .sidebar-nav-item-desabilitado {
-  color: rgba(108, 111, 148, 0.6);
+  color: var(--text-muted);
   cursor: default;
 }
 
@@ -86,15 +93,15 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--gray);
+  background: var(--bg-page);
+  color: var(--text-secondary);
   border-radius: 999px;
   padding: 2px 7px;
   white-space: nowrap;
 }
 
 .sidebar-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border);
   padding-top: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -110,13 +117,13 @@
 
 .sidebar-user-icone {
   display: flex;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 .sidebar-user-nome {
   font-size: 13px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .sidebar-logout {
@@ -125,8 +132,8 @@
   justify-content: center;
   gap: var(--space-2);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 8px;
   padding: 9px var(--space-3);
   font-size: 13px;
@@ -137,7 +144,7 @@
 }
 
 .sidebar-logout:hover {
-  border-color: var(--gold);
-  color: var(--gold);
-  background: rgba(245, 200, 66, 0.06);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--overlay-primary-weak);
 }

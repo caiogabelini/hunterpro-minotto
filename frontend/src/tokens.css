@@ -1,33 +1,102 @@
 /*
  * Tokens de design compartilhados -- HunterPro Minotto Contabilidade.
  *
- * ⚠️ TEMA ESCURO É DECISÃO DELIBERADA, JÁ VALIDADA COM O CLIENTE --
- * não trocar pra tema claro numa sessão futura "por engano" ou como
- * efeito colateral de um polimento visual. O navy/dourado (--navy,
- * --gold em index.css) é a identidade visual acordada com a Minotto
- * Contabilidade desde a primeira tela (ver CLAUDE.md, "Frontend: Login
- * + Kanban"). Esta sessão (polimento visual "premium SaaS") reforça o
- * tema escuro com profundidade (sombras, gradiente de fundo) -- não o
- * substitui.
+ * ⚠️ TEMA CLARO (retema completo, 21/08/2026) -- substitui o tema escuro
+ * navy/dourado que era a identidade original do projeto (ver histórico
+ * em CLAUDE.md, "Frontend: Login + Kanban" e o antigo aviso deste
+ * arquivo, que dizia o oposto). Pedido explícito do usuário: ancorar a
+ * paleta na marca real da Minotto (logo navy com detalhe dourado
+ * discreto, site institucional claro) -- navy vira a cor dominante de
+ * botões/links/destaques, dourado passa a ser usado só em detalhes
+ * pequenos (badges, sublinhados, ícones pontuais), nunca mais como
+ * fundo de elemento grande/dominante como os antigos botões primários e
+ * o card de CTA da aba Insights eram.
  *
- * Importado globalmente em main.tsx, antes de index.css (que define a
- * paleta de cor em si -- --navy/--gold/etc). Este arquivo cobre só o
- * que é reutilizável entre várias telas e não é cor de marca: sombra,
- * transição, espaçamento, gradiente de fundo.
+ * Importado globalmente em main.tsx, antes de index.css (que consome
+ * essas variáveis pra tipografia/paleta em si). Este arquivo é a fonte
+ * central de cor do projeto -- toda cor usada em mais de um arquivo CSS
+ * deve estar aqui, nunca hardcoded em hex/rgba direto num arquivo de
+ * página/componente (auditado e corrigido nesta sessão -- ver CLAUDE.md
+ * "Re-tema completo" pra lista do que foi encontrado).
  */
 :root {
-  /* Sombras -- tema escuro pede sombras mais sutis que tema claro (o
-     fundo já é escuro, uma sombra forte some ou vira uma mancha preta
-     sem definição). Todas em preto puro com opacidade baixa/crescente,
-     nunca "pesadas". */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.28);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.32);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.42);
+  /* --- Paleta de marca --- */
+  --color-primary: #1b3a5c; /* navy principal -- botões, links, destaques, ícones de seção */
+  --color-primary-dark: #142c46; /* hover de botão primário, seções de destaque */
+  --color-gold: #c9a227; /* dourado -- só detalhes pequenos: badges, sublinhado do score, bordas de destaque */
+  /* Variante escura do dourado, só pra TEXTO -- #c9a227 sozinho tem
+     2.42:1 de contraste contra branco (abaixo do mínimo 4.5:1 do WCAG AA
+     pra texto pequeno); calculado nesta sessão, ver CLAUDE.md. Usada em
+     texto/ícone dourado autônomo (prioridade B, camada "inferência",
+     potencial "médio") -- nunca #c9a227 puro como cor de texto isolada
+     em fundo claro. */
+  --color-gold-dark: #8a6b14; /* 5.01:1 contra branco -- passa AA */
+  --color-gold-bg: rgba(201, 162, 39, 0.14); /* fundo pastel pro padrão badge (fundo claro + texto --color-gold-dark) */
 
-  /* Sombra com leve brilho dourado -- usada em hover de botão primário/
-     card interativo, pra reforçar a identidade de marca no estado de
-     interação (não só uma sombra preta genérica). */
-  --shadow-gold-hover: 0 6px 20px rgba(245, 200, 66, 0.22);
+  /* --- Fundos --- */
+  --bg-page: #f5f6fa;
+  --bg-card: #ffffff;
+  /* Superfície "elevada" dentro de um card branco -- usada em campo de
+     formulário (input/textarea), pra ter um contorno visível mesmo sem
+     foco, já que --bg-card e --bg-page sozinhos ficam próximos demais
+     em tom pra servir de fundo de input dentro de um card branco.
+     Precisa ser sólida (não translúcida) -- o truque de autofill do
+     Chrome (ver LoginPage.css) usa essa cor num box-shadow inset, uma
+     cor com alpha deixaria o fundo do autofill do navegador vazar nas
+     bordas (mesmo raciocínio do --bg-elevated escuro que esta variável
+     substitui). */
+  --bg-elevated: #f3f4f6;
+
+  /* --- Texto --- */
+  --text-primary: #1a1a2e; /* títulos, texto principal -- 17.06:1 contra branco */
+  --text-secondary: #6b7280; /* labels, texto secundário -- 4.83:1 contra branco, passa AA */
+  --text-muted: #9ca3af; /* texto terciário/decorativo -- não usar sozinho como única forma de transmitir informação (2.54:1, abaixo de AA) */
+
+  /* --- Borda --- */
+  --border: #e5e7eb;
+
+  /* --- Cores semânticas ---
+     Mesma lógica de sempre (verde=sucesso/prioridade A, dourado=
+     aviso/prioridade B, vermelho=perigo/prioridade C, azul=camada
+     "validação" do score) -- só recalibradas pra funcionar como TEXTO em
+     fundo claro. Os tons pastel do tema escuro (ex.: #8ee6ab, só 1.49:1
+     contra branco; #f0938e, 2.27:1; #a8c4f0, 1.78:1) foram escolhidos
+     pra saltar sobre um fundo navy escuro -- nenhum deles é legível como
+     texto sobre branco. Substituídos por um par "fundo pastel claro +
+     texto saturado o bastante pra ler" (mesmo padrão de badge do
+     Tailwind/GitHub), com contraste calculado nesta sessão:
+       --color-success #166534 → 7.13:1 contra branco
+       --color-danger  #b91c1c → 6.47:1 contra branco
+       --color-info    #1d4ed8 → 6.70:1 contra branco
+     Os `-bg` continuam pastel (opacidade baixa), só pro preenchimento de
+     badge/painel, nunca pra texto. */
+  --color-success: #166534;
+  --color-success-bg: rgba(22, 163, 74, 0.12);
+  --color-danger: #b91c1c;
+  --color-danger-bg: rgba(220, 38, 38, 0.1);
+  --color-info: #1d4ed8;
+  --color-info-bg: rgba(37, 99, 235, 0.1);
+
+  /* Washes neutros tingidos de --color-primary -- hover/estado ativo
+     sutil sobre fundo claro (substituem os antigos rgba(255,255,255,X),
+     que dependiam de um fundo escuro pra aparecer; sobre branco/cinza
+     claro eles simplesmente não se veem). */
+  --overlay-primary-weak: rgba(27, 58, 92, 0.05);
+  --overlay-primary-medium: rgba(27, 58, 92, 0.1);
+
+  /* --- Sombras ---
+     Tema claro pede sombra bem mais sutil que tema escuro -- o fundo já
+     é claro, uma sombra com opacidade alta (as antigas iam até 0.42)
+     vira uma mancha cinza dura em vez de sugerir elevação suave. */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 16px 32px rgba(0, 0, 0, 0.1);
+
+  /* Sombra de destaque em hover de botão/card primário -- tingida de
+     --color-primary (era dourada no tema escuro; a marca agora reserva
+     dourado pra detalhes pequenos, não pra elementos dominantes como
+     botão primário). */
+  --shadow-primary-hover: 0 6px 16px rgba(27, 58, 92, 0.18);
 
   /* Transições */
   --transition-fast: 150ms ease;
@@ -45,13 +114,6 @@
   --space-10: 40px;
   --space-12: 48px;
 
-  /* Fundo com gradiente radial sutil -- substitui o antigo fundo chapado
-     (var(--bg) sólido) em `body` (index.css). Ainda escuro, ainda dentro
-     da mesma paleta (o tom mais claro do gradiente é um navy ainda mais
-     escuro que --navy, não um azul genérico) -- profundidade, não
-     mudança de tema. */
-  --bg-gradient: radial-gradient(ellipse at top left, #1a1642 0%, #0b0d22 55%);
-
   /* Largura da sidebar fixa (components/Sidebar.tsx) -- token porque
      AuthenticatedLayout.css precisa do mesmo valor pro espaço reservado
      ao conteúdo principal. */
@@ -59,8 +121,8 @@
 }
 
 /* Ícone giratório (lucide-react Loader2) -- usado no estado de loading
-   da geração de mensagem por IA (LeadDossierPage) em vez do texto
-   "Gerando...". Definido aqui, não localmente, porque é genérico o
+   da geração de mensagem/insight por IA (LeadDossierPage) em vez do
+   texto "Gerando...". Definido aqui, não localmente, porque é genérico o
    bastante pra qualquer spinner futuro reaproveitar. */
 @keyframes spin {
   to {

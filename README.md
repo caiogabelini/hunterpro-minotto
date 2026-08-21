@@ -29,8 +29,8 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 frontend/         React + Vite + TypeScript
   src/
     api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status)
-    tokens.css             sombra/transição/espaçamento/gradiente de fundo (design tokens)
-    index.css               paleta de cor (navy/dourado) + tipografia + badges compartilhados
+    tokens.css             paleta de cor (navy/dourado, tema claro) + sombra/transição/espaçamento (design tokens)
+    index.css               tipografia + estilos globais + badges compartilhados (consome tokens.css)
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
     components/           Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn,
                           KanbanCard, LossReasonModal, PriorityBadge
@@ -462,12 +462,15 @@ interno do Docker.
   build`/`npm run lint`/`npm run test` limpos.
 - ✅ **Polimento visual "premium SaaS" das 3 telas** (Login, Kanban,
   Dossiê) — sessão só de frontend, nenhum arquivo de backend tocado.
-  **⚠️ Tema continua escuro (navy `#292C5D`/fundo `#0B0D22`/dourado
-  `#F5C842`)** — decisão já validada com o cliente desde a primeira
-  tela, esta sessão reforça profundidade (sombra, gradiente) dentro do
-  mesmo tema, **não troca pra tema claro**. Ver aviso equivalente (mais
-  detalhado) no topo de `frontend/src/tokens.css` — não reverter isso
-  numa sessão futura por engano.
+  **⚠️ Superseded em 21/08/2026** — o aviso abaixo dizia que o tema
+  continuava escuro por decisão permanente; uma sessão seguinte fez
+  exatamente essa troca, a pedido explícito do cliente (ver bullet
+  "Retema completo do frontend" mais abaixo, tema atual é claro). Tema
+  continuava escuro (navy `#292C5D`/fundo `#0B0D22`/dourado `#F5C842`)
+  — decisão validada com o cliente desde a primeira tela, aquela sessão
+  reforçou profundidade (sombra, gradiente) dentro do mesmo tema, sem
+  trocar pra tema claro. Aviso equivalente em `frontend/src/tokens.css`
+  também foi atualizado na sessão do retema.
   - **Sidebar fixa** (`components/Sidebar.tsx` + `AuthenticatedLayout.tsx`,
     novos) — presente em Kanban e Dossiê (não em Login). Logo "HunterPro"
     no topo, item "Kanban" (destacado quando ativo), "Busca de Leads" e
@@ -618,13 +621,47 @@ interno do Docker.
   potencial (verde/dourado/cinza — "médio" reaproveita a cor dourada da
   paleta em vez de introduzir amarelo novo), lista de recomendação com
   ícone, CTA sugerido num card com fundo dourado sólido (único bloco da
-  tela com esse tratamento, de propósito, pra ler como ação a tomar), e
-  "Gerado há X" via `formatRelative`. `getInsights` (`src/insights.ts`)
+  tela com esse tratamento, de propósito, pra ler como ação a tomar —
+  ⚠️ desde o retema claro abaixo, esse fundo é navy, não mais dourado;
+  a ideia de "único bloco com fundo cheio" continua igual, só a cor
+  mudou), e "Gerado há X" via `formatRelative`. `getInsights` (`src/insights.ts`)
   faz o parsing defensivo de `insights_ia` vindo da rede, mesmo
   raciocínio de `getScoreBreakdown` (bug de score já documentado abaixo)
   — nunca deixa um shape inesperado quebrar a tela. `npm run build`/
   `npm run lint`/`npm run test` e `pytest` limpos; sem validação visual
   real, mesma ressalva de sempre.
+- ✅ **Retema completo do frontend: escuro (navy/dourado) → claro**
+  (21/08/2026, sessão seguinte à aba Insights), ancorado na marca real
+  da Minotto Contabilidade — logo navy com detalhe dourado discreto,
+  visual institucional em fundo branco/cinza claro. Todas as telas
+  (Login, Sidebar, Kanban, Dossiê completo — 5 abas) recoloridas; navy
+  (`--color-primary`) virou a cor dominante de botões/links/destaques,
+  dourado (`--color-gold`) passou a aparecer só em detalhes pequenos
+  (badges, sublinhado do score, borda de destaque do card CTA) — não
+  mais em botões primários, aba/nav ativa, ou títulos de seção, que
+  eram os usos "dominantes" de dourado no tema anterior. Cores
+  semânticas (verde/dourado/vermelho/azul de prioridade e camada do
+  score) mantiveram a mesma lógica, mas os tons pastel do tema escuro
+  foram recalibrados — eram ilegíveis como texto em fundo branco (verde
+  antigo, por ex., tinha só 1.49:1 de contraste contra branco; mínimo
+  do WCAG AA é 4.5:1) — todo par cor/fundo novo foi conferido com
+  contraste calculado, não só escolhido de olho. Brilho dourado do
+  número de score (`text-shadow`) virou um sublinhado dourado fino, já
+  que glow não funciona em fundo claro. Truque de autofill do Chrome no
+  Login foi recolorido pro novo fundo claro. `--bg-gradient` (gradiente
+  radial escuro de fundo) foi removido, não recalibrado — fundo agora é
+  chapado, como um site institucional de verdade. Toda variável antiga
+  (`--navy`, `--gold-dim`, `--gray`, `--bg`, `--bg-elevated`,
+  `--shadow-gold-hover`) foi renomeada, não mantida como alias — nenhum
+  arquivo CSS do frontend ficou com cor hardcoded fora de variável (
+  auditado antes e depois da sessão). Ver CLAUDE.md "Complete retheme
+  to light mode" pro relato completo, inclusive as decisões de
+  julgamento (qual uso de dourado virou navy vs. qual continuou
+  dourado, cor do card CTA). `npm run build`/`npm run lint`/`npm run
+  test` limpos (18 testes, sem mudança — sessão só de CSS, nenhuma
+  lógica de componente tocada); sem validação visual real, mesma
+  ressalva de sempre — reforçada aqui porque um retema inteiro é
+  particularmente arriscado de validar sem navegador.
 - ✅ 270 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 

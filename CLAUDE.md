@@ -1238,20 +1238,34 @@ dossier) touched, no backend file changed. Structural addition (a
 sidebar) plus a shared design-token layer plus per-screen depth/
 typography/icon polish — not a rewrite of any screen's logic.
 
-**⚠️ Dark theme is unchanged and deliberate — read this before touching
-palette code.** `frontend/src/tokens.css` carries the authoritative
+**⚠️ SUPERSEDED (21/08/2026) — the paragraph below is a historical
+record, not current guidance.** This session's warning said the dark
+theme was permanent and that "premium" ≠ revisiting light vs. dark. A
+later session (21/08/2026) did exactly that, on explicit client-driven
+instruction: a full retheme to a LIGHT theme anchored on Minotto's real
+brand (navy-dominant, gold as a minor accent only). See "Complete
+retheme to light mode" further below for the current palette and every
+color/contrast decision — `--navy`/`--navy-dark`/`--gold`/`--bg` no
+longer exist as variable names at all (renamed, not aliased). The
+original (now-outdated) reasoning is kept below only so future sessions
+can see *why* dark was chosen originally, not as standing instruction.
+
+~~**Dark theme is unchanged and deliberate — read this before touching
+palette code.**~~ `frontend/src/tokens.css` carried the authoritative
 warning (top of file): the navy/gold dark theme (`--navy`, `--navy-dark`,
-`--gold`, `--bg` in `index.css`) has been the client-validated identity
+`--gold`, `--bg` in `index.css`) had been the client-validated identity
 since the very first frontend session ("Frontend: Login + Kanban"
-above). This session's "premium SaaS" pass adds *depth within that
+above). This session's "premium SaaS" pass added *depth within that
 theme* — shadows, a radial gradient background, sharper typography — it
-does **not** introduce a light theme, a theme toggle, or any
-`prefers-color-scheme` branching. If a future session is asked to "make
-it look more premium" again, that does not mean revisit light vs. dark;
-the dark theme is the answer, not an open question.
+did **not** introduce a light theme, a theme toggle, or any
+`prefers-color-scheme` branching. ~~If a future session is asked to
+"make it look more premium" again, that does not mean revisit light vs.
+dark; the dark theme is the answer, not an open question.~~
 
 **`frontend/src/tokens.css`** (new, imported in `main.tsx` before
-`index.css`): `--shadow-sm/md/lg` (dark-theme-appropriate — low-opacity
+`index.css`) — ⚠️ **`--shadow-gold-hover` and `--bg-gradient`, named
+here, no longer exist** (renamed/removed in the 21/08/2026 retheme, see
+below): `--shadow-sm/md/lg` (dark-theme-appropriate — low-opacity
 black, deliberately lighter than a typical light-theme shadow scale,
 since a heavy shadow on an already-dark background just reads as a
 black smear with no definition), `--shadow-gold-hover` (a
@@ -1844,6 +1858,226 @@ rep deciding how to prioritize/approach it.
   in this project; visual validation is on the user, per their explicit
   instruction this session ("sem navegador — documente decisões,
   validação visual fica comigo depois").
+
+### Complete retheme to light mode (`frontend/`, follow-up session, 2026-08-21)
+
+Frontend-only, every CSS file touched. Replaces the navy/gold **dark**
+theme (deliberate since the first frontend session, reinforced in
+"Visual polish pass" above) with a **light** theme anchored on Minotto
+Contabilidade's actual brand — navy logo with a discreet gold accent,
+institutional site on a white/light-gray background — per explicit
+client-driven instruction. This is not a toggle/`prefers-color-scheme`
+addition; the dark theme is gone, not made optional. See the amended
+warning in "Visual polish pass" above — that session's "don't revisit
+light vs. dark" guidance is now explicitly superseded, on record, not
+silently contradicted.
+
+**Sandbox limitation still applies**: no browser in this environment
+(same standing limitation as every prior frontend session). A full
+retheme is exactly the kind of change most likely to hide a legibility
+bug (text-on-background contrast is invisible in the diff, only in the
+render) — every color decision below is backed by a computed WCAG
+contrast ratio, not eyeballed, specifically because there's no way to
+eyeball it here. Treat this whole session's output as "implemented and
+contrast-checked, pending a real look" — same standing caveat as every
+visual session, but worth restating with extra weight here given the
+scope.
+
+**Full rename, not aliasing.** Old variable names (`--navy`,
+`--navy-dark`, `--gold`, `--gold-dim`, `--gray`, `--bg`,
+`--bg-elevated`, `--shadow-gold-hover`, `--bg-gradient`) don't exist
+anymore anywhere in the codebase — every CSS file was individually
+re-read and rewritten rule-by-rule, not just patched at the `:root`
+definition. Keeping old names as aliases pointing at new hex values was
+considered and rejected: a variable named `--navy` holding a light-theme
+hex would permanently mislead whoever reads it next. Confirmed via
+`grep -rn "var(--navy\|var(--gold-dim)\|var(--gray)\|var(--bg)\b" src`
+returning nothing after the session.
+
+**New tokens** (`frontend/src/tokens.css`, still the single color
+source of truth — `index.css` now only holds font tokens + global
+element styles that *consume* these variables):
+- `--color-primary` (`#1b3a5c`) / `--color-primary-dark` (`#142c46`) —
+  navy, now the DOMINANT color: buttons, links, active tab/nav state,
+  section headings, focus rings. This is the single biggest behavioral
+  change from the old theme, where gold filled that role (primary
+  buttons, active states, section headings were all gold before).
+- `--color-gold` (`#c9a227` — this is literally the client's exact
+  requested hex, and coincidentally already matched the old theme's
+  `--gold-dim` value, not `--gold`) — restricted to small
+  details/badges only per explicit instruction: the Kanban-status pill,
+  priority-B badge, "inferência" signal-layer tag, RQE-inferência
+  badge, "potencial médio" badge, the score number's underline, and a
+  4px accent border on the Insights CTA card. Nowhere does it fill a
+  large area or a frequently-repeated dominant element anymore (that
+  role moved to `--color-primary`) — audited by grepping every old
+  `var(--gold)`/`var(--gold-dim)` usage (52 occurrences) and
+  reclassifying each one individually as either "true small-badge
+  accent → stays gold" or "dominant/repeated UI element → becomes
+  navy," not a blanket find-replace.
+- `--color-gold-dark` (`#8a6b14`) — **not requested by the client, added
+  because of a contrast problem**: `--color-gold` itself is only
+  2.42:1 against white (computed this session, script in the session
+  transcript), below the 4.5:1 WCAG AA minimum for normal text and even
+  below the 3:1 minimum for graphical objects/large text. Every place
+  gold was previously used as *standalone text or icon color* on a
+  light surface (not paired with a dark-text-on-gold-fill button, where
+  the contrast that matters is different) now uses `--color-gold-dark`
+  instead (5.01:1, passes AA) — priority-B text, RQE-inferência text,
+  "inferência" layer-tag text, "potencial médio" text. `--color-gold`
+  itself is still used for the score underline and CTA border (thin
+  decorative lines, not text) and for pill/badge *backgrounds* (paired
+  with `--color-gold-dark` text on top, not read on its own).
+- `--bg-page` (`#f5f6fa`) / `--bg-card` (`#ffffff`) — page background
+  vs. card surface, the light-theme equivalent of the old `--bg`/dark
+  card split, same structural role.
+- `--bg-elevated` (`#f3f4f6`) — form-field surface, slightly darker
+  than `--bg-card` so an input has a visible boundary inside a white
+  card even unfocused. Still a **solid** color, not translucent, for
+  the same reason the old dark `--bg-elevated` had to be solid: the
+  Chrome-autofill override trick (`LoginPage.css`) fills a `box-shadow`
+  inset with this exact value, and an alpha color there would let the
+  browser's own autofill color show through at the edges (this
+  constraint is independent of light/dark — see "autofill" bullet
+  below).
+- `--text-primary` (`#1a1a2e`, 17.06:1 on white) / `--text-secondary`
+  (`#6b7280`, 4.83:1) / `--text-muted` (`#9ca3af`, 2.54:1 — **below**
+  AA even for large text; used only for genuinely decorative/tertiary
+  text that's never the sole carrier of meaning, e.g. the `·` separator
+  dot in the header's resumo line, never for a value someone needs to
+  read).
+- `--border` (`#e5e7eb`).
+- **Recalibrated semantic colors** — same meaning as before (green =
+  success/priority A, gold = warning/priority B, red = danger/priority
+  C, blue = the score breakdown's "validação" signal layer), same
+  request to keep the *logic* unchanged, but the actual hex values
+  needed to change: the old dark-theme pastels were chosen to pop
+  against a dark navy card and are unreadable as text on white —
+  computed this session: old green `#8ee6ab` → 1.49:1 on white, old red
+  `#f0938e`/`#e8837f` → 2.27:1/2.63:1, old blue `#a8c4f0`/`#7ea6e8` →
+  1.78:1/2.47:1, all far below AA. New pairs, each a pale `-bg` wash
+  (badge/panel fill) + a saturated-enough `-text` color (badge/panel
+  text), same Tailwind/GitHub-label pattern used for the gold pair
+  above: `--color-success` `#166534` (7.13:1) / `--color-success-bg`;
+  `--color-danger` `#b91c1c` (6.47:1) / `--color-danger-bg`;
+  `--color-info` `#1d4ed8` (6.70:1) / `--color-info-bg`. Badge/panel
+  *borders* use a custom mid-alpha of the `-text` color's own RGB
+  triplet (e.g. `rgba(22, 101, 52, 0.3)` for success), not the `-bg`
+  token, so the border stays visible as a thin outline against
+  `--bg-card` white — documented inline in `LeadDossierPage.css` at
+  each usage rather than adding yet more root tokens for what's a
+  handful of one-off border tints.
+- `--overlay-primary-weak` / `--overlay-primary-medium` (`rgba(27, 58,
+  92, 0.05)` / `0.1`) — replace every old `rgba(255, 255, 255, X)`
+  hover/active wash. Those depended on a dark background to be visible
+  at all; over `--bg-page`/`--bg-card` a white-on-white wash simply
+  doesn't render. Used for sidebar nav hover/active, tab hover, chip
+  hover, breakdown-row hover — anywhere a subtle "this is interactive"
+  tint was needed without a full color change.
+- **Shadows** recalibrated for light-theme physics, not just softened
+  numbers: `--shadow-sm` `0 1px 3px rgba(0,0,0,0.08)`, `--shadow-md`
+  `0 4px 12px rgba(0,0,0,0.06)`, `--shadow-lg` `0 16px 32px
+  rgba(0,0,0,0.1)` — the old dark-theme shadows went up to 0.42 alpha,
+  which on a white surface would read as a hard gray smear rather than
+  soft elevation. `--shadow-primary-hover` (navy-tinted,
+  `rgba(27,58,92,0.18)`) replaces `--shadow-gold-hover` — every button
+  that used the gold hover shadow is now a navy-filled button (see
+  above), so the accent shadow moved with it.
+- **`--bg-gradient` removed outright, not recalibrated.** The old dark
+  radial gradient doesn't have a meaningful light-theme equivalent — a
+  white-to-`--bg-page` gradient would be nearly invisible and not worth
+  the added CSS. `body`'s background is now a flat `--bg-page`,
+  matching the explicit brief ("site institucional com fundo
+  branco/cinza claro" — institutional sites are typically flat, not
+  gradient-heavy).
+
+**`color-scheme: dark` → `color-scheme: light`** (`index.css` `:root`)
+— same mechanism as before (nudges browser-native chrome — scrollbars,
+unstyled form controls, some autofill affordances — toward the
+matching scheme), just flipped.
+
+**Score number: glow → underline.** `.dossier-score-total`
+(`LeadDossierPage.css`) — the old `text-shadow` gold glow doesn't work
+on a light background (a glow needs a dark surface to read as
+"luminous"; on white it just looks blurry). Replaced with `color:
+var(--color-primary)` (navy, matching the explicit instruction) plus a
+3px `--color-gold` `border-bottom` directly on the number — the parent
+`.dossier-header-score` is a column flex container with `align-items:
+flex-end`, so the `<div>` shrinks to its own content width and the
+underline hugs exactly the digits, not the whole column. This was the
+literal instruction ("sublinhado... sem o glow"), not a judgment call.
+
+**CTA card (Insights tab): solid gold → solid navy + gold accent
+border — a judgment call, not explicit instruction.** The client's
+instructions named the CTA card as one example of "small
+details/badges" being the only acceptable gold use, but didn't
+literally say "recolor the CTA card." Read literally against that rule,
+though: a full-width solid-fill card is not a small detail — it was the
+single largest gold area in the entire dark-theme UI. Recoloring it to
+`--color-primary` (matching every other button/CTA in the app, which
+all moved to navy) keeps the "this is an action, not information"
+visual distinction intact while staying consistent with the "gold =
+small only" rule; a 4px `--color-gold` left border keeps *some* brand
+gold presence on the card without it being the dominant fill. If this
+reads as *too* subdued once seen for real, swapping the fill back to
+gold (keeping the navy border for contrast) is a two-line CSS change,
+flagged here so a future session doesn't have to re-derive the
+reasoning.
+
+**Section headings/subheadings, breakdown "points," Kanban card score,
+tab-active state, sidebar-active state: gold → navy — all judgment
+calls under the same rule.** None of these were named individually in
+the brief; each was reclassified by asking "does this repeat often
+enough, or fill enough area, to read as *dominant* rather than a
+*detail*?" A `.dossier-section-heading` (icon + label) appears ~15
+times across one dossier page (every card, every tab); a breakdown
+"points" value appears 9 times per lead; the Kanban card score appears
+once per card, dozens of times per board; the active tab/sidebar-item
+fills a solid pill/bar. All reclassified as "dominant" → navy. Contrast
+with what *stayed* gold: the Kanban-status pill (one per lead, small,
+low-frequency-per-screen), the priority-B badge, and the three
+score/RQE "inference-tier" badges — all small, low-repetition, and
+literally the examples the client's own message named ("badges").
+
+**Autofill trick adjusted, not removed** (`LoginPage.css`) — same
+mechanism as the original dark-theme fix (`-webkit-box-shadow: 0 0 0
+1000px var(--bg-elevated) inset` + `-webkit-text-fill-color`, see "Login
+page autofill white background" fix in an earlier session), just
+recolored: `--bg-elevated` is now light gray/white instead of dark
+navy, and `-webkit-text-fill-color` is `var(--text-primary)` instead of
+white. Worth noting the visual stakes are much lower now than when this
+was first fixed: the original bug was a *stark* white flash on a dark
+navy field; now our own `--bg-elevated` and the browser's default
+autofill color (typically a pale yellow) are both already light, so a
+skipped fix would be a subtle mismatch, not a jarring one. Kept anyway,
+for the same reason as always: guaranteeing the exact chosen color
+renders, not whatever the browser defaults to.
+
+**Files touched**: `tokens.css` (full rewrite — token definitions),
+`index.css` (font tokens + `body`/`:root` + `.priority-badge` family),
+`components/Sidebar.css` (full rewrite — white panel, navy active
+state), `pages/LoginPage.css` (full rewrite — white card, navy button,
+recolored autofill trick), `pages/KanbanPage.css` (full rewrite —
+white columns/cards separated by border+shadow rather than a fill-tone
+difference, navy modal button), `pages/LeadDossierPage.css` (full
+rewrite, largest file — header, tabs, PGFN alert panel, all 5 tabs'
+card content, all badge families). `components/AuthenticatedLayout.css`
+had no color rules, untouched.
+
+**Verification**: audited every CSS file for hardcoded hex/`rgba()` not
+routed through a variable (`grep -rnoE "#[0-9a-fA-F]{3,8}"` /
+`rgba?\([^)]+\)` across `src/**/*.css`) both before starting (to find
+what needed fixing) and after finishing (to confirm nothing dark-theme
+survived) — the only hex literals remaining post-session are `#fff`
+used as literal white text on a solid navy/success/danger fill (a
+fixed contrast pair, not a themed surface color) and one hex mentioned
+*inside a CSS comment* explaining a contrast number, not in a rule.
+Also grepped every `.tsx` file for inline `style={{ color/background
+}}` — none exist anywhere in this codebase, confirmed again this
+session, so no color logic lives outside CSS. `npm run build` / `npm
+run lint` / `npm run test` all clean (18 frontend tests, unchanged —
+this was a pure CSS session, no component logic touched, so no new
+tests were needed or added).
 
 ### Migrations (`backend/alembic/`)
 

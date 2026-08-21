@@ -10,8 +10,8 @@
   align-items: center;
   gap: var(--space-2);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 8px;
   padding: 8px 16px;
   font-size: 13px;
@@ -22,24 +22,24 @@
 }
 
 .dossier-voltar:hover {
-  border-color: var(--gold);
-  color: var(--gold);
-  background: rgba(245, 200, 66, 0.06);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--overlay-primary-weak);
 }
 
 .dossier-status {
-  color: var(--gray);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
 .dossier-erro {
-  color: #f0938e;
+  color: var(--color-danger);
 }
 
 /* Cabeçalho -- fixo no topo, fora das abas. Duas colunas: à esquerda
    `.dossier-header-principal` (nome, linha secundária, linha de resumo,
    status do Kanban + datas); à direita `.dossier-header-score`, o
-   número de score "hero" com brilho dourado.
+   número de score "hero".
    ⚠️ Histórico rápido, pra quem for mexer aqui de novo: a sessão da
    reestruturação em abas (mesmo dia) tinha tirado esse número gigante
    daqui e colocado dentro da aba "Análise IA", achando que duplicava a
@@ -49,14 +49,18 @@
    item "Score: X" (texto) especificamente pra não duplicar o número
    grande que voltou aqui do lado -- ver comentário em `.dossier-resumo`
    mais abaixo. Não repita esse ciclo: o número gigante fica no
-   cabeçalho, não em nenhuma aba. */
+   cabeçalho, não em nenhuma aba.
+   Retema claro (21/08/2026): card branco (--bg-card) com borda
+   --border, em vez do painel navy escuro original -- ver
+   `.dossier-score-total` mais abaixo pro que aconteceu com o brilho
+   dourado do número (removido, virou sublinhado). */
 .dossier-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: var(--space-6);
-  background: var(--navy-dark);
-  border: 1px solid rgba(245, 200, 66, 0.18);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: var(--space-6) var(--space-8);
   margin-bottom: var(--space-4);
@@ -80,7 +84,7 @@
 .dossier-eyebrow {
   font-size: 12px;
   letter-spacing: 3px;
-  color: var(--gold);
+  color: var(--color-primary);
   font-weight: 700;
   text-transform: uppercase;
   margin-bottom: 6px;
@@ -92,18 +96,18 @@
   letter-spacing: 0.5px;
   font-size: 32px;
   margin: 0 0 2px;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .dossier-fantasia {
   margin: 0 0 6px;
-  color: var(--gray);
+  color: var(--text-secondary);
   font-size: 14px;
 }
 
 .dossier-cnpj {
   margin: 0;
-  color: var(--gray);
+  color: var(--text-secondary);
   font-size: 13px;
   font-family: ui-monospace, monospace;
 }
@@ -115,7 +119,7 @@
 .dossier-secundaria {
   margin: var(--space-2) 0 0;
   font-size: 13px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 /* Linha de resumo: "Classificação: ... · Prioridade: ... · Canal: ...
@@ -137,24 +141,23 @@
   gap: var(--space-2);
   margin-top: var(--space-4);
   font-size: 13px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 .dossier-resumo strong {
-  color: #fff;
+  color: var(--text-primary);
   font-weight: 700;
 }
 
 .dossier-resumo-sep {
-  color: rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
 }
 
 /* Badge de RQE inline na linha de resumo -- mesma cor de
-   `.rqe-alta-confianca`/`.rqe-inferencia` (definidas mais abaixo, cor
-   verde de alta confiança / dourada de inferência), mas com formato
-   pill menor pra caber junto do texto plano da linha de resumo, em vez
-   do badge maior que o antigo card isolado "RQE / Especialidade"
-   usava. */
+   `.rqe-alta-confianca`/`.rqe-inferencia` (definidas mais abaixo, verde
+   de alta confiança / dourado de inferência), mas com formato pill
+   menor pra caber junto do texto plano da linha de resumo, em vez do
+   badge maior que o antigo card isolado "RQE / Especialidade" usava. */
 .dossier-resumo-rqe {
   display: inline-block;
   font-size: 11px;
@@ -166,7 +169,7 @@
 .dossier-header-footer {
   margin-top: var(--space-5);
   padding-top: var(--space-4);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -180,6 +183,11 @@
   flex-wrap: wrap;
 }
 
+/* Pill de status do Kanban -- um dos poucos lugares desta tela que ainda
+   usa dourado como fundo, de propósito: é um badge pequeno (mesma
+   categoria de uso que o retema claro reservou pra --color-gold), não
+   um elemento dominante. O estado "perdido" (variante abaixo) usa
+   vermelho, não dourado -- cor semântica de perigo, não de marca. */
 .dossier-kanban-pill {
   display: inline-block;
   font-size: 11px;
@@ -188,48 +196,59 @@
   letter-spacing: 0.5px;
   border-radius: 999px;
   padding: 4px 12px;
-  background: rgba(245, 200, 66, 0.16);
-  color: var(--gold);
+  background: var(--color-gold-bg);
+  color: var(--color-gold-dark);
 }
 
 .dossier-kanban-pill-perdido {
-  background: rgba(232, 131, 127, 0.2);
-  color: #f0938e;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
 }
 
 .dossier-motivo-perda {
   font-size: 12px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 .dossier-datas {
   font-size: 12px;
-  color: var(--gray);
+  color: var(--text-secondary);
   margin: 0;
 }
 
 /* Score total -- o número mais importante da tela, precisa de presença
-   real (pedido explícito: "com mais presença visual, com destaque
-   real"). Bem maior que o resto da tipografia da página de propósito. */
+   real. Cor --color-primary (navy) em vez do dourado com glow do tema
+   escuro -- um `text-shadow` de brilho não funciona em fundo claro
+   (só borra o número sem destacar nada). No lugar do glow, um sublinhado
+   fino em --color-gold: mantém uma referência de marca no elemento mais
+   importante da tela, mas como um detalhe pequeno (a instrução explícita
+   desta sessão), não como a cor do número inteiro. O `<div>` só ocupa a
+   largura do próprio texto aqui (item de um flex column com
+   `align-items: flex-end`, ver `.dossier-header-score`), então a borda
+   inferior acompanha exatamente a largura dos dígitos, não a largura da
+   coluna toda. */
 .dossier-score-total {
   font-family: var(--font-display);
   font-size: 60px;
-  color: var(--gold);
+  color: var(--color-primary);
   line-height: 1;
-  text-shadow: 0 0 24px rgba(245, 200, 66, 0.25);
+  border-bottom: 3px solid var(--color-gold);
+  padding-bottom: 4px;
 }
 
 .dossier-score-label {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 /* Navegação por abas -- pills horizontais, estilo da referência
    compartilhada pelo cliente (Radar Comercial). Mesma linguagem visual
-   dos outros badges "pill" da sessão anterior (raio 999px), mas maior
-   e clicável -- é navegação, não um rótulo passivo. */
+   dos outros badges "pill", mas maior e clicável -- é navegação, não um
+   rótulo passivo. Aba ativa usa --color-primary (navy) sólido, não
+   dourado -- é um elemento dominante (aparece preenchido o tempo todo,
+   numa das 5 abas), o tipo de uso que o retema claro tirou do dourado. */
 .dossier-tabs {
   display: flex;
   gap: var(--space-2);
@@ -242,8 +261,8 @@
   align-items: center;
   gap: var(--space-2);
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 999px;
   padding: 9px 18px;
   font-size: 13px;
@@ -255,15 +274,15 @@
 }
 
 .dossier-tab:hover {
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #fff;
+  border-color: var(--color-primary);
+  color: var(--text-primary);
 }
 
 .dossier-tab-ativa,
 .dossier-tab-ativa:hover {
-  background: var(--gold);
-  border-color: var(--gold);
-  color: var(--navy-dark);
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
 }
 
 .dossier-pgfn {
@@ -291,24 +310,32 @@
   line-height: 1.6;
 }
 
+/* Borda no tom mais escuro/legível do próprio --color-success (não no
+   tom pastel do --color-success-bg), pra continuar visível como contorno
+   fino sobre o --bg-card branco -- mesmo raciocínio pro alerta (danger)
+   logo abaixo. */
 .dossier-pgfn-ok {
-  background: rgba(124, 215, 156, 0.08);
-  border-color: rgba(124, 215, 156, 0.3);
+  background: var(--color-success-bg);
+  border-color: rgba(22, 101, 52, 0.3);
 }
 
 .dossier-pgfn-ok .dossier-pgfn-heading {
-  color: #8ee6ab;
+  color: var(--color-success);
 }
 
 .dossier-pgfn-alerta {
-  background: rgba(232, 131, 127, 0.1);
-  border-color: rgba(232, 131, 127, 0.4);
+  background: var(--color-danger-bg);
+  border-color: rgba(185, 28, 28, 0.35);
 }
 
 .dossier-pgfn-alerta .dossier-pgfn-heading {
-  color: #f0938e;
+  color: var(--color-danger);
 }
 
+/* Badge "execução judicial em andamento" -- preenchimento sólido (não
+   pastel) pra ficar visivelmente "mais alto" que o painel de alerta ao
+   redor (que já usa um vermelho pastel), reforçando que é a informação
+   mais grave dentro de um contexto que já é de atenção. */
 .dossier-pgfn-ajuizado {
   display: inline-flex;
   align-items: center;
@@ -316,9 +343,8 @@
   margin-top: var(--space-3);
   font-size: 13px;
   font-weight: 700;
-  color: #ff8f89;
-  background: rgba(232, 131, 127, 0.22);
-  border: 1px solid rgba(232, 131, 127, 0.5);
+  color: #fff;
+  background: var(--color-danger);
   border-radius: 8px;
   padding: 7px 14px;
 }
@@ -335,16 +361,19 @@
 }
 
 .dossier-card {
-  background: var(--navy-dark);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: var(--space-5) var(--space-6);
   box-shadow: var(--shadow-sm);
 }
 
 /* Título de seção com ícone (components: SectionHeading em
-   LeadDossierPage.tsx). Mesma linguagem tipográfica de antes (display,
-   uppercase, gold-dim) -- só virou flex row pra acomodar o ícone. */
+   LeadDossierPage.tsx). Texto e ícone em --color-primary -- esse par
+   (heading + ícone) se repete umas 15 vezes na página inteira (cada
+   card, em cada aba), por isso foi um dos primeiros lugares em que o
+   retema tirou o dourado: repetido tantas vezes, dourado ali leria como
+   cor dominante, não como detalhe. */
 .dossier-section-heading {
   display: flex;
   align-items: center;
@@ -353,14 +382,14 @@
   font-weight: 400;
   letter-spacing: 0.3px;
   font-size: 16px;
-  color: var(--gold-dim);
+  color: var(--color-primary);
   text-transform: uppercase;
   margin: 0 0 var(--space-4);
 }
 
 .dossier-section-heading svg {
   flex-shrink: 0;
-  color: var(--gold);
+  color: var(--color-primary);
 }
 
 .dossier-card dl {
@@ -380,7 +409,7 @@
   align-items: baseline;
   gap: var(--space-3);
   padding: 9px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--border);
 }
 
 .dossier-campo:last-child {
@@ -393,12 +422,13 @@
 }
 
 /* Label discreta, valor com mais peso -- hierarquia tipográfica label
-   vs. valor (pedido explícito da sessão). */
+   vs. valor (pedido explícito de uma sessão anterior, mantida no
+   retema). */
 .dossier-campo dt {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--gray);
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
@@ -407,12 +437,12 @@
   text-align: right;
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
   word-break: break-word;
 }
 
 .dossier-campo dd a {
-  color: var(--gold);
+  color: var(--color-primary);
   text-decoration: none;
 }
 
@@ -421,7 +451,7 @@
 }
 
 .dossier-campo-vazio {
-  color: var(--gray) !important;
+  color: var(--text-muted) !important;
   font-weight: 400 !important;
 }
 
@@ -433,22 +463,22 @@
 }
 
 .indicador-on {
-  background: rgba(124, 215, 156, 0.22);
-  color: #8ee6ab;
+  background: var(--color-success-bg);
+  color: var(--color-success);
 }
 
 .indicador-off {
-  background: rgba(232, 131, 127, 0.22);
-  color: #f0938e;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
 }
 
 .indicador-desconhecido {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gray);
+  background: var(--bg-page);
+  color: var(--text-secondary);
 }
 
 .dossier-muted {
-  color: var(--gray);
+  color: var(--text-secondary);
   font-size: 13px;
   margin: 0;
 }
@@ -467,21 +497,21 @@
   gap: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--gold);
+  color: var(--color-primary);
   text-decoration: none;
   white-space: nowrap;
   transition: color var(--transition-fast);
 }
 
 .dossier-whatsapp-link:hover {
-  color: var(--gold-dim);
+  color: var(--color-primary-dark);
   text-decoration: underline;
 }
 
 .dossier-copy-btn {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 6px;
   padding: 2px 10px;
   font-size: 11px;
@@ -493,32 +523,35 @@
 }
 
 .dossier-copy-btn:hover {
-  border-color: var(--gold);
-  color: var(--gold);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 /* rqe-alta-confianca/rqe-inferencia: cor compartilhada entre o badge de
    RQE da linha de resumo (`.dossier-resumo-rqe`, ver mais acima) --
    único lugar que usa essas classes desde que o card isolado "RQE /
-   Especialidade" foi removido nesta sessão (existia um terceiro estado,
-   "rqe-desconhecido"/"RQE não confirmado", que não existe mais -- o
-   badge de resumo agora simplesmente não renderiza nesse caso, ver
-   RqeResumoBadge no .tsx). */
+   Especialidade" foi removido numa sessão anterior. "Inferência" usa
+   --color-gold-dark (não --color-gold puro) como texto -- mesma razão
+   documentada em tokens.css: #c9a227 sozinho não bate contraste
+   suficiente pra texto pequeno em fundo claro. */
 .rqe-alta-confianca {
-  background: rgba(124, 215, 156, 0.18);
-  color: #8ee6ab;
-  border: 1px solid rgba(124, 215, 156, 0.4);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid rgba(22, 101, 52, 0.3);
 }
 
 .rqe-inferencia {
-  background: rgba(245, 200, 66, 0.16);
-  color: var(--gold);
-  border: 1px solid rgba(245, 200, 66, 0.35);
+  background: var(--color-gold-bg);
+  color: var(--color-gold-dark);
+  border: 1px solid rgba(138, 107, 20, 0.3);
 }
 
 /* Aba "Contatos" -- lista de cards de pessoa (hoje só o decisor, mas a
    estrutura em <ul>/<li> já comporta mais de um contato no futuro sem
-   mudar CSS nenhum, só o array de origem). */
+   mudar CSS nenhum, só o array de origem). Fundo --bg-page (um tom
+   ligeiramente mais escuro que o --bg-card branco do card pai) pra dar
+   a sensação de "sub-card" dentro do card -- mesmo padrão usado em
+   `.dossier-abordagem-canal` mais abaixo. */
 .dossier-contatos-lista {
   list-style: none;
   margin: 0;
@@ -534,8 +567,8 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-page);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: var(--space-4) var(--space-5);
 }
@@ -543,7 +576,7 @@
 .dossier-contato-nome {
   font-size: 15px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .dossier-contato-canais {
@@ -553,17 +586,19 @@
   gap: var(--space-2);
 }
 
-/* Chip de canal -- mesma pill arredondada do resto do sistema de
-   badges, tom neutro (não usa a cor de marca cheia como os botões de
-   ação primários, pra não competir visualmente com eles) mas fica
-   dourada no hover, reforçando que é clicável. */
+/* Chip de canal -- fundo branco (--bg-card) pra contrastar com o
+   --bg-page do card de contato ao redor; tom neutro (não usa a cor de
+   marca cheia como os botões de ação primários, pra não competir
+   visualmente com eles) mas fica navy no hover, reforçando que é
+   clicável -- era dourado no tema escuro, mas hover é justamente o tipo
+   de "ação/destaque" que o retema moveu pra --color-primary. */
 .dossier-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: var(--gray);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 999px;
   padding: 6px 14px;
   font-size: 12px;
@@ -573,16 +608,18 @@
 }
 
 .dossier-chip:hover {
-  border-color: var(--gold);
-  color: var(--gold);
-  background: rgba(245, 200, 66, 0.08);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--overlay-primary-weak);
 }
 
-/* Subtítulo dentro da aba "Análise IA" -- um nível abaixo de
+/* Subtítulo dentro da aba "Análise IA"/"Insights" -- um nível abaixo de
    `.dossier-section-heading` (que é usado quando cada card TEM seu
    próprio título de topo; aqui a aba inteira já é um card só, então
-   "Sinais positivos"/"Breakdown do score" são subtítulos internos, não
-   títulos de card). */
+   "Sinais positivos"/"Breakdown do score"/"Recomendação de abordagem"
+   são subtítulos internos, não títulos de card). Mesma cor
+   --color-primary de `.dossier-section-heading`, pela mesma razão
+   (elemento repetido, dourado ficaria dominante). */
 .dossier-subheading {
   display: flex;
   align-items: center;
@@ -591,12 +628,12 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--gold-dim);
+  color: var(--color-primary);
   margin: 0 0 var(--space-3);
 }
 
 .dossier-subheading svg {
-  color: var(--gold);
+  color: var(--color-primary);
 }
 
 .dossier-sinais-positivos {
@@ -615,9 +652,9 @@
 .dossier-sinal-chip {
   font-size: 12px;
   font-weight: 700;
-  color: #8ee6ab;
-  background: rgba(124, 215, 156, 0.16);
-  border: 1px solid rgba(124, 215, 156, 0.35);
+  color: var(--color-success);
+  background: var(--color-success-bg);
+  border: 1px solid rgba(22, 101, 52, 0.3);
   border-radius: 999px;
   padding: 6px 14px;
 }
@@ -629,8 +666,8 @@
 }
 
 .dossier-abordagem-canal {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-page);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: var(--space-4) var(--space-5);
 }
@@ -640,19 +677,19 @@
   font-weight: 400;
   letter-spacing: 0.3px;
   font-size: 14px;
-  color: var(--gold);
+  color: var(--color-primary);
   text-transform: uppercase;
   margin: 0 0 var(--space-3);
 }
 
 .dossier-abordagem-assunto {
   font-size: 13px;
-  color: var(--gray);
+  color: var(--text-secondary);
   margin: 0 0 6px;
 }
 
 .dossier-abordagem-assunto strong {
-  color: #fff;
+  color: var(--text-primary);
   font-weight: 700;
 }
 
@@ -663,12 +700,18 @@
   gap: var(--space-2);
 }
 
+/* Botões de ação primária (abrir e-mail/WhatsApp com a mensagem gerada,
+   "Gerar mensagem com IA") -- fundo --color-primary sólido com texto
+   branco, não mais dourado. Era o uso mais "dominante" de dourado no
+   projeto inteiro (todo botão de ação principal da tela); com o retema,
+   esse papel passa pro navy, que é justamente a cor que a marca real da
+   Minotto usa como principal. */
 .dossier-abordagem-btn-acao {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: var(--gold);
-  color: var(--navy-dark);
+  background: var(--color-primary);
+  color: #fff;
   border: none;
   border-radius: 8px;
   padding: 7px 14px;
@@ -681,15 +724,15 @@
 }
 
 .dossier-abordagem-btn-acao:hover {
-  background: var(--gold-dim);
-  box-shadow: var(--shadow-gold-hover);
+  background: var(--color-primary-dark);
+  box-shadow: var(--shadow-primary-hover);
   transform: translateY(-1px);
 }
 
 .dossier-abordagem-texto {
   font-size: 14px;
   line-height: 1.6;
-  color: #fff;
+  color: var(--text-primary);
   margin: 0 0 var(--space-4);
   white-space: pre-wrap;
 }
@@ -703,8 +746,8 @@
 }
 
 .dossier-abordagem-btn {
-  background: var(--gold);
-  color: var(--navy-dark);
+  background: var(--color-primary);
+  color: #fff;
   border: none;
   border-radius: 8px;
   padding: 10px 18px;
@@ -717,15 +760,15 @@
 }
 
 .dossier-abordagem-btn:hover:not(:disabled) {
-  background: var(--gold-dim);
-  box-shadow: var(--shadow-gold-hover);
+  background: var(--color-primary-dark);
+  box-shadow: var(--shadow-primary-hover);
   transform: translateY(-1px);
 }
 
 .dossier-abordagem-btn-secundario {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--gray);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   border-radius: 8px;
   padding: 7px 14px;
   font-size: 12px;
@@ -736,8 +779,8 @@
 }
 
 .dossier-abordagem-btn-secundario:hover:not(:disabled) {
-  border-color: var(--gold);
-  color: var(--gold);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .dossier-abordagem-btn:disabled,
@@ -748,7 +791,7 @@
 }
 
 .dossier-abordagem-erro {
-  color: #f0938e;
+  color: var(--color-danger);
   font-size: 13px;
   margin: var(--space-3) 0 0;
 }
@@ -769,30 +812,29 @@
   padding: 10px 14px;
   border-radius: 8px;
   border-left: 3px solid transparent;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-page);
   transition: background-color var(--transition-fast);
 }
 
 .dossier-breakdown-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--overlay-primary-weak);
 }
 
 .dossier-breakdown-item.layer-estruturado {
-  border-left-color: #7cd79c;
+  border-left-color: var(--color-success);
 }
 
 .dossier-breakdown-item.layer-inferencia {
-  border-left-color: var(--gold);
+  border-left-color: var(--color-gold-dark);
 }
 
 .dossier-breakdown-item.layer-validacao {
-  border-left-color: #7ea6e8;
+  border-left-color: var(--color-info);
 }
 
 /* Badge de camada -- pill com fundo/cor da própria camada (mesmo tom da
-   borda esquerda do item), não mais só um texto cinza. Mais contraste e
-   visual "pill" arredondado, mesmo pedido do resto dos badges da
-   sessão. */
+   borda esquerda do item). Mesmo padrão "fundo pastel + texto escuro o
+   bastante pra ler" dos outros badges semânticos desta página. */
 .dossier-breakdown-layer-tag {
   display: inline-block;
   flex-shrink: 0;
@@ -807,30 +849,36 @@
 }
 
 .layer-estruturado .dossier-breakdown-layer-tag {
-  background: rgba(124, 215, 156, 0.16);
-  color: #8ee6ab;
+  background: var(--color-success-bg);
+  color: var(--color-success);
 }
 
 .layer-inferencia .dossier-breakdown-layer-tag {
-  background: rgba(245, 200, 66, 0.16);
-  color: var(--gold);
+  background: var(--color-gold-bg);
+  color: var(--color-gold-dark);
 }
 
 .layer-validacao .dossier-breakdown-layer-tag {
-  background: rgba(126, 166, 232, 0.18);
-  color: #a8c4f0;
+  background: var(--color-info-bg);
+  color: var(--color-info);
 }
 
 .dossier-breakdown-label {
   flex: 1;
   font-size: 13px;
-  color: #fff;
+  color: var(--text-primary);
 }
 
+/* Pontuação de cada critério -- --color-primary (navy), não dourado:
+   aparece uma vez por critério (9 vezes por breakdown), então também
+   entra na categoria "repetido demais pra ficar dourado" -- mesmo
+   raciocínio de `.dossier-section-heading`/`.dossier-subheading` acima,
+   e reforça visualmente a mesma cor do número de score logo no
+   cabeçalho da página. */
 .dossier-breakdown-pontos {
   font-size: 13px;
   font-weight: 700;
-  color: var(--gold);
+  color: var(--color-primary);
   white-space: nowrap;
 }
 
@@ -854,17 +902,18 @@
 
 .dossier-insights-data {
   font-size: 12px;
-  color: var(--gray);
+  color: var(--text-secondary);
   margin: var(--space-2) 0 0;
 }
 
 /* Resumo estratégico "em destaque no topo" (pedido explícito) -- fonte
-   maior e cor branca cheia, não o cinza discreto de `.dossier-muted`,
-   pra funcionar como a primeira coisa que o olho lê na aba. */
+   maior e --text-primary (cor de texto mais forte da página), não o
+   cinza discreto de `.dossier-muted`, pra funcionar como a primeira
+   coisa que o olho lê na aba. */
 .dossier-insights-resumo {
   font-size: 15px;
   line-height: 1.6;
-  color: #fff;
+  color: var(--text-primary);
   margin: var(--space-4) 0 0;
 }
 
@@ -879,17 +928,14 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--gray);
+  color: var(--text-secondary);
 }
 
 /* Badge de potencial_oportunidade -- verde/dourado/cinza, mesma
-   linguagem de cor de `.indicador-on`/`.rqe-alta-confianca`/
-   `.layer-estruturado` já usadas no resto do dossiê (verde = sinal forte,
-   dourado = sinal médio/de atenção, cinza = sinal fraco ou desconhecido).
-   "Médio" reaproveita a cor dourada (`--gold`) em vez de introduzir um
-   amarelo separado -- a paleta do projeto é navy/dourado e o dourado já
-   lê como "atenção/médio" em outros badges desta tela (ex.:
-   rqe-inferencia). */
+   linguagem de cor do resto do dossiê (verde = sinal forte, dourado =
+   sinal médio/de atenção, cinza = sinal fraco ou desconhecido). "Médio"
+   usa --color-gold-dark como texto (não --color-gold puro) -- mesma
+   razão de contraste documentada em tokens.css. */
 .dossier-potencial-badge {
   display: inline-flex;
   align-items: center;
@@ -901,22 +947,22 @@
 }
 
 .potencial-alto {
-  background: rgba(124, 215, 156, 0.18);
-  color: #8ee6ab;
-  border: 1px solid rgba(124, 215, 156, 0.4);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid rgba(22, 101, 52, 0.3);
 }
 
 .potencial-medio {
-  background: rgba(245, 200, 66, 0.16);
-  color: var(--gold);
-  border: 1px solid rgba(245, 200, 66, 0.35);
+  background: var(--color-gold-bg);
+  color: var(--color-gold-dark);
+  border: 1px solid rgba(138, 107, 20, 0.3);
 }
 
 .potencial-baixo,
 .potencial-desconhecido {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--gray);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--bg-page);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
 }
 
 .dossier-insights-bloco {
@@ -937,33 +983,38 @@
   align-items: flex-start;
   gap: var(--space-2);
   font-size: 14px;
-  color: #fff;
+  color: var(--text-primary);
   line-height: 1.5;
 }
 
 .dossier-insights-recomendacao-lista li svg {
   flex-shrink: 0;
-  color: #8ee6ab;
+  color: var(--color-success);
   margin-top: 3px;
 }
 
 .dossier-insights-texto {
   font-size: 14px;
   line-height: 1.6;
-  color: #fff;
+  color: var(--text-primary);
   margin: 0;
 }
 
 /* CTA sugerido -- "card destacado, fundo diferenciado, como um call to
-   action visual" (pedido explícito). Reaproveita o dourado cheio dos
-   botões de ação primários (`.dossier-abordagem-btn-acao`) como fundo do
-   CARD inteiro, não só de um botão -- é o único bloco desta tela com
-   fundo dourado sólido, de propósito, pra destoar visualmente de todo o
-   resto (cards escuros com texto branco) e ler como "isto é uma ação a
-   tomar", não mais um dado informativo. */
+   action visual" (pedido explícito de uma sessão anterior). No tema
+   escuro isso era um preenchimento dourado sólido; no retema claro,
+   virou --color-primary (navy) sólido com texto branco -- um bloco
+   grande de cor cheia é justamente o tipo de uso "dominante" que a
+   marca real da Minotto reserva pro navy, não pro dourado (ver aviso em
+   tokens.css). Mantém uma referência de marca em dourado como um
+   detalhe pequeno: a borda esquerda de 4px. Continua sendo o único
+   bloco desta tela com fundo de cor cheia -- a distinção "isto é uma
+   ação a tomar, não mais um dado informativo" continua de pé, só a cor
+   mudou. */
 .dossier-insights-cta {
   margin-top: var(--space-6);
-  background: var(--gold);
+  background: var(--color-primary);
+  border-left: 4px solid var(--color-gold);
   border-radius: 12px;
   padding: var(--space-4) var(--space-5);
 }
@@ -974,14 +1025,14 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: rgba(27, 31, 74, 0.7);
+  color: rgba(255, 255, 255, 0.7);
   margin-bottom: 4px;
 }
 
 .dossier-insights-cta-texto {
   font-size: 15px;
   font-weight: 700;
-  color: var(--navy-dark);
+  color: #fff;
   margin: 0;
   line-height: 1.5;
 }
