@@ -143,6 +143,55 @@ def test_summary_taxa_conversao_zero_sem_leads_nao_quebra(client, token):
     assert corpo["score_medio"] == 0.0
     assert corpo["leads_no_mes"] == 0
     assert corpo["leads_em_negociacao"] == 0
+    assert corpo["receita_fechada_pontual"] == 0.0
+    assert corpo["receita_fechada_recorrente_mensal"] == 0.0
+    assert corpo["receita_fechada_total"] == 0.0
+
+
+def test_summary_receita_fechada_soma_pontual_e_recorrente_separadamente(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="ganho", tipo_contrato="pontual", valor_fechamento=1000.0)
+    _criar_lead(db_session, sufixo="22", kanban_status="ganho", tipo_contrato="pontual", valor_fechamento=500.0)
+    _criar_lead(db_session, sufixo="33", kanban_status="ganho", tipo_contrato="recorrente", valor_fechamento=300.0)
+    _criar_lead(db_session, sufixo="44", kanban_status="ganho", tipo_contrato="recorrente", valor_fechamento=200.0)
+    # não deve entrar na soma -- não é "ganho"
+    _criar_lead(db_session, sufixo="55", kanban_status="negociacao", tipo_contrato="pontual", valor_fechamento=9999.0)
+
+    resp = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["receita_fechada_pontual"] == 1500.0
+    assert corpo["receita_fechada_recorrente_mensal"] == 500.0
+    assert corpo["receita_fechada_total"] == 2000.0
+
+
+def test_summary_receita_fechada_zero_sem_nenhum_ganho(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="22", kanban_status="perdido")
+
+    resp = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["receita_fechada_pontual"] == 0.0
+    assert corpo["receita_fechada_recorrente_mensal"] == 0.0
+    assert corpo["receita_fechada_total"] == 0.0
+
+
+def test_summary_receita_fechada_ignora_ganho_sem_valor_fechamento(client, db_session, token):
+    """Lead "ganho" sem valor_fechamento preenchido (não deveria
+    acontecer via a API, que exige o campo pra mover pra "ganho", mas
+    pode existir em dado antigo/manual) não quebra a soma -- só não
+    contribui com nada, tratado como 0."""
+    _criar_lead(db_session, sufixo="11", kanban_status="ganho", tipo_contrato="pontual", valor_fechamento=None)
+    _criar_lead(db_session, sufixo="22", kanban_status="ganho", tipo_contrato="pontual", valor_fechamento=700.0)
+
+    resp = client.get("/api/dashboard/summary", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["receita_fechada_pontual"] == 700.0
+    assert corpo["receita_fechada_total"] == 700.0
 
 
 def test_summary_sem_token_retorna_401(client):

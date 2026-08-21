@@ -26,6 +26,8 @@ _STATUS_NOVO_LEAD = "novo_lead"
 _STATUS_PERDIDO = "perdido"
 _STATUS_EM_NEGOCIACAO = ("proposta_enviada", "negociacao")
 _STATUS_PGFN_NAO_ABORDADO = ("novo_lead", "qualificacao")
+_TIPO_CONTRATO_PONTUAL = "pontual"
+_TIPO_CONTRATO_RECORRENTE = "recorrente"
 
 # Ordem fixa do funil -- mesma ordem de funil já usada em
 # app/models/lead.py::KanbanStatus e frontend/src/kanbanStatuses.ts,
@@ -73,6 +75,30 @@ def get_summary(
     mesma proteção do resto da API -- não é uma métrica por usuário
     (todos os leads são compartilhados entre Minotto/4Hands, mesmo
     critério já usado em `GET /api/leads`).
+
+    `receita_fechada_*` é receita REAL (leads com `kanban_status ==
+    "ganho"`, valores vindos de `Lead.valor_fechamento` -- ver "Closing
+    data on 'Ganho'" no CLAUDE.md), diferente da receita ESTIMADA que o
+    Simulador de Receita calcula em cima das premissas do usuário
+    (`GET /premissas`) -- os dois números não devem ser confundidos no
+    frontend, por isso ficam em campos com nomes bem distintos aqui.
+
+    ⚠️ `receita_fechada_total` soma `receita_fechada_pontual` (um valor
+    ÚNICO por contrato) com `receita_fechada_recorrente_mensal` (um
+    valor MENSAL recorrente) -- **misturando naturezas diferentes de
+    receita** (dinheiro que entrou uma vez x dinheiro que entra todo
+    mês). É deliberadamente só uma "visão geral" pra um número único no
+    card do dashboard, não uma métrica financeira precisa (ex.: não é
+    MRR, não é "receita total do ano") -- os dois componentes vêm
+    separados também (`receita_fechada_pontual`/
+    `receita_fechada_recorrente_mensal`) pra quem precisar da distinção
+    de verdade. `func.sum` ignora `NULL` automaticamente (mesmo
+    raciocínio de `func.avg` pro `score_medio` acima) -- um lead "ganho"
+    sem `valor_fechamento` preenchido (não deveria existir via a API,
+    que exige o campo pra mover pra "ganho", mas pode acontecer com dado
+    antigo/manual) não quebra a soma, só não contribui com nada; sem
+    nenhum lead "ganho" de um tipo, a soma vira `NULL` no SQL, tratado
+    aqui como `0.0`, não como erro.
     """
     total_leads = db.execute(select(func.count()).select_from(Lead)).scalar() or 0
 
@@ -96,12 +122,26 @@ def get_summary(
     ).scalar() or 0
     taxa_conversao = round(leads_ganhos / total_leads * 100, 1) if total_leads > 0 else 0.0
 
+    receita_fechada_pontual = db.execute(
+        select(func.sum(Lead.valor_fechamento)).where(
+            Lead.kanban_status == _STATUS_GANHO, Lead.tipo_contrato == _TIPO_CONTRATO_PONTUAL
+        )
+    ).scalar() or 0.0
+    receita_fechada_recorrente_mensal = db.execute(
+        select(func.sum(Lead.valor_fechamento)).where(
+            Lead.kanban_status == _STATUS_GANHO, Lead.tipo_contrato == _TIPO_CONTRATO_RECORRENTE
+        )
+    ).scalar() or 0.0
+
     return DashboardSummary(
         leads_no_mes=leads_no_mes,
         leads_no_mes_limite=settings.PLANO_LEADS_MES,
         score_medio=score_medio,
         leads_em_negociacao=leads_em_negociacao,
         taxa_conversao=taxa_conversao,
+        receita_fechada_pontual=receita_fechada_pontual,
+        receita_fechada_recorrente_mensal=receita_fechada_recorrente_mensal,
+        receita_fechada_total=receita_fechada_pontual + receita_fechada_recorrente_mensal,
     )
 
 

@@ -3152,6 +3152,91 @@ existing `Lead`.
   `ListaLeadsPage.tsx`'s `set-state-in-effect` warning — no new ones;
   18 frontend tests unchanged, no new pure-function logic).
 
+### "Receita Fechada" card — real closed revenue vs. pipeline projection (follow-up session, 2026-08-23)
+
+Adds a 5th Resumo Executivo card showing REAL closed revenue (leads
+already "ganho" with a `valor_fechamento`), sitting alongside the
+existing 4th card (`CardReceitaEstimada`, a *projection* driven by the
+Simulador's premissas — leads_qualificados × taxa_fechamento ×
+ticket_medio). The two cards intentionally answer different questions
+("what could we make" vs. "what did we actually make") and use
+distinct accent colors so they're never confused for the same number.
+
+**Backend (`GET /api/dashboard/summary`)** — `DashboardSummary`
+(`app/schemas/dashboard.py`) gained three new required floats:
+`receita_fechada_pontual`, `receita_fechada_recorrente_mensal`,
+`receita_fechada_total`. `get_summary` (`app/api/routes/dashboard.py`)
+computes the first two as separate `func.sum(Lead.valor_fechamento)`
+queries filtered by `kanban_status == "ganho"` AND
+`tipo_contrato == "pontual"`/`"recorrente"` respectively, `or 0.0`'d the
+same way `score_medio` already handles `func.avg`'s `NULL`-on-no-rows
+case — a `Lead` with `valor_fechamento == None` (shouldn't happen via
+the API, which requires the field to move a lead into "ganho," but
+could exist in old/manually-inserted data) is silently ignored by SQL's
+own `NULL`-skipping `SUM` semantics, not a case the route code has to
+special-case itself. `receita_fechada_total` is just
+`receita_fechada_pontual + receita_fechada_recorrente_mensal`, computed
+in Python after both queries run — **documented explicitly in both the
+schema's field comment and the route's docstring** as a deliberately
+imprecise "overview" number that mixes a one-time-payment total with a
+monthly-recurring total (not MRR, not an annualized figure, not
+apples-to-apples with itself) — the two components are exposed
+separately in the same response for anyone who needs the real,
+unmixed numbers. Two new module-level constants,
+`_TIPO_CONTRATO_PONTUAL`/`_TIPO_CONTRATO_RECORRENTE`, follow the same
+"explicit constant, not inline string literal" convention already used
+for every other status/type comparison in this file.
+
+**Tests** (`tests/test_dashboard.py`, 3 new): a lead mix of pontual +
+recorrente "ganho" leads sums each bucket independently and combines
+them correctly in `_total` (a non-"ganho" lead with a `valor_fechamento`
+set is included in the fixture specifically to prove it's excluded);
+zero "ganho" leads at all yields `0.0` across all three fields (folded
+into the existing
+`test_summary_taxa_conversao_zero_sem_leads_nao_quebra` test's
+assertions, plus its own dedicated test); a "ganho" lead with
+`valor_fechamento=None` contributes nothing but doesn't error — mixed
+into a fixture with one properly-filled "ganho" lead to prove the sum
+still lands on the *other* lead's value, not on 0 or an exception. 350
+backend tests total (up from 347).
+
+**Frontend** (`DashboardPage.tsx`) — `CardReceitaFechada`, the new 5th
+card in `SecaoResumoExecutivo`, mirrors `CardReceitaEstimada`'s markup
+shape (icon + big currency value + small context line) but with a
+**green** accent (`--color-success`/`--color-success-bg`, the same
+"positive/won" vocabulary already used for `SecaoFechamento` on the
+dossier and `.indicador-on`/`.priority-a` elsewhere) instead of gold —
+explicit request, so "projection" (gold) and "fait accompli" (green)
+read as visually distinct categories, not two variants of the same
+"special" card. Uses `Trophy` (lucide-react, already available — no new
+dependency) for the icon. The small context line
+(`.dashboard-kpi-premissas`, reused as-is from the gold card) only
+lists the parts that are actually `> 0`: `partes: string[]` is built
+conditionally (`pontual` pushed only if `> 0`, `recorrente` only if
+`> 0`) and joined with `" · "` — a services-only-pontual client never
+shows a dangling "R$ 0/mês recorrente," and if *neither* is `> 0` (a
+"ganho" lead exists but somehow has no bucketed revenue — shouldn't
+happen given the backend's own persistence rules, but not assumed
+impossible) the whole `<p>` is omitted rather than rendering an empty
+line.
+
+New CSS: `.dashboard-kpi-card-destaque-verde` (`DashboardPage.css`),
+placed directly after the existing `.dashboard-kpi-card-destaque` (gold)
+rules — deliberately the same structure (soft-tint background, tinted
+icon background, reduced `font-size` on the currency value for the same
+width reason as the gold card) with `rgba(22, 163, 74, ...)` (green)
+swapped in for `rgba(201, 162, 39, ...)` (gold). No grid change needed
+— `.dashboard-kpi-grid`'s existing `repeat(auto-fit, minmax(220px,
+1fr))` already wraps a 5th card responsively without a fixed
+column-count to update.
+
+**Not visually validated** — same standing sandbox limitation as every
+frontend session in this project (no browser here). `npm run
+build`/`npm run lint`/`npm run test` all clean (same 2 pre-existing
+accepted warnings, no new ones; 18 frontend tests unchanged — no new
+pure-function logic, this is UI wiring over an already-tested backend
+field).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

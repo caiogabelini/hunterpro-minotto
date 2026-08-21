@@ -149,6 +149,26 @@
   font-size: 26px;
 }
 
+/* 5º card do Resumo Executivo (Receita Fechada) -- mesmo tratamento
+   visual do 4º card (fundo suave + ícone colorido + valor menor pra
+   caber uma string de moeda), mas em VERDE (--color-success) em vez de
+   dourado, pra diferenciar claramente "projeção" (Receita Estimada) de
+   "fato consumado" (Receita Fechada) -- pedido explícito. Reaproveita
+   .dashboard-kpi-premissas pra linha pequena de pontual/recorrente. */
+.dashboard-kpi-card-destaque-verde {
+  background: var(--color-success-bg);
+  border-color: rgba(22, 163, 74, 0.3);
+}
+
+.dashboard-kpi-card-destaque-verde .dashboard-kpi-icone {
+  background: rgba(22, 163, 74, 0.18);
+  color: var(--color-success);
+}
+
+.dashboard-kpi-card-destaque-verde .dashboard-kpi-valor {
+  font-size: 26px;
+}
+
 .dashboard-kpi-premissas {
   margin: var(--space-2) 0 0;
   font-size: 12px;

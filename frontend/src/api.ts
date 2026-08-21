@@ -98,6 +98,9 @@ export interface DashboardSummary {
   score_medio: number;
   leads_em_negociacao: number;
   taxa_conversao: number;
+  receita_fechada_pontual: number;
+  receita_fechada_recorrente_mensal: number;
+  receita_fechada_total: number;
 }
 
 /** Mesmo shape de AcaoRecomendada em app/schemas/dashboard.py.

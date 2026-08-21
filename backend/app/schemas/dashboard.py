@@ -7,6 +7,13 @@ class DashboardSummary(BaseModel):
     score_medio: float
     leads_em_negociacao: int
     taxa_conversao: float
+    # Receita FECHADA (leads "ganho" reais), não a estimativa do
+    # Simulador de Receita -- ver app/api/routes/dashboard.py::get_summary
+    # pro porquê de `_total` ser só uma "visão geral" que soma naturezas
+    # diferentes de receita (pontual x mensal recorrente).
+    receita_fechada_pontual: float
+    receita_fechada_recorrente_mensal: float
+    receita_fechada_total: float
 
 
 class AcaoRecomendada(BaseModel):

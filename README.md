@@ -913,7 +913,31 @@ interno do Docker.
   nada). Nenhum teste novo no frontend. `npm run build`/`npm run
   lint`/`npm run test` (mesmos 2 avisos já aceitos, nenhum novo) e
   `pytest` limpos; sem validação visual real, mesma ressalva de sempre.
-- ✅ 347 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Card "Receita Fechada" no Resumo Executivo** (23/08/2026) — 5º
+  card do Dashboard, mostrando receita REAL já fechada (leads "ganho"
+  com `valor_fechamento`), ao lado do já existente card de "Receita
+  Estimada do Pipeline" (projeção do Simulador) — cores diferentes
+  (verde pro fechado, dourado pra estimativa) pra nunca confundir os
+  dois. Backend: `GET /api/dashboard/summary` ganhou
+  `receita_fechada_pontual`/`receita_fechada_recorrente_mensal`/
+  `receita_fechada_total`, somando `valor_fechamento` por
+  `tipo_contrato` entre os leads "ganho" (`func.sum` ignora `NULL`, um
+  "ganho" sem `valor_fechamento` preenchido não quebra nada, zero leads
+  "ganho" devolve 0 em tudo). `_total` é documentado explicitamente como
+  uma visão geral que mistura naturezas diferentes de receita
+  (pontual + recorrente mensal, não é MRR nem total anualizado) — os
+  dois componentes vêm separados também pra quem precisar de precisão.
+  Frontend: `CardReceitaFechada` reaproveita o mesmo layout do card de
+  Receita Estimada, com ícone de troféu, destaque verde
+  (`--color-success`), e uma linha pequena "R$ X pontual · R$ Y/mês
+  recorrente" que só mostra as partes maiores que zero. 3 testes novos
+  no backend (soma separada por tipo de contrato, zerado sem nenhum
+  "ganho", "ganho" sem valor não quebra a soma). Nenhum teste novo no
+  frontend (wiring de UI sobre um campo já testado no backend). `npm
+  run build`/`npm run lint`/`npm run test` (mesmos 2 avisos já aceitos)
+  e `pytest` limpos; sem validação visual real, mesma ressalva de
+  sempre.
+- ✅ 350 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)

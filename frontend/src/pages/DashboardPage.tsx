@@ -13,6 +13,7 @@ import {
   SlidersHorizontal,
   Target,
   ThumbsDown,
+  Trophy,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -153,6 +154,7 @@ function SecaoResumoExecutivo({
         <KpiCard icon={Handshake} label="Leads em negociação" valor={summary.leads_em_negociacao} />
         <KpiCard icon={Percent} label="Taxa de conversão" valor={summary.taxa_conversao} sufixo="%" />
         <CardReceitaEstimada premissas={premissas} receitaEstimada={receitaEstimada} onAbrirSimulador={onAbrirSimulador} />
+        <CardReceitaFechada summary={summary} />
       </div>
     </section>
   );
@@ -206,6 +208,36 @@ function CardReceitaEstimada({
         <SlidersHorizontal size={13} />
         <span>Simular cenário</span>
       </button>
+    </div>
+  );
+}
+
+/**
+ * 5º card do Resumo Executivo -- receita REAL já fechada (leads "ganho"
+ * com valor_fechamento), distinta da 4ª (CardReceitaEstimada, que é
+ * projeção do Simulador). Destaque em VERDE (--color-success), não
+ * dourado -- pedido explícito pra diferenciar visualmente "projeção" de
+ * "fato consumado". A linha pequena embaixo só lista as partes (pontual/
+ * recorrente) que forem > 0 -- ex.: um cliente só-pontual não mostra
+ * "R$ 0/mês recorrente" pendurado ali.
+ */
+function CardReceitaFechada({ summary }: { summary: DashboardSummary }) {
+  const partes: string[] = [];
+  if (summary.receita_fechada_pontual > 0) {
+    partes.push(`${formatCurrencyBRL(summary.receita_fechada_pontual)} pontual`);
+  }
+  if (summary.receita_fechada_recorrente_mensal > 0) {
+    partes.push(`${formatCurrencyBRL(summary.receita_fechada_recorrente_mensal)}/mês recorrente`);
+  }
+
+  return (
+    <div className="dashboard-kpi-card dashboard-kpi-card-destaque-verde">
+      <div className="dashboard-kpi-icone">
+        <Trophy size={20} />
+      </div>
+      <div className="dashboard-kpi-valor">{formatCurrencyBRL(summary.receita_fechada_total)}</div>
+      <div className="dashboard-kpi-label">Receita Fechada</div>
+      {partes.length > 0 && <p className="dashboard-kpi-premissas">{partes.join(" · ")}</p>}
     </div>
   );
 }
