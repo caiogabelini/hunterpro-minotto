@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # --- CORS ---
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
+    # --- Dashboard ---
+    # Limite de leads/mês do plano contratado -- hoje um valor fixo (não
+    # há ainda um conceito de "plano" por cliente/usuário), usado só pra
+    # mostrar "X / 50 leads este mês" na seção "Consumo do Plano" do
+    # dashboard (GET /api/dashboard/summary). Ver
+    # app/api/routes/dashboard.py.
+    PLANO_LEADS_MES: int = 50
+
 
 @lru_cache
 def get_settings() -> Settings:

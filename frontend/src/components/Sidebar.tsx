@@ -38,6 +38,7 @@ export function Sidebar() {
   const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "Usuário";
 
   const kanbanAtivo = location.pathname === "/";
+  const dashboardAtivo = location.pathname === "/dashboard";
 
   return (
     <aside className="sidebar">
@@ -58,11 +59,10 @@ export function Sidebar() {
           <span className="sidebar-nav-badge">em breve</span>
         </span>
 
-        <span className="sidebar-nav-item sidebar-nav-item-desabilitado" aria-disabled="true">
+        <Link to="/dashboard" className={`sidebar-nav-item ${dashboardAtivo ? "sidebar-nav-item-ativo" : ""}`}>
           <BarChart3 size={18} />
           <span>Dashboard</span>
-          <span className="sidebar-nav-badge">em breve</span>
-        </span>
+        </Link>
       </nav>
 
       <div className="sidebar-footer">

@@ -88,6 +88,34 @@ export interface Lead {
   updated_at: string;
 }
 
+/** Mesmo shape de DashboardSummary em app/schemas/dashboard.py. */
+export interface DashboardSummary {
+  leads_no_mes: number;
+  leads_no_mes_limite: number;
+  score_medio: number;
+  leads_em_negociacao: number;
+  taxa_conversao: number;
+}
+
+/** Mesmo shape de AcaoRecomendada em app/schemas/dashboard.py.
+ * `kanban_status_filtro`/`filtro_chave` ainda não são usados pra filtrar
+ * de verdade o Kanban no frontend (ver DashboardPage.tsx) -- só
+ * persistidos aqui pra quando essa ligação for implementada. */
+export interface AcaoRecomendada {
+  titulo: string;
+  quantidade: number;
+  kanban_status_filtro?: string | null;
+  filtro_chave: string;
+}
+
+/** Mesmo shape de DashboardPremissas em app/schemas/dashboard.py --
+ * premissas do Simulador de Receita, por usuário. */
+export interface DashboardPremissas {
+  leads_qualificados: number;
+  taxa_fechamento: number;
+  ticket_medio: number;
+}
+
 /** Lançada quando o backend devolve 401 -- o token guardado em memória
  * (ver AuthContext) expirou ou é inválido. Quem chama decide o que fazer
  * (tipicamente: deslogar e redirecionar pro /login). */
@@ -168,6 +196,38 @@ export async function gerarInsights(token: string, leadId: string): Promise<Lead
   const res = await fetch(`${API_URL}/api/leads/${leadId}/gerar-insights`, {
     method: "POST",
     headers: authHeaders(token),
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchDashboardSummary(token: string): Promise<DashboardSummary> {
+  const res = await fetch(`${API_URL}/api/dashboard/summary`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchAcoesRecomendadas(token: string): Promise<AcaoRecomendada[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/acoes-recomendadas`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchPremissas(token: string): Promise<DashboardPremissas> {
+  const res = await fetch(`${API_URL}/api/dashboard/premissas`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function salvarPremissas(token: string, premissas: DashboardPremissas): Promise<DashboardPremissas> {
+  const res = await fetch(`${API_URL}/api/dashboard/premissas`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders(token) },
+    body: JSON.stringify(premissas),
   });
   if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok) throw new Error(await parseErrorDetail(res));

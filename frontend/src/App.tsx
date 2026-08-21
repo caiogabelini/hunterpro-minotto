@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
+import { DashboardPage } from "./pages/DashboardPage";
 import { KanbanPage } from "./pages/KanbanPage";
 import { LeadDossierPage } from "./pages/LeadDossierPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -28,6 +29,16 @@ function App() {
               <ProtectedRoute>
                 <AuthenticatedLayout>
                   <LeadDossierPage />
+                </AuthenticatedLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <AuthenticatedLayout>
+                  <DashboardPage />
                 </AuthenticatedLayout>
               </ProtectedRoute>
             }

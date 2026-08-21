@@ -2079,6 +2079,159 @@ run lint` / `npm run test` all clean (18 frontend tests, unchanged —
 this was a pure CSS session, no component logic touched, so no new
 tests were needed or added).
 
+### Dashboard (Fase 1) — resumo executivo, consumo do plano, ações recomendadas, simulador de receita (follow-up session, 2026-08-21)
+
+Adds the second sidebar item that used to be "em breve" — "Busca de
+Leads" is still disabled/reserved, only "Dashboard" got built this
+session. Four sections, all read from data that already existed
+(`Lead`'s score/kanban/PGFN/contact fields) except the revenue
+simulator's assumptions, which are new per-user state.
+
+**Backend** (`app/api/routes/dashboard.py`, new file, mounted at
+`/api/dashboard`, every route behind `get_current_user` — same
+protection level as the rest of the API, not admin-only):
+
+- `GET /summary` — `leads_no_mes` (count where `created_at >=` the 1st
+  of the current UTC month), `leads_no_mes_limite` (`settings.PLANO_LEADS_MES`,
+  a fixed `50` — there's no per-client/per-plan concept anywhere in this
+  codebase yet, so this is a single global constant, not read from the
+  `User` row), `score_medio` (`AVG(Lead.score_total)`, rounded to 1
+  decimal — SQL `AVG` already skips `NULL` scores on its own, and a
+  `NULL` result — no scored leads at all — is treated as `0.0`, not an
+  error), `leads_em_negociacao` (`kanban_status IN
+  ("proposta_enviada", "negociacao")`), `taxa_conversao` (`ganho` count
+  ÷ total count × 100, rounded to 1 decimal, **`0.0` when there are zero
+  leads at all** — guarded explicitly before dividing, not caught via
+  exception handling).
+- `GET /acoes-recomendadas` — 4 fixed categories, each its own `COUNT`
+  query, returned **only when `quantidade > 0`** (a "0 leads" card
+  teaches a sales rep nothing, so it's omitted rather than shown
+  grayed-out): leads with `decisor_nome` set still sitting in
+  `"novo_lead"`; `prioridade == "A"` leads still in `"novo_lead"`; leads
+  with `decisor_nome`, `telefone`, **and** `email` all `NULL` (the
+  "needs manual review" bucket — deliberately the intersection of all
+  three, not any one of them, matching the literal rule as specified);
+  leads with `divida_ativa_qtd_inscricoes > 0` still in `("novo_lead",
+  "qualificacao")`. Each item carries `kanban_status_filtro` (a single
+  status string when the rule collapses to exactly one column, `None`
+  when it spans multiple or none) and `filtro_chave` (a stable slug per
+  rule) — **neither is consumed by the frontend yet** (see below), both
+  exist so a future session can wire a real Kanban filter without
+  another backend round-trip.
+- `GET`/`PUT /premissas` — the revenue simulator's 3 assumptions
+  (`leads_qualificados`, `taxa_fechamento`, `ticket_medio`), persisted
+  per-user in the new `User.dashboard_premissas` JSON column (see
+  "Migrations" below, 7th migration). `GET` returns the saved value
+  when one exists; when `dashboard_premissas is None` (never saved),
+  it returns a **computed-on-the-fly default** — `leads_qualificados`
+  from a real `COUNT` of today's priority-A+B leads, `taxa_fechamento`
+  fixed at `20`, `ticket_medio` fixed at `1500` (both literal guesses,
+  there's no historical conversion/deal-size data anywhere yet to
+  derive them from) — and **never persists that default itself**; only
+  `PUT` writes to the column. `PUT` always overwrites the whole object
+  (`current_user.dashboard_premissas = dados.model_dump()`), no partial
+  updates, no history — matches the "single current simulator state"
+  nature of the feature, same non-historical pattern already used for
+  `Lead.insights_ia`.
+- Tests: `tests/test_dashboard.py`, 17 cases — each `summary` metric
+  individually (including the zero-leads-doesn't-crash case for
+  `taxa_conversao`/`score_medio`), all 4 `acoes-recomendadas` categories
+  together plus an isolation case (`decisor_nome` set but the lead
+  already moved out of `"novo_lead"` must NOT count), the omit-when-zero
+  behavior, `premissas` default-when-unset / persist-and-reread /
+  per-user-isolation (one user's saved premissas must not leak into
+  another user's `GET`), and 401 coverage for all 4 endpoints. One
+  fixture trap worth knowing if you touch this test file: several of the
+  hand-built `Lead` rows in the "4 categories" test needed an explicit
+  `telefone`/`email` set even though that test wasn't *about* contact
+  info — a lead with `decisor_nome`/`telefone`/`email` all left at their
+  default `None` accidentally also satisfies the "revisão manual" rule,
+  double-counting into a second category and breaking the
+  one-lead-per-category assertion. Not a bug in the route (the 4 rules
+  really can overlap on a real lead), just something to watch for when
+  hand-crafting fixture rows that are meant to isolate one category.
+
+**Frontend** (`pages/DashboardPage.tsx` + `.css`, new; route `/dashboard`,
+same `ProtectedRoute`/`AuthenticatedLayout` wrapping as every other
+authenticated screen):
+
+- **Sidebar**: the "Dashboard" item (`components/Sidebar.tsx`) changed
+  from a disabled `<span>` with an "em breve" pill to a real `<Link>`,
+  same active-state treatment as "Kanban" (`useLocation().pathname ===
+  "/dashboard"`). "Busca de Leads" is untouched — still disabled, still
+  no route, exactly as before; only "Dashboard" graduated out of "em
+  breve" this session.
+- **Data loading**: one `Promise.all([fetchDashboardSummary,
+  fetchAcoesRecomendadas, fetchPremissas])` on mount, same pattern as
+  the lead dossier's parallel `fetchLead`/`fetchMensagens` fetch — all
+  three land together, one `carregando`/`erro` pair for the whole page
+  (no per-section loading state; Fase 1 doesn't need it, the whole page
+  is one screen's worth of data).
+- **Resumo executivo**: 3 `KpiCard`s (Score médio, Leads em negociação,
+  Taxa de conversão) — white card, icon in a tinted `--color-primary`
+  circle, big `--color-primary` number (`Gauge`/`Handshake`/`Percent`
+  from `lucide-react`, all confirmed present before use, same
+  due-diligence habit as every icon choice in this project). Same
+  "big numbers use navy, not gold" rule established in the retheme
+  session — these are prominent, repeated-per-visit numbers, not small
+  badges.
+- **Consumo do plano**: `"{leads_no_mes} / {leads_no_mes_limite} leads
+  este mês"` + a progress bar. Fill is `--color-primary` normally; at
+  **≥90%** of the limit it switches to a **new token, `--color-alert`**
+  (`#c2410c`, orange — added to `tokens.css` this session). The request
+  offered "laranja/vermelho" as example colors for *one* alert
+  threshold, not two separate tiers — read literally that way rather
+  than inventing a second (unrequested) red tier at 100%+; `--color-danger`
+  (red) stays reserved for the actual error/danger semantics already
+  established elsewhere (PGFN ajuizado, etc.), not reused here. Bar
+  width is `Math.min(percentual, 100)%` so it never visually overflows
+  the track even if usage exceeds the plan, but the adjacent text always
+  shows the real count. A one-line warning ("Limite do plano atingido"
+  vs. "Perto de atingir o limite") appears only in the alert state.
+- **Ações recomendadas**: one card per category from the API, icon
+  chosen by `filtro_chave` (`ACAO_ICONES` map — `Landmark` for the PGFN
+  category specifically reuses the same icon already used for PGFN in
+  the lead dossier, same icon-per-concept convention established there;
+  a `ListChecks` fallback covers any future category the frontend
+  doesn't have a specific icon for yet, so a new backend category never
+  breaks rendering, just shows a generic icon). Quantity is the visually
+  "em destaque" element per the request — bold, `--color-primary`,
+  larger than the title text next to it. **"Ver leads" link points at
+  `/` (this app's actual Kanban route — there is no separate `/kanban`
+  path) and does not apply any real filter yet** — explicit,
+  acknowledged simplification for this phase; `kanban_status_filtro`/
+  `filtro_chave` already exist on the API response specifically so a
+  future session can wire a real filtered Kanban view without touching
+  the backend again (see README "O que falta").
+- **Simulador de receita**: 3 controlled number inputs
+  (`leads_qualificados`, `taxa_fechamento`, `ticket_medio`), initialized
+  from `GET /premissas`. Receita estimada
+  (`leads_qualificados × (taxa_fechamento / 100) × ticket_medio`) is
+  computed inline on every render from current form state — genuinely
+  a one-line multiplication, not the kind of subtle/error-prone
+  heuristic that earned `getScoreBreakdown`/`getInsights` their own
+  pure-function + test treatment in earlier sessions, so no new
+  `frontend/src/*.test.ts` file was added for it (reconsider if a bug
+  report ever traces back here, same standing exception this project
+  already documents for similarly simple JSX-adjacent logic). "Salvar
+  premissas" follows the same `Loader2`-spinner/disabled/error-message
+  pattern as every other AI-generation button on the dossier, even
+  though this isn't an AI call — just the same established "loading
+  async action" visual language reused for consistency, plus a
+  transient "Premissas salvas." success message (`setTimeout`, 2s, same
+  technique as `CampoEmail`'s copy-button feedback in the dossier).
+- **CSS**: entirely new tokens already established in the retheme
+  session (`--color-primary`, `--bg-card`, `--overlay-primary-weak`,
+  etc.) plus the one new token this session added (`--color-alert`).
+  Audited for hardcoded colors the same way the retheme session was —
+  the only literal hex in `DashboardPage.css` is `#fff` (white text on
+  the solid navy "Salvar premissas" button), same accepted exception as
+  every other solid-fill button in this project.
+- **Not tested in an actual browser** — same standing sandbox
+  limitation as every other frontend session in this project.
+  `npm run build`/`npm run lint`/`npm run test` all clean, 18 frontend
+  tests (unchanged — see the "no new test file" note above).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -2182,6 +2335,20 @@ this one, re-upgrade is clean, and the resulting `leads.insights_ia`
 columns match `app/models/lead.py` exactly — both nullable, no default
 (same reasoning as `mensagem_abordagem`/PGFN columns: `NULL` already
 means "not generated yet", no backfill needed). Cluster stopped and
+deleted immediately after.
+
+A **seventh** migration was added 2026-08-21 (follow-up session):
+`99454b995104_adiciona_dashboard_premissas_em_users.py`
+(`down_revision="f80919b2f7e2"`, adds `User.dashboard_premissas` — see
+"Dashboard (Fase 1)" below). First migration to touch `users` since the
+baseline — a single nullable JSON column, no default (`NULL` means "user
+never saved the revenue simulator's assumptions yet", same reasoning as
+every other nullable-JSON-no-default column in this project). Same
+throwaway-cluster validation as the previous six (short socket dir per
+the 107-byte lesson above): all seven migrations upgrade cleanly in
+chain order, `downgrade -1` reverts only this one, re-upgrade is clean,
+and the resulting `users.dashboard_premissas` (`json`, nullable, no
+default) matches `app/models/user.py` exactly. Cluster stopped and
 deleted immediately after.
 
 ### Deployment note (EasyPanel)

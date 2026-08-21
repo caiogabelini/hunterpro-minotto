@@ -77,6 +77,15 @@
   --color-info: #1d4ed8;
   --color-info-bg: rgba(37, 99, 235, 0.1);
 
+  /* Alerta "aproximando-se de um limite" (ex.: consumo do plano de leads
+     no Dashboard, acima de 90%) -- deliberadamente distinto de
+     --color-danger: laranja lê como "atenção, quase lá", vermelho fica
+     reservado pra estado de erro/perigo de verdade (ex.: PGFN
+     ajuizado). Escolhido entre as duas opções que o pedido ofereceu
+     ("laranja/vermelho") como a única cor de alerta desta barra, não
+     dois patamares. */
+  --color-alert: #c2410c;
+
   /* Washes neutros tingidos de --color-primary -- hover/estado ativo
      sutil sobre fundo claro (substituem os antigos rgba(255,255,255,X),
      que dependiam de um fundo escuro pra aparecer; sobre branco/cinza

@@ -28,15 +28,15 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 
 frontend/         React + Vite + TypeScript
   src/
-    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status)
+    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status, dashboard)
     tokens.css             paleta de cor (navy/dourado, tema claro) + sombra/transição/espaçamento (design tokens)
     index.css               tipografia + estilos globais + badges compartilhados (consome tokens.css)
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
     components/           Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn,
                           KanbanCard, LossReasonModal, PriorityBadge
-    pages/                LoginPage, KanbanPage, LeadDossierPage
-    App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id
-                          (protegidas, com sidebar via AuthenticatedLayout)
+    pages/                LoginPage, KanbanPage, LeadDossierPage, DashboardPage
+    App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id +
+                          /dashboard (protegidas, com sidebar via AuthenticatedLayout)
 ```
 
 **Deploy (EasyPanel):** backend, worker (Celery) e frontend como **App
@@ -662,7 +662,35 @@ interno do Docker.
   lógica de componente tocada); sem validação visual real, mesma
   ressalva de sempre — reforçada aqui porque um retema inteiro é
   particularmente arriscado de validar sem navegador.
-- ✅ 270 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Dashboard (Fase 1)** (21/08/2026) — nova rota `/dashboard`,
+  4ª tela do frontend, item "Dashboard" da sidebar deixou de ser "em
+  breve". Backend: `GET /api/dashboard/summary` (leads no mês vs. limite
+  do plano fixo — `settings.PLANO_LEADS_MES = 50` —, score médio, leads
+  em negociação, taxa de conversão, todos calculados via `SELECT`
+  agregado, sem N+1), `GET /api/dashboard/acoes-recomendadas` (4
+  categorias fixas de "próxima ação sugerida", cada uma sua própria
+  contagem, categorias com contagem zero omitidas), `GET`/`PUT
+  /api/dashboard/premissas` (as 3 premissas do Simulador de Receita,
+  persistidas por usuário em `User.dashboard_premissas`, JSON novo —
+  migration validada contra Postgres real, mesmo processo de sempre;
+  `GET` sem premissas salvas devolve um padrão calculado a partir da
+  base de leads real, não persiste sozinho). Frontend: cards de KPI
+  (score médio/leads em negociação/taxa de conversão), barra de
+  consumo do plano (preenchimento navy, vira laranja — `--color-alert`,
+  token novo — a partir de 90% do limite), lista de ações recomendadas
+  com link "Ver leads" pro Kanban (**ainda sem filtro real aplicado,
+  simplificação desta fase** — ver item 16 em "O que falta"), simulador
+  de receita com cálculo em tempo real (`leads_qualificados × taxa_fechamento%
+  × ticket_medio`) e botão "Salvar premissas". 17 testes novos no
+  backend cobrindo cada métrica, as 4 categorias de ação (inclusive
+  omissão de zero e isolamento entre elas), persistência de premissas
+  por usuário, e taxa de conversão sem quebrar com zero leads. Nenhum
+  teste novo no frontend — o único cálculo novo (a multiplicação da
+  receita estimada) é simples demais pra justificar o mesmo tratamento
+  de função pura + teste que `getScoreBreakdown`/`getInsights` tiveram.
+  `npm run build`/`npm run lint`/`npm run test` e `pytest` limpos; sem
+  validação visual real, mesma ressalva de sempre.
+- ✅ 287 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -757,7 +785,10 @@ Em ordem de prioridade combinada com o cliente:
       dependências além do pedido (`lucide-react` foi a única nova).
     - **"Busca de Leads" e "Dashboard"** continuam só itens reservados
       na sidebar ("em breve", desabilitados) — nenhuma dessas telas
-      existe, de propósito (não inventar rota falsa).
+      existe, de propósito (não inventar rota falsa). ⚠️ ~~"Dashboard"~~
+      ✅ deixou de ser reservado numa sessão seguinte (21/08/2026, ver
+      item 16 abaixo) — rota `/dashboard` real, item da sidebar ativo.
+      "Busca de Leads" continua reservado, sem mudança.
 15. ~~Dossiê reestruturado em abas (Dados/Contatos/Análise IA/Mensagens)~~
     ✅ feito (20/08/2026) — ver acima. ~~Painel "Insights da IA"~~ ✅
     também feito, numa sessão seguinte no mesmo dia (5ª aba "Insights",
@@ -769,6 +800,20 @@ Em ordem de prioridade combinada com o cliente:
       **já foi corrigido no mesmo dia** a partir de feedback visual real
       — ver bullet "Dois ajustes no Dossiê a partir de feedback visual
       real" acima; o número voltou pro cabeçalho.)
+16. ~~Dashboard (Fase 1) — resumo executivo, consumo do plano, ações
+    recomendadas, simulador de receita~~ ✅ feito (21/08/2026) — ver
+    bullet dedicado abaixo. Pendência deixada de propósito:
+    - **Link "Ver leads" das Ações Recomendadas não filtra o Kanban de
+      verdade ainda** — hoje navega pra `/` (Kanban) sem aplicar nenhum
+      filtro, mesmo a API já devolvendo `kanban_status_filtro`/
+      `filtro_chave` prontos pra isso. Simplificação aceita
+      explicitamente pra esta fase — fica pra uma sessão futura que
+      também decida como representar um filtro "leads com dívida PGFN"
+      no Kanban, que não é redutível a um único `kanban_status`.
+    - **Validação visual real** — mesma ressalva de toda tela nova
+      construída neste sandbox sem navegador; particularmente relevante
+      aqui pela barra de progresso e pelo card de CTA "em destaque" das
+      ações recomendadas, nunca vistos renderizados de verdade.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
