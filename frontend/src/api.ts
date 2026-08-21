@@ -218,6 +218,44 @@ export async function fetchLeads(token: string): Promise<Lead[]> {
   return res.json();
 }
 
+/** Mesmo shape de LeadListaResponse em app/schemas/lead.py -- resposta
+ * paginada de GET /api/leads/lista (tela "Lista de Leads"). `items` é a
+ * mesma forma de `Lead` já usada em todo o resto do app -- o backend
+ * devolve o `LeadRead` completo por item, não um subconjunto próprio
+ * pra essa tela. */
+export interface LeadListaResposta {
+  items: Lead[];
+  total: number;
+  pagina: number;
+  por_pagina: number;
+}
+
+export interface LeadListaParametros {
+  busca?: string;
+  prioridade?: string;
+  kanban_status?: string;
+  ordenar_por?: "score_total" | "created_at";
+  ordem?: "asc" | "desc";
+  pagina?: number;
+  por_pagina?: number;
+}
+
+export async function fetchLeadsLista(token: string, parametros: LeadListaParametros): Promise<LeadListaResposta> {
+  const query = new URLSearchParams();
+  if (parametros.busca) query.set("busca", parametros.busca);
+  if (parametros.prioridade) query.set("prioridade", parametros.prioridade);
+  if (parametros.kanban_status) query.set("kanban_status", parametros.kanban_status);
+  if (parametros.ordenar_por) query.set("ordenar_por", parametros.ordenar_por);
+  if (parametros.ordem) query.set("ordem", parametros.ordem);
+  if (parametros.pagina) query.set("pagina", String(parametros.pagina));
+  if (parametros.por_pagina) query.set("por_pagina", String(parametros.por_pagina));
+
+  const res = await fetch(`${API_URL}/api/leads/lista?${query.toString()}`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
 export async function fetchLead(token: string, leadId: string): Promise<Lead> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}`, { headers: authHeaders(token) });
   if (res.status === 401) throw new UnauthorizedError();

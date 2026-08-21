@@ -2835,6 +2835,171 @@ the same time), not full concurrency-safety.
   own their own state commits" shape the rest of this file (and the
   rest of the project) already follows.
 
+### "Lista de Leads" screen (`GET /api/leads/lista`, `ListaLeadsPage.tsx`, follow-up session, 2026-08-22)
+
+A new, **additive** table view of leads — search, filters, sortable
+columns, pagination — as a distinct sidebar item/route from the
+existing Kanban board. No model change, no migration; this is a new
+read endpoint plus a new frontend page.
+
+**Backend**:
+
+- `GET /api/leads/lista` (`app/api/routes/leads.py::listar_leads_paginado`)
+  is a **separate, additive route from `list_leads`/`GET /api/leads`
+  — deliberately not a refactor or a shared-implementation of it.**
+  `GET /api/leads` keeps serving the Kanban board exactly as before
+  (bare list, no pagination, no text search — the Kanban loads
+  everything at once for its 9 fixed columns, pagination wouldn't make
+  sense there). This was explicit in the request, and confirmed by
+  running `tests/test_leads_routes.py` (the pre-existing suite,
+  untouched) in full — all 34 cases still pass, including one added
+  this session (`test_get_leads_antigo_continua_bare_list_sem_paginacao`
+  in the *new* test file) that explicitly asserts `GET /api/leads`
+  still returns a bare JSON array, not the new `{items, total, pagina,
+  por_pagina}` envelope.
+- **Registered before `GET /{lead_id}` in the router, not after** — this
+  matters for correctness, not just style: Starlette/FastAPI route
+  matching for a router is order-sensitive between a static path
+  segment and a dynamic one. If `/lista` were registered *after*
+  `/{lead_id}`, a request to `/api/leads/lista` would match
+  `/{lead_id}` first (treating `"lista"` as a lead id) and never reach
+  the new route at all. `listar_leads_paginado` sits between
+  `list_leads` and `get_lead` in the file specifically so this doesn't
+  happen.
+- `busca` filters `razao_social` OR `nome_fantasia` OR `cnpj`
+  containing the text, via SQLAlchemy `.ilike()` on all three
+  (`or_(...)`) — compiles to Postgres's native `ILIKE` in production and
+  to a portable `lower(...) LIKE lower(...)` on SQLite in tests, no
+  dialect branching needed in the route itself.
+- **⚠️ Known SQLite-vs-Postgres divergence, hit and documented this
+  session (not a bug in the endpoint)**: SQLite's built-in `lower()` is
+  **ASCII-only** — `"CLÍNICA".lower()` in SQLite leaves the `Í`
+  untouched, so a test asserting case-insensitive search against an
+  accented word would pass against real Postgres (which case-folds
+  Unicode correctly) but fail in the SQLite-backed test suite for a
+  reason that has nothing to do with the endpoint's actual correctness.
+  `tests/test_leads_lista_route.py::test_busca_case_insensitive`
+  deliberately tests case-insensitivity using only ASCII text for this
+  reason, with both the test's docstring and the route's own docstring
+  cross-referencing this note — same "call out the SQLite/Postgres gap
+  explicitly instead of hiding it" convention already established
+  elsewhere in this project (`DISTINCT ON` avoidance in
+  `listar_mensagens`, the 107-byte Unix-socket-path lesson in the
+  migration write-ups, etc.).
+- `ordenar_por` (`"score_total"` | `"created_at"`) and `ordem`
+  (`"asc"` | `"desc"`) are validated against closed sets — 422 outside
+  them, same explicit-validation convention already used for
+  `kanban_status` in `update_lead_status`, rather than either letting
+  an arbitrary column name reach the SQL layer or silently falling back
+  to a default without telling the caller.
+- `total` is computed via `select(func.count()).select_from(stmt.subquery())`
+  on the **filtered-but-unpaginated** query — the count of everything
+  matching the current filters, not the total row count of the whole
+  `leads` table and not just the current page's size. Pagination itself
+  is a plain `.offset((pagina - 1) * por_pagina).limit(por_pagina)` on
+  top of the same filtered/ordered statement.
+- `app/schemas/lead.py` gained `LeadListaResponse` (`items:
+  list[LeadRead]`, `total`, `pagina`, `por_pagina`) — `items` reuses the
+  existing `LeadRead` schema wholesale (the full lead, same shape every
+  other lead-returning endpoint already uses), not a slimmer
+  table-specific schema, since the frontend table needs a wide enough
+  slice of fields (contact-icon booleans, score, kanban_status,
+  decisor, município/UF, created_at) that a trimmed-down schema
+  wouldn't have saved much.
+- Tests: `tests/test_leads_lista_route.py`, new file, 17 cases — search
+  by partial name/nome_fantasia/CNPJ, the ASCII-only case-insensitivity
+  case above, no-match-returns-empty, sort in both directions on both
+  columns (including a case confirming `created_at` sorting genuinely
+  reads that column, not just re-testing `score_total`), both invalid-
+  value 422s, pagination (total count, page size, disjoint item sets
+  across pages, out-of-range `por_pagina`/`pagina` both 422), combined
+  filters (busca + prioridade + kanban_status all applied together,
+  with fixture leads specifically designed so each individual filter
+  alone would *not* isolate the expected result — only the combination
+  does), 401 coverage, and the `GET /api/leads` regression check. 336
+  backend tests total (319 + 17).
+
+**Frontend**:
+
+- New sidebar item, **"Lista de Leads" — deliberately a different
+  concept and a different icon from "Busca de Leads"**, which already
+  existed (the admin-only monthly-pipeline-trigger panel from an
+  earlier session). The two are easy to conflate by name alone: "Lista
+  de Leads" is a read-only table view of leads that already exist,
+  available to any role; "Busca de Leads" fires the real enrichment
+  pipeline, admin-only. `List` icon (not `Search`, already used by
+  "Busca de Leads") specifically to keep them visually distinct in the
+  sidebar, not just distinct by label. Positioned right after "Kanban"
+  in the nav — visible to every role, same protection level as `GET
+  /api/leads/lista` itself (`get_current_user`, not `require_admin`).
+- Route `/leads` (`pages/ListaLeadsPage.tsx`) — chosen specifically to
+  not collide with the pre-existing `/leads/:id` dossier route. React
+  Router v6 ranks routes by specificity regardless of registration
+  order (unlike the backend's Starlette router, where order genuinely
+  matters — see above), so `/leads` and `/leads/:id` coexist safely
+  either way, but the route was still added right next to `/leads/:id`
+  in `App.tsx` for readability.
+- **Debounced search** (400ms, `DEBOUNCE_BUSCA_MS`) — the input's raw
+  value (`buscaInput`) is separate from the value actually sent to the
+  API (`busca`); a `useEffect` on `buscaInput` schedules a
+  `setTimeout` that commits `busca` (and resets `pagina` to 1) only
+  after the user stops typing, clearing the previous timeout on every
+  keystroke so only the last one ever fires.
+- **Sortable column headers** (Score, Encontrado em) — clicking a
+  header that's already the active sort flips `asc`/`desc`; clicking a
+  *different* column switches to it and resets to `desc`. An
+  `ArrowUpDown` icon (muted) marks sortable-but-inactive columns,
+  `ArrowUp`/`ArrowDown` (full color) marks the active one in its
+  current direction — so the sort state is visible without needing to
+  read the URL or open dev tools.
+- **A `useEffect`-driven lint fix worth knowing about, given it looks
+  like it could regress**: an earlier version of this page had a
+  *separate* `useEffect` whose only job was `setPagina(1)` whenever
+  `busca`/`prioridade`/`kanban_status`/`ordenar_por`/`ordem` changed.
+  oxlint's `set-state-in-effect` rule flagged it — a reactive effect
+  that exists purely to call one `setState` in response to other state
+  changing is exactly React's own documented anti-pattern ("adjusting
+  state when a prop/state changes"), and the docs' own recommended fix
+  is to set that state directly inside the event handler that causes
+  the change instead. Refactored accordingly: the debounce timeout
+  callback now sets `pagina` to 1 alongside `busca`, and the priority/
+  kanban-status `<select>` `onChange` handlers and `alternarOrdenacao`
+  each reset `pagina` directly rather than relying on a reactive effect
+  to notice the change afterward. **One `set-state-in-effect` warning
+  remains, accepted deliberately**: the main data-fetching effect
+  (`useEffect` depending on `[token, logout, busca, prioridade,
+  kanban_status, ordenar_por, ordem, pagina]`) still calls
+  `setCarregando(true)`/`setErro(null)` synchronously at its top before
+  fetching — this is the standard, React-docs-endorsed data-fetching
+  pattern (unlike `DashboardPage`/`BuscaLeadsPage`, whose fetch effects
+  only run once on mount, this one legitimately needs to re-fire and
+  reset loading/error state on every filter/sort/page change, so there
+  was no clean way to move it into a single event handler — several
+  different handlers can trigger it). Treated the same way this project
+  already treats the pre-existing `AuthContext.tsx` fast-refresh
+  warning: a known, reviewed, accepted exception, not something to
+  chase away with an awkward workaround.
+- **Table columns**: Nome (razão social bold + nome fantasia smaller
+  underneath, only when present), CNPJ (monospace), Contato (two plain
+  icons — `MessageCircle`/`Mail` — colored `--color-success` or
+  `--text-muted`, **never the actual phone number or email text**, per
+  the explicit request; gated on the *confirmed* signal
+  (`whatsapp_ativo`/`email_validado`), same "confirmed, not just
+  present" rule already established for `CampoWhatsapp`/`CampoEmail` in
+  the lead dossier), Decisor, Município/UF, Score (`PriorityBadge` +
+  the raw number), Etapa (a pill reusing the dossier's established
+  gold/red Kanban-status color language — gold for every status except
+  `--color-danger` red specifically for `"perdido"`), Encontrado em
+  (`formatDate`, existing shared formatter). Clicking a row navigates to
+  `/leads/{id}` (the existing dossier), same `useNavigate()` pattern
+  `KanbanCard` already uses for the same purpose.
+- **Not tested in an actual browser** — same standing sandbox
+  limitation as every frontend session in this project. `npm run
+  build`/`npm run lint`/`npm run test` all clean (one accepted
+  `set-state-in-effect` warning, explained above; 18 frontend tests
+  unchanged — no new pure-function logic, this session's frontend work
+  is table/filter/pagination UI wiring).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

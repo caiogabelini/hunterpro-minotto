@@ -50,3 +50,14 @@ class LeadRead(BaseModel):
 class LeadStatusUpdate(BaseModel):
     kanban_status: str
     motivo_perda: str | None = None
+
+
+class LeadListaResponse(BaseModel):
+    """Resposta paginada de GET /api/leads/lista (ver
+    app/api/routes/leads.py::listar_leads_paginado) -- endpoint
+    independente de `list_leads`/`GET /api/leads`, não um substituto."""
+
+    items: list[LeadRead]
+    total: int
+    pagina: int
+    por_pagina: int

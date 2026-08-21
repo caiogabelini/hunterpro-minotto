@@ -1,4 +1,4 @@
-import { BarChart3, CircleUserRound, LayoutGrid, LogOut, Search } from "lucide-react";
+import { BarChart3, CircleUserRound, LayoutGrid, List, LogOut, Search } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import "./Sidebar.css";
@@ -16,6 +16,7 @@ export function Sidebar() {
   const ehAdmin = role === "admin";
 
   const kanbanAtivo = location.pathname === "/";
+  const listaLeadsAtivo = location.pathname === "/leads";
   const dashboardAtivo = location.pathname === "/dashboard";
   const buscaLeadsAtivo = location.pathname === "/busca-leads";
 
@@ -30,6 +31,20 @@ export function Sidebar() {
         <Link to="/" className={`sidebar-nav-item ${kanbanAtivo ? "sidebar-nav-item-ativo" : ""}`}>
           <LayoutGrid size={18} />
           <span>Kanban</span>
+        </Link>
+
+        {/* "Lista de Leads" -- tabela com busca/filtro/ordenação/
+            paginação (pages/ListaLeadsPage.tsx), rota /leads. Não
+            confundir com "Busca de Leads" logo abaixo (admin only) --
+            são features diferentes: esta é uma visão em tabela dos
+            leads já existentes, aquela dispara o pipeline de
+            enriquecimento de verdade. Ícone `List` (não `Search`,
+            já usado por "Busca de Leads") pra reforçar a diferença
+            visual. Disponível pra qualquer papel (admin ou client),
+            mesma proteção de `GET /api/leads/lista` no backend. */}
+        <Link to="/leads" className={`sidebar-nav-item ${listaLeadsAtivo ? "sidebar-nav-item-ativo" : ""}`}>
+          <List size={18} />
+          <span>Lista de Leads</span>
         </Link>
 
         {/* "Busca de Leads" -- painel de disparo da busca mensal, só

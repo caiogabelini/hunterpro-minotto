@@ -7,6 +7,7 @@ import { BuscaLeadsPage } from "./pages/BuscaLeadsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { KanbanPage } from "./pages/KanbanPage";
 import { LeadDossierPage } from "./pages/LeadDossierPage";
+import { ListaLeadsPage } from "./pages/ListaLeadsPage";
 import { LoginPage } from "./pages/LoginPage";
 
 function App() {
@@ -21,6 +22,16 @@ function App() {
               <ProtectedRoute>
                 <AuthenticatedLayout>
                   <KanbanPage />
+                </AuthenticatedLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/leads"
+            element={
+              <ProtectedRoute>
+                <AuthenticatedLayout>
+                  <ListaLeadsPage />
                 </AuthenticatedLayout>
               </ProtectedRoute>
             }

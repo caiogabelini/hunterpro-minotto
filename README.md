@@ -28,18 +28,19 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 
 frontend/         React + Vite + TypeScript
   src/
-    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status, dashboard, admin/buscas)
+    api.ts                cliente HTTP pro backend (leads, lista paginada, mensagens, login,
+                          PATCH status, dashboard, admin/buscas)
     tokens.css             paleta de cor (navy/dourado, tema claro) + sombra/transição/espaçamento (design tokens)
     index.css               tipografia + estilos globais + badges compartilhados (consome tokens.css)
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout + `role` decodificado (admin/client)
     components/           Sidebar, AuthenticatedLayout, ProtectedRoute, AdminRoute (guard
                           admin-only), KanbanColumn, KanbanCard, LossReasonModal,
                           PriorityBadge, Modal (genérico, reutilizável), SimuladorReceitaModal
-    pages/                LoginPage, KanbanPage, LeadDossierPage, DashboardPage,
-                          BuscaLeadsPage (admin only)
-    App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id +
-                          /dashboard + /busca-leads (admin only, guard AdminRoute) --
-                          todas protegidas, com sidebar via AuthenticatedLayout
+    pages/                LoginPage, KanbanPage, ListaLeadsPage, LeadDossierPage,
+                          DashboardPage, BuscaLeadsPage (admin only)
+    App.tsx                React Router: /login (público, sem sidebar) e / + /leads +
+                          /leads/:id + /dashboard + /busca-leads (admin only, guard
+                          AdminRoute) -- todas protegidas, com sidebar via AuthenticatedLayout
 ```
 
 **Deploy (EasyPanel):** backend, worker (Celery) e frontend como **App
@@ -836,7 +837,43 @@ interno do Docker.
   duas variações confirmando que uma busca nova pode ser criada depois
   que a anterior concluiu com sucesso OU com erro). `npm run
   build`/`npm run lint`/`npm run test` e `pytest` limpos.
-- ✅ 319 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Tela "Lista de Leads"** (22/08/2026) — nova rota `/leads`, item
+  próprio na sidebar (entre Kanban e Dashboard, ícone `List` — não
+  `Search`, já usado por "Busca de Leads", pra não confundir as duas
+  telas), visível pra qualquer papel. Backend: `GET /api/leads/lista`
+  **endpoint próprio e aditivo** — `GET /api/leads` (usado pelo Kanban)
+  continua exatamente como estava, sem paginação nem busca por texto;
+  a suíte antiga inteira (`test_leads_routes.py`, 34 casos) roda
+  intacta pra provar isso, mais um teste novo específico confirmando
+  que `GET /api/leads` continua devolvendo uma lista simples, não o
+  envelope `{items, total, pagina, por_pagina}` do endpoint novo. Busca
+  por `razao_social`/`nome_fantasia`/`cnpj` (case-insensitive via
+  `ILIKE`), filtros de prioridade/etapa, ordenação por
+  score/data-de-criação nos dois sentidos (validada contra lista
+  fechada, 422 fora dela), paginação com total real sobre os filtros
+  aplicados. **⚠️ Achado durante os testes**: o `lower()` do SQLite
+  (usado nos testes) só normaliza ASCII — `"CLÍNICA".lower()` no SQLite
+  não vira `"clínica"` de verdade — então o teste de case-insensitivity
+  usa só texto sem acento por esse motivo (não é limitação do endpoint,
+  é do SQLite de teste; Postgres em produção faz o folding certo).
+  Frontend: tabela com Nome (razão social + nome fantasia menor),
+  CNPJ, Contato (só ícones de WhatsApp/e-mail confirmados — nunca o
+  texto do telefone/e-mail em si), Decisor, Município/UF, Score (com
+  badge de prioridade), Etapa (badge reaproveitando as cores já usadas
+  no dossiê) e Encontrado em; busca com debounce de 400ms, filtros de
+  prioridade/etapa, cabeçalhos de Score/Encontrado em clicáveis pra
+  ordenar, paginação na base; clicar numa linha navega pro dossiê já
+  existente (`/leads/:id`). 17 testes novos no backend (busca parcial
+  por nome/nome fantasia/CNPJ, ordenação nos dois sentidos e nas duas
+  colunas, paginação com total e páginas disjuntas, filtros combinados,
+  ambos os 422 de validação, e a regressão do endpoint antigo). Nenhum
+  teste novo no frontend (lógica de tabela/filtro, não função pura).
+  `npm run build`/`npm run lint`/`npm run test` (1 aviso aceito de
+  `set-state-in-effect` no efeito de busca — padrão padrão de
+  data-fetching que precisa re-rodar a cada filtro, mesma categoria do
+  aviso já aceito em `AuthContext.tsx`) e `pytest` limpos; sem validação
+  visual real, mesma ressalva de sempre.
+- ✅ 336 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -1043,6 +1080,20 @@ Em ordem de prioridade combinada com o cliente:
       real (clique duplo, dois admins na mesma tela em segundos
       normais de reação humana) — endurecer isso de verdade (constraint
       de banco) só se algum dia isso se provar um problema na prática.
+22. ~~Tela "Lista de Leads" (busca/filtros/ordenação/paginação)~~ ✅
+    feito (22/08/2026) — ver bullet dedicado abaixo. Pendências
+    deixadas de propósito:
+    - **`por_pagina` fixo em 25 no frontend, sem seletor de tamanho de
+      página na tela** — o backend já aceita `por_pagina` até 100 via
+      query param, só a UI não expõe um controle pra mudar isso ainda.
+    - **Filtro de "Etapa" não inclui um jeito rápido de excluir
+      "Perdido"** (tipo "todas as etapas ativas") — hoje é "todas as 9"
+      ou uma de cada vez, igual ao filtro de status que `GET /api/leads`
+      já tinha.
+    - **Sem exportação (CSV/Excel)** — item antigo de "O que falta" (ver
+      itens 12/13 mais atrás), continua de fora, agora relevante de novo
+      já que esta é a primeira tela com uma listagem tabular de
+      verdade.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

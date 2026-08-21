@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.models.lead import KanbanStatus, Lead
 from app.models.lead_message import CanalMensagem, LeadMessage
 from app.models.user import User
-from app.schemas.lead import LeadRead, LeadStatusUpdate
+from app.schemas.lead import LeadListaResponse, LeadRead, LeadStatusUpdate
 from app.schemas.lead_message import LeadMessageRead
 from app.services.ai_enrichment import gerar_insights_estrategicos, gerar_mensagem_abordagem
 
@@ -17,6 +17,11 @@ router = APIRouter()
 
 _KANBAN_STATUS_VALIDOS = {status_.value for status_ in KanbanStatus}
 _CANAIS_VALIDOS = {canal.value for canal in CanalMensagem}
+
+# Colunas ordenáveis de GET /leads/lista -- chave é o valor aceito no
+# query param `ordenar_por`, valor é a coluna real do modelo.
+_COLUNAS_ORDENACAO_LISTA = {"score_total": Lead.score_total, "created_at": Lead.created_at}
+_ORDENS_VALIDAS_LISTA = {"asc", "desc"}
 
 
 def _montar_dados_lead(lead: Lead) -> dict:
@@ -102,6 +107,88 @@ def list_leads(
     stmt = stmt.order_by(Lead.score_total.desc().nullslast()).limit(limit)
 
     return db.execute(stmt).scalars().all()
+
+
+@router.get("/lista", response_model=LeadListaResponse)
+def listar_leads_paginado(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    busca: str | None = Query(default=None, description="Filtra por razão social, nome fantasia ou CNPJ contendo o texto"),
+    prioridade: str | None = Query(default=None, description="Filtrar por A, B ou C"),
+    kanban_status: str | None = Query(default=None, description="Filtrar por coluna do Kanban"),
+    ordenar_por: str = Query(default="score_total"),
+    ordem: str = Query(default="desc"),
+    pagina: int = Query(default=1, ge=1),
+    por_pagina: int = Query(default=25, ge=1, le=100),
+):
+    """
+    Lista paginada de leads pra tela "Lista de Leads" (busca/filtros/
+    ordenação/paginação) -- endpoint PRÓPRIO e ADITIVO, não reaproveita
+    nem modifica `list_leads`/`GET /api/leads` (que continua servindo o
+    Kanban exatamente como antes, sem paginação e sem busca por texto,
+    de propósito -- o Kanban carrega tudo de uma vez pras 9 colunas,
+    não faz sentido paginar isso). Requer autenticação (qualquer papel),
+    mesma proteção do resto das rotas de lead.
+
+    `busca` filtra por `razao_social` OU `nome_fantasia` OU `cnpj`
+    contendo o texto, case-insensitive (`ILIKE` -- SQLAlchemy compila
+    isso tanto pro operador nativo do Postgres quanto pra um `lower(...)
+    LIKE lower(...)` portável no SQLite dos testes, sem precisar de
+    lógica condicional por dialeto aqui). `prioridade`/`kanban_status`
+    são os mesmos filtros de igualdade já usados em `list_leads`.
+
+    ⚠️ Case-insensitive com acento (ex.: "í"/"Í") só funciona de verdade
+    contra Postgres real em produção -- o `lower()` embutido do SQLite
+    (usado nos testes) só normaliza ASCII, então "CLÍNICA".lower() no
+    SQLite não vira "clínica" (o Í maiúsculo fica intocado). Não é um
+    bug deste endpoint, é uma limitação conhecida do SQLite de teste --
+    ver o mesmo aviso em `tests/test_leads_lista_route.py::test_busca_case_insensitive`,
+    que testa case-insensitivity só com ASCII por esse motivo.
+
+    `ordenar_por`/`ordem` validados contra listas fechadas (422 se fora
+    delas) -- mesmo padrão de validação explícita já usado em
+    `update_lead_status` pro `kanban_status`, em vez de deixar o SQL
+    falhar silenciosamente ou ordenar por uma coluna arbitrária.
+
+    `total` é contado ANTES de aplicar `pagina`/`por_pagina` (sobre a
+    mesma query já filtrada, via subquery) -- é o total de leads que
+    batem com os filtros, não o total geral de leads nem o tamanho da
+    página atual.
+    """
+    if ordenar_por not in _COLUNAS_ORDENACAO_LISTA:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"ordenar_por inválido. Valores aceitos: {sorted(_COLUNAS_ORDENACAO_LISTA)}",
+        )
+    if ordem not in _ORDENS_VALIDAS_LISTA:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"ordem inválida. Valores aceitos: {sorted(_ORDENS_VALIDAS_LISTA)}",
+        )
+
+    stmt = select(Lead)
+    if busca:
+        padrao = f"%{busca}%"
+        stmt = stmt.where(
+            or_(
+                Lead.razao_social.ilike(padrao),
+                Lead.nome_fantasia.ilike(padrao),
+                Lead.cnpj.ilike(padrao),
+            )
+        )
+    if prioridade:
+        stmt = stmt.where(Lead.prioridade == prioridade.upper())
+    if kanban_status:
+        stmt = stmt.where(Lead.kanban_status == kanban_status)
+
+    total = db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
+
+    coluna = _COLUNAS_ORDENACAO_LISTA[ordenar_por]
+    coluna_ordenada = coluna.asc().nullslast() if ordem == "asc" else coluna.desc().nullslast()
+    stmt_pagina = stmt.order_by(coluna_ordenada).offset((pagina - 1) * por_pagina).limit(por_pagina)
+    items = db.execute(stmt_pagina).scalars().all()
+
+    return LeadListaResponse(items=items, total=total, pagina=pagina, por_pagina=por_pagina)
 
 
 @router.get("/{lead_id}", response_model=LeadRead)
