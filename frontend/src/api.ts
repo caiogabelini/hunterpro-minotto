@@ -81,6 +81,9 @@ export interface Lead {
   prioridade?: string | null;
   kanban_status: string;
   motivo_perda?: string | null;
+  servicos_vendidos?: string[] | null;
+  tipo_contrato?: string | null;
+  valor_fechamento?: number | null;
   mensagem_abordagem?: string | null;
   insights_ia?: InsightsIA | null;
   insights_gerado_em?: string | null;
@@ -361,16 +364,26 @@ export async function fetchBusca(token: string, buscaId: string): Promise<BuscaL
   return res.json();
 }
 
+/** Mesmos 3 campos que `PATCH /{lead_id}/status` exige quando
+ * `kanban_status == "ganho"` (ver app/schemas/lead.py::LeadStatusUpdate
+ * e o docstring da rota) -- espelha `motivo_perda` do lado positivo. */
+export interface DadosFechamento {
+  servicos_vendidos: string[];
+  tipo_contrato: "pontual" | "recorrente";
+  valor_fechamento: number;
+}
+
 export async function updateLeadStatus(
   token: string,
   leadId: string,
   kanban_status: string,
   motivo_perda?: string,
+  dadosFechamento?: DadosFechamento,
 ): Promise<Lead> {
   const res = await fetch(`${API_URL}/api/leads/${leadId}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...authHeaders(token) },
-    body: JSON.stringify({ kanban_status, motivo_perda }),
+    body: JSON.stringify({ kanban_status, motivo_perda, ...dadosFechamento }),
   });
   if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok) throw new Error(await parseErrorDetail(res));

@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  Trophy,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -39,9 +40,10 @@ import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
 import { getInsights } from "../insights";
-import { KANBAN_COLUMNS, STATUS_PERDIDO } from "../kanbanStatuses";
+import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
+import { labelServicoFechamento } from "../servicosFechamento";
 import "./LeadDossierPage.css";
 
 type Aba = "dados" | "contatos" | "analise" | "mensagens" | "insights";
@@ -307,7 +309,38 @@ function AbaDados({ lead }: { lead: Lead }) {
           </dl>
         </section>
       </div>
+
+      <SecaoFechamento lead={lead} />
     </>
+  );
+}
+
+/**
+ * Seção "Fechamento" -- só renderiza quando o lead está "ganho" E tem
+ * os 3 dados de fechamento preenchidos (o backend passou a exigir os
+ * três juntos ao mover pra "ganho", ver PATCH /{lead_id}/status, então
+ * na prática ou os três existem ou nenhum existe; a checagem
+ * individual dos três é só defensiva, não um caso real esperado).
+ * Deliberadamente simples -- só exibe o dado bruto de forma legível
+ * (lista de serviços, tipo de contrato, valor formatado), sem nenhuma
+ * exibição analítica/rica -- isso é o pedido explícito desta sessão,
+ * uma versão mais elaborada fica pra uma sessão futura.
+ */
+function SecaoFechamento({ lead }: { lead: Lead }) {
+  if (lead.kanban_status !== STATUS_GANHO) return null;
+  if (!lead.servicos_vendidos?.length || !lead.tipo_contrato || lead.valor_fechamento == null) return null;
+
+  const rotuloValor = lead.tipo_contrato === "recorrente" ? "Valor mensal" : "Valor único";
+
+  return (
+    <section className="dossier-card dossier-fechamento">
+      <SectionHeading icon={Trophy}>Fechamento</SectionHeading>
+      <dl>
+        <Campo label="Serviços vendidos" valor={lead.servicos_vendidos.map(labelServicoFechamento).join(", ")} />
+        <Campo label="Tipo de contrato" valor={lead.tipo_contrato === "recorrente" ? "Recorrente" : "Pontual"} />
+        <Campo label={rotuloValor} valor={formatCurrencyBRL(lead.valor_fechamento)} />
+      </dl>
+    </section>
   );
 }
 

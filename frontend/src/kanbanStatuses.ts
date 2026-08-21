@@ -14,3 +14,4 @@ export const KANBAN_COLUMNS: { status: string; label: string }[] = [
 ];
 
 export const STATUS_PERDIDO = "perdido";
+export const STATUS_GANHO = "ganho";

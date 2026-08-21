@@ -575,6 +575,215 @@ def test_perdido_com_motivo_funciona(client, db_session, token):
     assert corpo["motivo_perda"] == "Fechou com concorrente"
 
 
+def test_ganho_sem_dados_de_fechamento_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={"kanban_status": "ganho"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    db_session.refresh(lead)
+    assert lead.kanban_status != "ganho"  # não persistiu nada
+
+
+def test_ganho_sem_servicos_vendidos_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={"kanban_status": "ganho", "tipo_contrato": "pontual", "valor_fechamento": 1500.0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert "servicos_vendidos" in resp.json()["detail"]
+
+
+def test_ganho_com_lista_de_servicos_vazia_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": [],
+            "tipo_contrato": "pontual",
+            "valor_fechamento": 1500.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert "servicos_vendidos" in resp.json()["detail"]
+
+
+def test_ganho_sem_tipo_contrato_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": ["contabilidade_consultiva"],
+            "valor_fechamento": 1500.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert "tipo_contrato" in resp.json()["detail"]
+
+
+def test_ganho_com_tipo_contrato_invalido_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": ["contabilidade_consultiva"],
+            "tipo_contrato": "anual",
+            "valor_fechamento": 1500.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert "tipo_contrato" in resp.json()["detail"]
+
+
+def test_ganho_sem_valor_fechamento_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={"kanban_status": "ganho", "servicos_vendidos": ["contabilidade_consultiva"], "tipo_contrato": "pontual"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert "valor_fechamento" in resp.json()["detail"]
+
+
+def test_ganho_com_valor_fechamento_zero_ou_negativo_retorna_erro(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    for valor in (0, -100.0):
+        resp = client.patch(
+            f"/api/leads/{lead.id}/status",
+            json={
+                "kanban_status": "ganho",
+                "servicos_vendidos": ["contabilidade_consultiva"],
+                "tipo_contrato": "pontual",
+                "valor_fechamento": valor,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+        assert "valor_fechamento" in resp.json()["detail"]
+
+
+def test_ganho_com_todos_os_campos_persiste_corretamente(client, db_session, token):
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": ["contabilidade_consultiva", "planejamento_tributario"],
+            "tipo_contrato": "recorrente",
+            "valor_fechamento": 2500.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["kanban_status"] == "ganho"
+    assert corpo["servicos_vendidos"] == ["contabilidade_consultiva", "planejamento_tributario"]
+    assert corpo["tipo_contrato"] == "recorrente"
+    assert corpo["valor_fechamento"] == 2500.0
+
+    db_session.refresh(lead)
+    assert lead.servicos_vendidos == ["contabilidade_consultiva", "planejamento_tributario"]
+    assert lead.tipo_contrato == "recorrente"
+    assert lead.valor_fechamento == 2500.0
+
+
+def test_mover_lead_ganho_pra_outra_etapa_nao_apaga_dados_de_fechamento(client, db_session, token):
+    """Diferente de motivo_perda (limpo ao sair de "perdido"), os dados
+    de fechamento representam uma venda que já aconteceu -- continuam
+    persistidos mesmo que o lead seja movido de volta por engano ou
+    reclassificado depois (decisão documentada no docstring da rota)."""
+    lead = _criar_lead(db_session)
+    client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": ["contabilidade_consultiva"],
+            "tipo_contrato": "pontual",
+            "valor_fechamento": 900.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={"kanban_status": "negociacao"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["kanban_status"] == "negociacao"
+    assert corpo["servicos_vendidos"] == ["contabilidade_consultiva"]
+    assert corpo["tipo_contrato"] == "pontual"
+    assert corpo["valor_fechamento"] == 900.0
+
+
+def test_ganho_com_servico_outro_texto_livre_persiste_na_lista(client, db_session, token):
+    """`servicos_vendidos` aceita qualquer string -- inclusive texto
+    livre digitado em "Outro" no frontend, sem validar contra os 4
+    valores fixos aqui no backend (validação de opções é do frontend)."""
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={
+            "kanban_status": "ganho",
+            "servicos_vendidos": ["abertura_legalizacao", "Auditoria fiscal personalizada"],
+            "tipo_contrato": "pontual",
+            "valor_fechamento": 800.0,
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["servicos_vendidos"] == ["abertura_legalizacao", "Auditoria fiscal personalizada"]
+
+
+def test_mover_pra_etapa_intermediaria_nao_exige_dados_de_fechamento_nem_de_perda(client, db_session, token):
+    """Mover pra uma etapa que não é "ganho" nem "perdido" continua sem
+    exigir motivo_perda NEM os 3 campos de fechamento."""
+    lead = _criar_lead(db_session)
+
+    resp = client.patch(
+        f"/api/leads/{lead.id}/status",
+        json={"kanban_status": "proposta_enviada"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["kanban_status"] == "proposta_enviada"
+    assert corpo["servicos_vendidos"] is None
+    assert corpo["tipo_contrato"] is None
+    assert corpo["valor_fechamento"] is None
+
+
 def test_status_invalido_retorna_erro(client, db_session, token):
     lead = _criar_lead(db_session)
 

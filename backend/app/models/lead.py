@@ -91,6 +91,23 @@ class Lead(Base):
     kanban_status: Mapped[str] = mapped_column(String(20), default=KanbanStatus.NOVO_LEAD.value)
     motivo_perda: Mapped[str | None] = mapped_column(Text, nullable=True)  # só relevante quando kanban_status == "perdido"
 
+    # --- Fechamento (quando kanban_status == "ganho") ---
+    # Espelha motivo_perda acima, do lado positivo -- captura o que foi
+    # efetivamente vendido quando o lead fecha. Validado na rota (não a
+    # nível de banco, mesma razão de motivo_perda: as colunas ficam
+    # nullable porque só fazem sentido nesse status específico -- ver
+    # PATCH /{lead_id}/status em app/api/routes/leads.py).
+    # `servicos_vendidos` aceita qualquer string na lista -- os 4 valores
+    # fixos que o frontend oferece como checkbox ("abertura_legalizacao",
+    # "contabilidade_consultiva", "consultoria_empresarial",
+    # "planejamento_tributario") não são um enum fechado aqui; texto
+    # livre digitado em "Outro" também é uma entrada válida da lista.
+    # Validação de opções fixas + "outro" é responsabilidade do
+    # frontend, não deste modelo.
+    servicos_vendidos: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    tipo_contrato: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "pontual" | "recorrente"
+    valor_fechamento: Mapped[float | None] = mapped_column(Float, nullable=True)  # R$ -- único se pontual, mensal se recorrente
+
     # --- Abordagem ---
     # ⚠️ DEPRECATED (20/08/2026) -- substituído por app/models/lead_message.py::LeadMessage,
     # que guarda uma mensagem por CANAL (email/whatsapp) com histórico completo (nunca

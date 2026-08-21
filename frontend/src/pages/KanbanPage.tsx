@@ -1,10 +1,11 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { useEffect, useState } from "react";
-import { fetchLeads, updateLeadStatus, UnauthorizedError, type Lead } from "../api";
+import { fetchLeads, updateLeadStatus, UnauthorizedError, type DadosFechamento, type Lead } from "../api";
+import { FechamentoModal } from "../components/FechamentoModal";
 import { KanbanColumn } from "../components/KanbanColumn";
 import { LossReasonModal } from "../components/LossReasonModal";
 import { useAuth } from "../context/AuthContext";
-import { KANBAN_COLUMNS, STATUS_PERDIDO } from "../kanbanStatuses";
+import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import "./KanbanPage.css";
 
 export function KanbanPage() {
@@ -13,6 +14,7 @@ export function KanbanPage() {
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [pendingLoss, setPendingLoss] = useState<{ leadId: string; razaoSocial: string } | null>(null);
+  const [pendingWin, setPendingWin] = useState<{ leadId: string; razaoSocial: string } | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -30,14 +32,28 @@ export function KanbanPage() {
       .finally(() => setCarregando(false));
   }, [token, logout]);
 
-  async function aplicarNovoStatus(leadId: string, novoStatus: string, motivoPerda?: string) {
+  async function aplicarNovoStatus(
+    leadId: string,
+    novoStatus: string,
+    motivoPerda?: string,
+    dadosFechamento?: DadosFechamento,
+  ) {
     if (!token) return;
     const anteriores = leads;
     setLeads((atuais) =>
-      atuais.map((l) => (l.id === leadId ? { ...l, kanban_status: novoStatus, motivo_perda: motivoPerda ?? null } : l)),
+      atuais.map((l) =>
+        l.id === leadId
+          ? {
+              ...l,
+              kanban_status: novoStatus,
+              motivo_perda: motivoPerda ?? null,
+              ...(dadosFechamento ?? {}),
+            }
+          : l,
+      ),
     );
     try {
-      await updateLeadStatus(token, leadId, novoStatus, motivoPerda);
+      await updateLeadStatus(token, leadId, novoStatus, motivoPerda, dadosFechamento);
     } catch (e) {
       setLeads(anteriores);
       if (e instanceof UnauthorizedError) {
@@ -59,6 +75,10 @@ export function KanbanPage() {
 
     if (novoStatus === STATUS_PERDIDO) {
       setPendingLoss({ leadId, razaoSocial: lead.razao_social });
+      return;
+    }
+    if (novoStatus === STATUS_GANHO) {
+      setPendingWin({ leadId, razaoSocial: lead.razao_social });
       return;
     }
     void aplicarNovoStatus(leadId, novoStatus);
@@ -96,6 +116,17 @@ export function KanbanPage() {
           onConfirm={(motivo) => {
             void aplicarNovoStatus(pendingLoss.leadId, STATUS_PERDIDO, motivo);
             setPendingLoss(null);
+          }}
+        />
+      )}
+
+      {pendingWin && (
+        <FechamentoModal
+          razaoSocial={pendingWin.razaoSocial}
+          onCancel={() => setPendingWin(null)}
+          onConfirm={(dadosFechamento) => {
+            void aplicarNovoStatus(pendingWin.leadId, STATUS_GANHO, undefined, dadosFechamento);
+            setPendingWin(null);
           }}
         />
       )}

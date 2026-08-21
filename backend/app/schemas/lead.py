@@ -40,6 +40,9 @@ class LeadRead(BaseModel):
     prioridade: str | None = None
     kanban_status: str
     motivo_perda: str | None = None
+    servicos_vendidos: list[str] | None = None
+    tipo_contrato: str | None = None
+    valor_fechamento: float | None = None
     mensagem_abordagem: str | None = None
     insights_ia: dict | None = None
     insights_gerado_em: datetime | None = None
@@ -50,6 +53,12 @@ class LeadRead(BaseModel):
 class LeadStatusUpdate(BaseModel):
     kanban_status: str
     motivo_perda: str | None = None
+    # Só obrigatórios quando kanban_status == "ganho" -- validado na
+    # rota (PATCH /{lead_id}/status), não aqui no schema, mesmo padrão
+    # de motivo_perda (só obrigatório quando kanban_status == "perdido").
+    servicos_vendidos: list[str] | None = None
+    tipo_contrato: str | None = None
+    valor_fechamento: float | None = None
 
 
 class LeadListaResponse(BaseModel):

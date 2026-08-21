@@ -17,6 +17,7 @@ router = APIRouter()
 
 _KANBAN_STATUS_VALIDOS = {status_.value for status_ in KanbanStatus}
 _CANAIS_VALIDOS = {canal.value for canal in CanalMensagem}
+_TIPOS_CONTRATO_VALIDOS = {"pontual", "recorrente"}
 
 # Colunas ordenáveis de GET /leads/lista -- chave é o valor aceito no
 # query param `ordenar_por`, valor é a coluna real do modelo.
@@ -219,8 +220,21 @@ def update_lead_status(
     """
     Move um lead entre colunas do Kanban. Requer autenticação (qualquer
     papel). `motivo_perda` é obrigatório quando `kanban_status ==
-    "perdido"` — validado aqui, não a nível de banco (a coluna é
-    nullable, já que só faz sentido nesse status).
+    "perdido"`; `servicos_vendidos`/`tipo_contrato`/`valor_fechamento`
+    são obrigatórios quando `kanban_status == "ganho"` (mesmo padrão de
+    validação condicional, do lado positivo) — tudo validado aqui, não
+    a nível de banco (as colunas ficam nullable, já que só fazem
+    sentido nesses dois status específicos).
+
+    Mover pra qualquer outra etapa (nem "ganho" nem "perdido") não
+    exige nenhum desses campos, e os campos de fechamento/perda de uma
+    transição anterior NÃO são limpos automaticamente ao sair de
+    "ganho"/"perdido" pra outra etapa — diferente de `motivo_perda`
+    (que já era limpo ao sair de "perdido", comportamento mantido sem
+    mudança), os campos de fechamento representam um evento de negócio
+    que já aconteceu (uma venda real) e continuam válidos como registro
+    histórico mesmo que o lead seja movido de volta por engano ou
+    reclassificado depois.
     """
     if dados.kanban_status not in _KANBAN_STATUS_VALIDOS:
         raise HTTPException(
@@ -232,6 +246,27 @@ def update_lead_status(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="motivo_perda é obrigatório quando kanban_status é 'perdido'",
         )
+    if dados.kanban_status == KanbanStatus.GANHO.value:
+        if not dados.servicos_vendidos:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="servicos_vendidos é obrigatório (lista não-vazia) quando kanban_status é 'ganho'",
+            )
+        if not dados.tipo_contrato:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="tipo_contrato é obrigatório quando kanban_status é 'ganho'",
+            )
+        if dados.tipo_contrato not in _TIPOS_CONTRATO_VALIDOS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"tipo_contrato inválido. Valores aceitos: {sorted(_TIPOS_CONTRATO_VALIDOS)}",
+            )
+        if dados.valor_fechamento is None or dados.valor_fechamento <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="valor_fechamento é obrigatório e deve ser maior que zero quando kanban_status é 'ganho'",
+            )
 
     lead = db.get(Lead, lead_id)
     if lead is None:
@@ -239,6 +274,10 @@ def update_lead_status(
 
     lead.kanban_status = dados.kanban_status
     lead.motivo_perda = dados.motivo_perda if dados.kanban_status == KanbanStatus.PERDIDO.value else None
+    if dados.kanban_status == KanbanStatus.GANHO.value:
+        lead.servicos_vendidos = dados.servicos_vendidos
+        lead.tipo_contrato = dados.tipo_contrato
+        lead.valor_fechamento = dados.valor_fechamento
     db.commit()
     db.refresh(lead)
     return lead

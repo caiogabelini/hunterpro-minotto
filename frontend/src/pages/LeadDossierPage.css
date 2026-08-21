@@ -368,6 +368,22 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Seção "Fechamento" (só quando kanban_status == "ganho", ver
+   SecaoFechamento em LeadDossierPage.tsx) -- fundo levemente tingido de
+   verde (--color-success-bg), mesmo tom já usado em outros sinais
+   positivos da página (indicador-on, rqe-alta-confianca), pra marcar
+   visualmente que este card é sobre um desfecho ganho, não mais um
+   dado neutro como os outros cards desta aba. */
+.dossier-fechamento {
+  background: var(--color-success-bg);
+  border-color: rgba(22, 101, 52, 0.3);
+}
+
+.dossier-fechamento .dossier-section-heading,
+.dossier-fechamento .dossier-section-heading svg {
+  color: var(--color-success);
+}
+
 /* Título de seção com ícone (components: SectionHeading em
    LeadDossierPage.tsx). Texto e ícone em --color-primary -- esse par
    (heading + ícone) se repete umas 15 vezes na página inteira (cada

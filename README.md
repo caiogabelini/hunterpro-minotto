@@ -35,7 +35,10 @@ frontend/         React + Vite + TypeScript
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout + `role` decodificado (admin/client)
     components/           Sidebar, AuthenticatedLayout, ProtectedRoute, AdminRoute (guard
                           admin-only), KanbanColumn, KanbanCard, LossReasonModal,
-                          PriorityBadge, Modal (genérico, reutilizável), SimuladorReceitaModal
+                          PriorityBadge, Modal (genérico, reutilizável), SimuladorReceitaModal,
+                          FechamentoModal
+    servicosFechamento.ts   lista dos 4 serviços fixos + tradução chave -> label,
+                          compartilhado entre FechamentoModal e LeadDossierPage
     pages/                LoginPage, KanbanPage, ListaLeadsPage, LeadDossierPage,
                           DashboardPage, BuscaLeadsPage (admin only)
     App.tsx                React Router: /login (público, sem sidebar) e / + /leads +
@@ -873,7 +876,44 @@ interno do Docker.
   data-fetching que precisa re-rodar a cada filtro, mesma categoria do
   aviso já aceito em `AuthContext.tsx`) e `pytest` limpos; sem validação
   visual real, mesma ressalva de sempre.
-- ✅ 336 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Dados de fechamento ao mover lead pra "Ganho"** (23/08/2026) —
+  espelha o padrão já existente de "Perdido"/`motivo_perda`, do lado
+  positivo. Backend: `Lead` ganhou `servicos_vendidos` (JSON, lista de
+  strings — sem enum fechado no banco, os 4 valores fixos + texto livre
+  de "Outro" cabem igual, validação de opções é do frontend),
+  `tipo_contrato` ("pontual" | "recorrente", validado contra esse
+  conjunto fechado) e `valor_fechamento` (R$, > 0) — migration validada
+  contra Postgres real. `PATCH /{lead_id}/status` passa a exigir os
+  três quando o novo `kanban_status` é "ganho" (422 com mensagem
+  específica por campo faltando/inválido, mesmo formato do erro já
+  existente pra `motivo_perda`). **Decisão deliberada, diferente do
+  padrão de `motivo_perda`**: os dados de fechamento NÃO são apagados
+  se o lead for movido pra outra etapa depois — `motivo_perda` é
+  limpo ao sair de "perdido" porque descreve por que algo não
+  aconteceu (deixa de fazer sentido se não é mais perdido);
+  serviços/contrato/valor descrevem uma venda que JÁ aconteceu, então
+  continuam válidos como registro histórico mesmo que o lead seja
+  reclassificado depois. Frontend: `FechamentoModal.tsx` (novo,
+  construído sobre o `Modal` genérico — segundo componente a usar ele,
+  depois do `SimuladorReceitaModal`) abre ao arrastar um card pra
+  "Ganho" no Kanban, com checkboxes pros 4 serviços fixos + "Outro"
+  (campo de texto livre revelado ao marcar), seletor de tipo de
+  contrato, campo de valor com label dinâmico ("Valor único"/"Valor
+  mensal"), e botão "Confirmar" desabilitado até tudo estar preenchido
+  (mesma validação do backend, replicada no cliente). No dossiê, uma
+  nova seção "Fechamento" (aba Dados, só quando `kanban_status ==
+  "ganho"` e os 3 campos existem) mostra os dados de forma simples —
+  serviços traduzidos de volta pra label legível, tipo de contrato,
+  valor formatado — com um leve tom verde marcando o card como um
+  desfecho positivo. 12 testes novos no backend (cada campo
+  faltando/inválido individualmente, lista vazia vs. ausente, o caminho
+  feliz com múltiplos serviços, texto livre de "Outro" sobrevivendo na
+  lista, confirmação de que os dados NÃO são apagados ao sair de
+  "ganho", e que mover pra uma etapa intermediária continua sem exigir
+  nada). Nenhum teste novo no frontend. `npm run build`/`npm run
+  lint`/`npm run test` (mesmos 2 avisos já aceitos, nenhum novo) e
+  `pytest` limpos; sem validação visual real, mesma ressalva de sempre.
+- ✅ 347 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -1094,6 +1134,19 @@ Em ordem de prioridade combinada com o cliente:
       itens 12/13 mais atrás), continua de fora, agora relevante de novo
       já que esta é a primeira tela com uma listagem tabular de
       verdade.
+23. ~~Dados de fechamento ao mover lead pra "Ganho"~~ ✅ feito
+    (23/08/2026) — ver bullet dedicado abaixo. Pendências deixadas de
+    propósito:
+    - **Exibição no dossiê é só o dado bruto** (lista de serviços, tipo
+      de contrato, valor formatado) — pedido explícito desta sessão;
+      uma exibição mais rica/analítica (ex.: alguma visualização
+      agregada de receita fechada por serviço no Dashboard) fica pra
+      uma sessão futura.
+    - **`LossReasonModal` continua sem migrar pro `Modal` genérico** —
+      mesma pendência já registrada no item 18; `FechamentoModal` é o
+      segundo componente (depois de `SimuladorReceitaModal`) a usar o
+      `Modal` novo, o modal de "Perdido" continua com a implementação
+      ad-hoc mais antiga.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

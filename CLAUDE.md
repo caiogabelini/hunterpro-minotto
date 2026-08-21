@@ -3000,6 +3000,158 @@ read endpoint plus a new frontend page.
   unchanged — no new pure-function logic, this session's frontend work
   is table/filter/pagination UI wiring).
 
+### Closing data on "Ganho" (`servicos_vendidos`/`tipo_contrato`/`valor_fechamento`, `FechamentoModal.tsx`, follow-up session, 2026-08-23)
+
+Captures deal-closing data when a lead is dragged to the "Ganho" Kanban
+column — explicitly the mirror image of the existing "Perdido"/
+`motivo_perda` pattern (a modal blocks the move until the required
+data is entered, backend validates conditionally on the target
+status). No new model, no new table — three nullable columns on the
+existing `Lead`.
+
+**Backend**:
+
+- `app/models/lead.py` gained `servicos_vendidos` (`JSON`, a list of
+  strings), `tipo_contrato` (`String(20)`), `valor_fechamento`
+  (`Float`) — all nullable, placed right after `motivo_perda` in the
+  "Kanban" field block, with a comment explicitly framing them as its
+  positive-side mirror.
+- **`servicos_vendidos` has no closed enum at the database or Pydantic
+  level, on purpose** — the request was explicit that the 4 fixed
+  values ("abertura_legalizacao", "contabilidade_consultiva",
+  "consultoria_empresarial", "planejamento_tributario") plus arbitrary
+  free text (from the frontend's "Outro" field) all need to fit in the
+  same list, and that validating the fixed-vs-free-text distinction is
+  the *frontend's* job, not the backend's. The column is just
+  `JSON` holding `list[str]`; the route only checks the list is
+  non-empty, never what's in it.
+- `tipo_contrato`, unlike `servicos_vendidos`, **is** validated against
+  a closed set (`_TIPOS_CONTRATO_VALIDOS = {"pontual", "recorrente"}`)
+  in the route — same explicit-validation convention as
+  `kanban_status`/`ordenar_por` elsewhere in this file, since unlike
+  "which services were sold" (open-ended by nature), "what kind of
+  contract is this" genuinely only has two valid values worth
+  rejecting bad input against.
+- `PATCH /{lead_id}/status` (`update_lead_status`) — when the target
+  `kanban_status` is `"ganho"`, now requires all three fields (422 with
+  a field-specific message if any is missing/invalid), the exact same
+  shape as the pre-existing `"perdido"`/`motivo_perda` check just above
+  it in the function. `valor_fechamento` must be `> 0`, not just
+  present — a `0` or negative closing value is rejected the same as a
+  missing one.
+- **Deliberately does NOT clear closing data when a lead is moved out
+  of "ganho" later** — this is the one place this feature's behavior
+  genuinely diverges from the `motivo_perda` pattern it's modeled on,
+  and it's worth understanding why, not just copying the precedent
+  blindly. `motivo_perda` gets cleared on exit from `"perdido"` because
+  it's explaining *why something didn't happen* — if the lead isn't
+  lost anymore, that reason is stale. `servicos_vendidos`/
+  `tipo_contrato`/`valor_fechamento` describe a sale that *did* happen
+  — moving the lead again later (a misclick, a later reclassification)
+  doesn't retroactively un-sell the contract, so the historical record
+  stays. The route's docstring states this explicitly, and a dedicated
+  test (`test_mover_lead_ganho_pra_outra_etapa_nao_apaga_dados_de_fechamento`)
+  confirms it — move to `"ganho"` with data, then move to
+  `"negociacao"`, and the three fields are still there in the response.
+- Tests (`tests/test_leads_routes.py`, +12, 347 backend tests total):
+  every individual missing/invalid field (no data at all, missing
+  `servicos_vendidos`, empty list specifically — distinct from missing
+  entirely, since Pydantic treats `[]` and absent differently — missing
+  `tipo_contrato`, invalid `tipo_contrato` value, missing
+  `valor_fechamento`, zero and negative `valor_fechamento` both), the
+  happy path with multiple services persisting correctly, free-text
+  "Outro" entries surviving alongside fixed keys in the same list
+  without any backend-side rejection, the no-auto-clear-on-exit case
+  above, and confirmation that moving to a non-"ganho"/non-"perdido"
+  status still requires neither `motivo_perda` nor any of the three
+  closing fields.
+
+**Frontend**:
+
+- `components/FechamentoModal.tsx` (new) — built on the generic
+  `Modal` component (from the "Revenue simulator" session), same
+  structural role as `LossReasonModal` for the "Perdido" column but
+  **not** built on the older ad-hoc `.modal-*` implementation
+  `LossReasonModal` uses — this is the second component (after
+  `SimuladorReceitaModal`) to use the generic `Modal`, `LossReasonModal`
+  itself still hasn't been migrated (still an open, explicitly-flagged
+  follow-up from the session that introduced `Modal`).
+- `frontend/src/servicosFechamento.ts` (new, small shared module) —
+  `SERVICOS_FECHAMENTO_FIXOS` (the 4 fixed key/label pairs) and
+  `labelServicoFechamento(valor)` (translates a key back to its label,
+  or returns free text unchanged since it won't match any fixed key).
+  Extracted into its own file specifically because it's needed in two
+  places that would otherwise duplicate the same 4-item list:
+  `FechamentoModal.tsx` (building the checkboxes) and
+  `LeadDossierPage.tsx` (displaying the saved selection back as
+  readable labels, not raw keys, in the new "Fechamento" section).
+- **Checkbox/radio styling uses `accent-color`, not a custom-built
+  control** — a one-line CSS property (`accent-color: var(--color-primary)`,
+  broadly supported in every current browser) recolors the native
+  checkbox/radio to match the brand without building a custom
+  component from scratch. First use of native form controls beyond
+  plain text/number inputs and `<select>` in this project — a
+  reasonable, low-effort choice given nothing about these controls
+  needs custom behavior beyond looking on-brand.
+- **Confirm button disabled state**: requires at least one selected
+  service (either a fixed checkbox or "Outro" with non-empty trimmed
+  text — checking `outroMarcado && outroTexto.trim().length > 0`, not
+  just the checkbox state, so ticking "Outro" without typing anything
+  doesn't count), a chosen contract type, and a valid positive number
+  in the value field — mirrors the backend's own validation rules
+  client-side, so the 422 case is rare in practice (only reachable via
+  a stale/tampered request), not the primary way validation is
+  communicated to the user.
+- **Value field label flips dynamically** ("Valor único (R$)" vs.
+  "Valor mensal (R$)") based on the selected contract type, exactly as
+  requested — defaults to the "único" wording before a contract type is
+  chosen, a minor cosmetic default since the Confirm button stays
+  disabled either way until one is actually selected.
+- `KanbanPage.tsx`: `handleDragEnd` gained a second early-return branch
+  (`novoStatus === STATUS_GANHO`, mirroring the existing `STATUS_PERDIDO`
+  branch immediately above it) that opens `FechamentoModal` instead of
+  applying the move directly — same `pendingLoss`/`pendingWin` pair of
+  local state, same "cancel never touches `leads` state, so the card
+  visually stays put" guarantee `LossReasonModal` already had.
+  `aplicarNovoStatus` gained an optional `dadosFechamento` parameter,
+  spread into both the optimistic local update and the actual
+  `updateLeadStatus` API call. `kanbanStatuses.ts` gained a
+  `STATUS_GANHO` export (mirroring the pre-existing `STATUS_PERDIDO`)
+  specifically so this comparison didn't need a bare `"ganho"` string
+  literal in `KanbanPage.tsx`.
+- `api.ts`: `Lead` gained the three new optional fields;
+  `updateLeadStatus` gained an optional 5th parameter,
+  `dadosFechamento?: DadosFechamento` (a new exported interface
+  mirroring the backend's validation shape), spread into the request
+  body alongside `kanban_status`/`motivo_perda` — when absent (every
+  non-"ganho" call site), the spread contributes nothing, so existing
+  callers didn't need to change.
+- **Dossier**: a new `SecaoFechamento` component in the "Dados" tab,
+  rendered *only* when `kanban_status === "ganho"` **and** all three
+  fields are actually present (a defensive `&&` chain, not expected to
+  ever partially fail in practice since the backend requires all three
+  together — but cheap insurance against an old/malformed row).
+  Deliberately minimal per the explicit instruction ("não precisa ser
+  elaborado, só exibir a informação de forma legível") — a single
+  `dossier-card` with three `Campo` rows (services joined as a
+  comma-separated readable string via `labelServicoFechamento`,
+  contract type as "Recorrente"/"Pontual", and the value via the
+  existing `formatCurrencyBRL`, under a dynamic "Valor mensal"/"Valor
+  único" label matching the modal's own wording) — explicitly not the
+  "rich/analytical display" the request named as out of scope for this
+  session. Given a light green tint (`--color-success-bg`/
+  `--color-success`, the same "positive signal" vocabulary already used
+  elsewhere on this page — `indicador-on`, `rqe-alta-confianca`) so it
+  reads as a "won" card distinct from the page's other neutral data
+  cards, positioned as a standalone card below the existing 3-card grid
+  (not inside it) since it doesn't apply to most leads.
+- **Not tested in an actual browser** — same standing sandbox
+  limitation as every frontend session in this project. `npm run
+  build`/`npm run lint`/`npm run test` all clean (same 2 pre-existing
+  accepted warnings — `AuthContext.tsx`'s fast-refresh warning and
+  `ListaLeadsPage.tsx`'s `set-state-in-effect` warning — no new ones;
+  18 frontend tests unchanged, no new pure-function logic).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -3133,6 +3285,21 @@ resulting `buscas_leads` schema (FK to `users.id`, index on
 `iniciado_por_id`, `status` `NOT NULL` `varchar(20)`, everything else
 nullable with no default) matches `app/models/busca_leads.py` exactly.
 Cluster stopped and deleted immediately after.
+
+A **ninth** migration was added 2026-08-23 (follow-up session):
+`a1139438a443_adiciona_dados_de_fechamento_em_leads.py`
+(`down_revision="a8017825fae8"`, adds `Lead.servicos_vendidos`/
+`Lead.tipo_contrato`/`Lead.valor_fechamento` — see "Closing data on
+'Ganho'" below). Three nullable columns on `leads`, no `server_default`
+— same reasoning as `motivo_perda`/`insights_ia`: `NULL` already means
+"this lead hasn't closed as won yet," no backfill needed. Same
+throwaway-cluster validation as the previous eight: all nine
+migrations upgrade cleanly in chain order, `downgrade -1` reverts only
+this one, re-upgrade is clean, and the resulting `leads.servicos_vendidos`
+(`json`)/`leads.tipo_contrato` (`varchar(20)`)/`leads.valor_fechamento`
+(`double precision`) columns match `app/models/lead.py` exactly — all
+three nullable, no default. Cluster stopped and deleted immediately
+after.
 
 ### Deployment note (EasyPanel)
 
