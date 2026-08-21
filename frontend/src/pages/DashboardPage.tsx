@@ -257,13 +257,22 @@ function SecaoConsumoPlano({ summary }: { summary: DashboardSummary }) {
 
 // --- Funil de Conversão ------------------------------------------------------
 // Barras horizontais, largura proporcional ao `percentual` de cada etapa
-// (0-100%, sobre o total de leads NÃO perdidos -- ver a mesma ressalva
-// abaixo do funil e o docstring de get_funil no backend). Preenchimento
-// em --color-primary pra todas as etapas, exceto "ganho", que usa
-// --color-success -- judgment call pra marcar visualmente a etapa de
-// desfecho positivo do funil, mesma lógica semântica (verde = sucesso)
-// já usada no resto do dashboard/dossiê, não pedido explicitamente mas
-// consistente com o vocabulário de cor já estabelecido.
+// (0-100% sobre o TOTAL de leads, "perdido" incluído no denominador
+// desde 21/08/2026 -- ver a mesma ressalva abaixo do funil e o
+// docstring de get_funil no backend). Preenchimento em --color-primary
+// pra etapas de progresso, --color-success só pra "ganho" (judgment
+// call já existente, verde = sucesso) e --color-danger pra "perdido"
+// (mesmo vermelho já usado na seção "Motivos de perda" logo abaixo,
+// consistência entre as duas seções da mesma página) -- pedido
+// explícito: "perdido" precisa ficar visualmente distinto de navy/verde
+// pra ficar claro que é uma SAÍDA do funil, não mais uma etapa de
+// progresso, mesmo aparecendo na mesma lista de 9.
+
+function _classeBarraFunil(status: string): string {
+  if (status === "ganho") return "dashboard-funil-barra-fill-ganho";
+  if (status === "perdido") return "dashboard-funil-barra-fill-perdido";
+  return "";
+}
 
 function SecaoFunil({ funil }: { funil: FunilEtapa[] }) {
   return (
@@ -276,7 +285,7 @@ function SecaoFunil({ funil }: { funil: FunilEtapa[] }) {
               <span className="dashboard-funil-label">{etapa.label}</span>
               <div className="dashboard-funil-barra-track">
                 <div
-                  className={`dashboard-funil-barra-fill ${etapa.status === "ganho" ? "dashboard-funil-barra-fill-ganho" : ""}`}
+                  className={`dashboard-funil-barra-fill ${_classeBarraFunil(etapa.status)}`}
                   style={{ width: `${etapa.percentual}%` }}
                 />
               </div>
@@ -288,7 +297,9 @@ function SecaoFunil({ funil }: { funil: FunilEtapa[] }) {
         </div>
         <p className="dashboard-funil-nota">
           Esta é a distribuição atual dos leads por etapa, não uma taxa de conversão histórica -- o sistema ainda não
-          guarda um histórico de quando cada lead mudou de etapa, só o status de agora.
+          guarda um histórico de quando cada lead mudou de etapa, só o status de agora. "Perdido" entra no total
+          (denominador do percentual de cada barra) pra bater com a contagem real de leads, mas continua sendo uma
+          saída do funil, não uma etapa de progresso -- por isso a cor diferente.
         </p>
       </div>
     </section>

@@ -283,14 +283,14 @@ def test_put_premissas_sem_token_retorna_401(client):
 # --- GET /api/dashboard/funil ---
 
 
-def test_funil_retorna_as_oito_etapas_mesmo_com_zero(client, db_session, token):
+def test_funil_retorna_as_nove_etapas_mesmo_com_zero(client, db_session, token):
     _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
 
     resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 200
     corpo = resp.json()
-    assert len(corpo) == 8
+    assert len(corpo) == 9
     assert [item["status"] for item in corpo] == [
         "novo_lead",
         "qualificacao",
@@ -300,15 +300,28 @@ def test_funil_retorna_as_oito_etapas_mesmo_com_zero(client, db_session, token):
         "proposta_enviada",
         "negociacao",
         "ganho",
+        "perdido",
     ]
-    # todas as outras 7 etapas ficam com quantidade 0, não são omitidas
+    # todas as outras 8 etapas ficam com quantidade 0, não são omitidas
     por_status = {item["status"]: item for item in corpo}
     assert por_status["novo_lead"]["quantidade"] == 1
     assert por_status["qualificacao"]["quantidade"] == 0
     assert por_status["qualificacao"]["label"] == "Qualificação"
 
 
-def test_funil_percentual_calculado_sobre_total_nao_perdido(client, db_session, token):
+def test_funil_inclui_perdido_por_ultimo_com_label(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="perdido", motivo_perda="Sem orçamento")
+
+    resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo[-1]["status"] == "perdido"
+    assert corpo[-1]["label"] == "Perdido"
+    assert corpo[-1]["quantidade"] == 1
+
+
+def test_funil_percentual_calculado_sobre_total_de_leads_incluindo_perdidos(client, db_session, token):
     _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
     _criar_lead(db_session, sufixo="22", kanban_status="novo_lead")
     _criar_lead(db_session, sufixo="33", kanban_status="ganho")
@@ -318,21 +331,38 @@ def test_funil_percentual_calculado_sobre_total_nao_perdido(client, db_session, 
 
     assert resp.status_code == 200
     por_status = {item["status"]: item for item in resp.json()}
-    # total não-perdido = 3 (44 é "perdido", fica de fora do denominador)
+    # total = 4 leads, "perdido" agora ENTRA no denominador
     assert por_status["novo_lead"]["quantidade"] == 2
-    assert por_status["novo_lead"]["percentual"] == pytest.approx(66.7)
+    assert por_status["novo_lead"]["percentual"] == pytest.approx(50.0)
     assert por_status["ganho"]["quantidade"] == 1
-    assert por_status["ganho"]["percentual"] == pytest.approx(33.3)
+    assert por_status["ganho"]["percentual"] == pytest.approx(25.0)
+    assert por_status["perdido"]["quantidade"] == 1
+    assert por_status["perdido"]["percentual"] == pytest.approx(25.0)
 
 
-def test_funil_nunca_lista_perdido(client, db_session, token):
-    _criar_lead(db_session, sufixo="11", kanban_status="perdido", motivo_perda="Sem orçamento")
+def test_funil_soma_dos_percentuais_fecha_em_cem(client, db_session, token):
+    """Com "perdido" no denominador, a soma das 9 barras precisa fechar
+    em ~100% (tolerância só pelo arredondamento de 1 casa decimal por
+    etapa) -- o motivo inteiro da mudança desta sessão."""
+    _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="22", kanban_status="qualificacao")
+    _criar_lead(db_session, sufixo="33", kanban_status="contatado")
+    _criar_lead(db_session, sufixo="44", kanban_status="ganho")
+    _criar_lead(db_session, sufixo="55", kanban_status="ganho")
+    _criar_lead(db_session, sufixo="66", kanban_status="perdido", motivo_perda="Sem orçamento")
+    _criar_lead(db_session, sufixo="77", kanban_status="perdido", motivo_perda="Preço alto")
 
     resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 200
-    status_presentes = {item["status"] for item in resp.json()}
-    assert "perdido" not in status_presentes
+    corpo = resp.json()
+    soma_percentuais = sum(item["percentual"] for item in corpo)
+    assert soma_percentuais == pytest.approx(100.0, abs=0.5)
+
+    # e o total de leads contados bate com a contagem real no banco
+    soma_quantidades = sum(item["quantidade"] for item in corpo)
+    total_no_banco = db_session.query(Lead).count()
+    assert soma_quantidades == total_no_banco == 7
 
 
 def test_funil_sem_nenhum_lead_todas_as_etapas_zeradas_sem_quebrar(client, token):
@@ -340,7 +370,7 @@ def test_funil_sem_nenhum_lead_todas_as_etapas_zeradas_sem_quebrar(client, token
 
     assert resp.status_code == 200
     corpo = resp.json()
-    assert len(corpo) == 8
+    assert len(corpo) == 9
     assert all(item["quantidade"] == 0 and item["percentual"] == 0.0 for item in corpo)
 
 

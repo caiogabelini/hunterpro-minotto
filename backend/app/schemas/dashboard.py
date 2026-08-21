@@ -39,6 +39,12 @@ class FunilEtapa(BaseModel):
     pela etapa X avançaram pra Y" sem reconstruir esse histórico. Ver
     `app/api/routes/dashboard.py::get_funil` e CLAUDE.md "Dashboard
     (Fase 2)" pra essa limitação por extenso.
+
+    9 etapas no total desde 21/08/2026, "perdido" incluído como última
+    entrada -- `percentual` é sobre o total de leads (todos, perdidos
+    inclusive), não mais só os "não perdidos" (mudou na mesma sessão,
+    pro total bater com `DashboardSummary.taxa_conversao` e com a
+    contagem real do Kanban).
     """
 
     status: str

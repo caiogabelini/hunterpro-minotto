@@ -746,7 +746,33 @@ interno do Docker.
   limpos; sem validação visual real, mesma ressalva de sempre —
   particularmente a lógica de rascunho separado, fácil de acertar no
   código e errar na prática.
-- ✅ 297 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Funil de conversão passa a incluir "perdido"** (21/08/2026,
+  mesmo dia do item acima, sessão seguinte) — ajuste em `GET
+  /api/dashboard/funil` a pedido do cliente: "perdido" virou a 9ª etapa
+  da lista (antes eram só 8, "perdido" ficava de fora por completo) e o
+  `percentual` de TODAS as etapas passou a ser calculado sobre o total
+  de leads incluindo perdidos, não mais só sobre os "não perdidos". Duas
+  consequências diretas: a soma dos 9 percentuais agora fecha em ~100%
+  (antes fechava ~100% de um subconjunto, o que ficava enganoso ao lado
+  do resto do dashboard), e o total agora bate exatamente com a
+  contagem real de leads no Kanban e com o denominador que
+  `taxa_conversao` (no `summary`) já usava — os dois endpoints
+  concordam sobre o que é "o total" agora, antes não. **A limitação de
+  fotografia-não-taxa-de-conversão-histórica continua valendo
+  integralmente** — só o que entra no total mudou, não a limitação em
+  si (ver item 17 em "O que falta", atualizado com uma nota apontando
+  pra este ajuste). Frontend: a barra de "Perdido" ganhou cor própria
+  (`--color-danger`, vermelho — mesmo tom já usado na seção "Motivos de
+  perda" logo abaixo, por consistência) pra ficar visualmente distinta
+  de "Ganho" (verde) e das etapas de progresso (navy), deixando claro
+  que é uma saída do funil, não mais uma etapa. Teste do funil
+  reescrito: 9 etapas (não mais 8), "perdido" por último com o label
+  certo, percentual recalculado com "perdido" no denominador, soma dos
+  percentuais fecha em ~100% (com tolerância só pro arredondamento por
+  etapa), e a contagem total bate com uma query direta no banco. `npm
+  run build`/`npm run lint`/`npm run test` e `pytest` limpos; sem
+  validação visual real, mesma ressalva de sempre.
+- ✅ 298 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -883,7 +909,15 @@ Em ordem de prioridade combinada com o cliente:
       Documentado no código (`get_funil`), na tela (nota abaixo do
       funil) e aqui — não adicionar uma métrica de "taxa de conversão
       entre etapas" numa sessão futura sem primeiro construir esse
-      histórico.
+      histórico. Esta limitação continua valendo integralmente mesmo
+      depois do ajuste do item 19 abaixo (que só mudou o que entra no
+      total, não a limitação em si).
+      **⚠️ Descrição original desatualizada em um ponto** — quando
+      escrito, o funil excluía "perdido" tanto da lista quanto do
+      denominador do percentual; isso mudou no item 19 abaixo (21/08/2026,
+      mesmo dia, sessão seguinte) — "perdido" agora é a 9ª etapa da
+      lista e entra no denominador. O resto desta descrição (fotografia,
+      não taxa de conversão real) continua exato.
     - **Motivos de perda agrupados por texto exato, sem normalização**
       — "Preço alto" e "Achou caro" contam como dois motivos distintos
       hoje, de propósito (pedido explícito: "agrupamento simples, sem
@@ -908,6 +942,11 @@ Em ordem de prioridade combinada com o cliente:
       editar e fechar sem salvar não deve mudar nada) é o tipo de coisa
       fácil de acertar no código e errar na prática — primeira coisa a
       conferir na tela de verdade.
+19. ~~Funil de conversão passa a incluir "perdido"~~ ✅ feito
+    (21/08/2026, mesma data do item 17, sessão seguinte) — ver bullet
+    dedicado abaixo. Nenhuma pendência nova deixada por este ajuste —
+    a limitação de fotografia-não-taxa-de-conversão do item 17 continua
+    valendo exatamente como estava.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

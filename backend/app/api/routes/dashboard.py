@@ -29,12 +29,12 @@ _STATUS_PGFN_NAO_ABORDADO = ("novo_lead", "qualificacao")
 
 # Ordem fixa do funil -- mesma ordem de funil já usada em
 # app/models/lead.py::KanbanStatus e frontend/src/kanbanStatuses.ts,
-# SEM "perdido" (funil é sobre progressão; perda tem sua própria seção,
-# ver get_motivos_perda). Rótulos em português espelham
-# KANBAN_COLUMNS no frontend -- se uma etapa nova for adicionada num dos
-# dois lugares, adicionar aqui também (nada sincroniza isso
-# automaticamente, mesma observação já feita pro par
-# KanbanStatus/KANBAN_COLUMNS).
+# **incluindo "perdido" como 9ª e última entrada** (mudou nesta sessão --
+# antes era excluído; ver o docstring de `get_funil` pro racional do
+# percentual). Rótulos em português espelham KANBAN_COLUMNS no
+# frontend -- se uma etapa nova for adicionada num dos dois lugares,
+# adicionar aqui também (nada sincroniza isso automaticamente, mesma
+# observação já feita pro par KanbanStatus/KANBAN_COLUMNS).
 _ETAPAS_FUNIL = [
     ("novo_lead", "Novo Lead"),
     ("qualificacao", "Qualificação"),
@@ -44,6 +44,7 @@ _ETAPAS_FUNIL = [
     ("proposta_enviada", "Proposta Enviada"),
     ("negociacao", "Negociação"),
     ("ganho", "Ganho"),
+    ("perdido", "Perdido"),
 ]
 
 _LIMITE_MOTIVOS_PERDA = 10
@@ -217,8 +218,9 @@ def get_funil(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Funil de conversão -- as 8 etapas de `_ETAPAS_FUNIL` (todo
-    `KanbanStatus` exceto "perdido"), sempre todas as 8, mesmo com
+    Funil de conversão -- as 9 etapas de `_ETAPAS_FUNIL` (todo
+    `KanbanStatus`, "perdido" incluído como última entrada desde
+    21/08/2026 -- ver histórico abaixo), sempre todas as 9, mesmo com
     `quantidade=0` (diferente de `get_acoes_recomendadas`, que omite
     zero -- aqui o zero É informação: "essa etapa do funil está vazia
     agora" é um dado válido de se mostrar, não ruído).
@@ -232,23 +234,34 @@ def get_funil(
     "de todo lead que passou pela etapa X, quantos avançaram pra Y" --
     isso exigiria reconstruir a sequência temporal de mudanças de
     status por lead, dado que não existe. `percentual` aqui é só
-    "quantidade nesta etapa ÷ total de leads não-perdidos agora × 100"
-    -- uma proporção do momento, não uma taxa de avanço. Não adicione
-    nenhum campo/cálculo que implique causalidade ou progressão
-    histórica (ex.: "taxa de conversão de X pra Y") sem antes construir
-    a tabela de histórico que isso exigiria.
+    "quantidade nesta etapa ÷ total de leads (todos, incluindo
+    perdidos) × 100" -- uma proporção do momento, não uma taxa de
+    avanço. Não adicione nenhum campo/cálculo que implique causalidade
+    ou progressão histórica (ex.: "taxa de conversão de X pra Y") sem
+    antes construir a tabela de histórico que isso exigiria.
+
+    ⚠️ "perdido" foi excluído do funil e do denominador do percentual
+    até 21/08/2026 (a ideia original era "funil é sobre progressão,
+    perda tem sua própria seção") -- mudou por pedido explícito, pelos
+    seguintes motivos, que valem se alguém cogitar reverter: (1) com
+    "perdido" fora do denominador, a soma dos percentuais das 8 etapas
+    somava ~100% de um universo que NÃO era "todos os leads", o que é
+    enganoso ao lado de outros números do dashboard; (2) o total agora
+    bate exatamente com a contagem real de leads no Kanban e com o
+    denominador que `get_summary` já usa pra `taxa_conversao` (também
+    `COUNT(*)` sobre TODOS os leads, "perdido" incluído) -- os dois
+    endpoints agora concordam sobre o que é "o total". "perdido" ainda
+    é visualmente distinto no frontend (cor própria, não navy nem
+    verde) precisamente pra deixar claro que é uma saída do funil, não
+    mais uma etapa de progresso, mesmo estando na mesma lista.
     """
     contagem_por_status = dict(
-        db.execute(
-            select(Lead.kanban_status, func.count())
-            .where(Lead.kanban_status != _STATUS_PERDIDO)
-            .group_by(Lead.kanban_status)
-        ).all()
+        db.execute(select(Lead.kanban_status, func.count()).group_by(Lead.kanban_status)).all()
     )
-    total_nao_perdidos = sum(contagem_por_status.values())
+    total_leads = sum(contagem_por_status.values())
 
     def _percentual(quantidade: int) -> float:
-        return round(quantidade / total_nao_perdidos * 100, 1) if total_nao_perdidos > 0 else 0.0
+        return round(quantidade / total_leads * 100, 1) if total_leads > 0 else 0.0
 
     return [
         FunilEtapa(

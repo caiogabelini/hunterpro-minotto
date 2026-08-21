@@ -2251,9 +2251,14 @@ require adding that history table first, which this session
 deliberately did not do (out of scope, not forgotten). The docstring on
 `get_funil` carries the same warning verbatim, specifically so a future
 session skimming the code (not this doc) still hits it before adding a
-"conversion rate between stages" field. `percentual` is always
-`quantidade ÷ total-of-leads-NOT-"perdido" × 100` — a proportion of the
-current pipeline, nothing more.
+"conversion rate between stages" field.
+
+⚠️ **The paragraph below and the `GET /funil` bullet describe this
+endpoint's ORIGINAL Fase 2 shape (8 stages, "perdido" excluded
+entirely) — since amended, see "Funil now includes 'perdido'" further
+below for the current behavior (9 stages, "perdido" included, denominator
+changed).** Left as-is here as a historical record of the original
+reasoning, not current behavior — don't implement against this bullet.
 
 - `GET /funil` — the 8 non-`"perdido"` `KanbanStatus` values, **always
   all 8, including ones with `quantidade: 0`** (deliberately the
@@ -2471,6 +2476,82 @@ logic that's easy to get right in code review but wrong in practice
 intended). `npm run build`/`npm run lint`/`npm run test` all clean, 18
 frontend tests unchanged (no new pure-function logic was added — the
 revenue formula itself didn't change, just where it's computed).
+
+### Funil now includes "perdido" (`get_funil`, follow-up session, 2026-08-21)
+
+Amends Fase 2's funnel endpoint on explicit client request. **9 stages
+now, not 8** — `"perdido"` was added to `_ETAPAS_FUNIL` as the final
+entry (label `"Perdido"`), and the SQL no longer filters it out of the
+`GROUP BY kanban_status` query. **The snapshot-not-cohort limitation
+from Fase 2 is unchanged and still applies in full** — this session
+only changed what's *in* the snapshot and what the percentages are
+computed against, not the fundamental "no transition history exists"
+constraint. `get_funil`'s docstring was updated in place (not
+superseded/replaced) to describe the current 9-stage/`"perdido"`-included
+behavior, plus a second `⚠️` paragraph explaining specifically why
+`"perdido"` moved from excluded to included, for anyone who finds the
+old reasoning in git blame and wonders why it changed.
+
+**The denominator change is the part most likely to surprise someone
+touching this code later, so it's worth being explicit here too:**
+`percentual` used to be `quantidade ÷ (total leads where kanban_status
+!= "perdido") × 100`. It's now `quantidade ÷ (total leads, ALL of them,
+"perdido" included) × 100`. Two concrete consequences: (1) the sum of
+all 9 `percentual` values across a `GET /funil` response now closes to
+~100% (previous behavior: the 8 non-"perdido" stages closed to ~100% of
+a subset, which reads as misleading next to a dashboard that otherwise
+talks about "all leads"); (2) `sum(quantidade for all 9 stages)` now
+equals `SELECT COUNT(*) FROM leads` exactly, and also equals the
+denominator `get_summary` already uses for `taxa_conversao` (`total_leads`
+in that function, `COUNT(*)` with no status filter) — the two endpoints
+now agree on what "the total" means, where before they quietly didn't
+(`get_funil` used a "not perdido" total, `get_summary` used an "all
+leads" total, and nothing surfaced that mismatch anywhere).
+
+Implementation: `contagem_por_status` is now a plain unfiltered
+`GROUP BY` (the `.where(Lead.kanban_status != _STATUS_PERDIDO)` clause
+was deleted, not conditionally applied), and the local variable holding
+the denominator was renamed `total_nao_perdidos` → `total_leads` to
+match what it now actually contains — renaming it was deliberate, not
+just AI tidiness: a future reader grepping for `total_leads` (a name
+already used the same way in `get_summary`) should find this function
+too, and a stale `total_nao_perdidos` name would actively mislead
+someone about what's in the denominator now.
+
+Tests (`tests/test_dashboard.py`, funnel block rewritten, net +1 test —
+5 before, 6 after, 298 backend tests total): 9 stages returned (not 8);
+`"perdido"` present as the **last** entry with `label == "Perdido"`
+(previous test asserted the opposite — that it never appeared — deleted,
+not left alongside the new one, since the two are mutually
+contradictory); percentages recomputed with `"perdido"` in the
+denominator (a 4-lead fixture: 2 `novo_lead` / 1 `ganho` / 1 `perdido`
+→ each of those three now reads 50%/25%/25%, not the old 66.7%/33.3%/
+excluded); a dedicated sum-closes-to-100 test (7-lead fixture spread
+across 4 statuses including 2 `"perdido"`, asserts
+`sum(percentual) == pytest.approx(100.0, abs=0.5)` — the `0.5` tolerance
+covers legitimate per-stage rounding to 1 decimal each, not a loose
+assertion) that also cross-checks `sum(quantidade)` against a direct
+`db_session.query(Lead).count()`, i.e. the exact "total bate com a
+contagem real" requirement, not just an internal-consistency check.
+
+**Frontend**: `SecaoFunil` (`DashboardPage.tsx`) needed no data-shape
+changes — it already mapped over whatever `FunilEtapa[]` the API
+returned, so a 9th item just renders as a 9th bar automatically. The
+one required change: `"perdido"`'s bar needed a color distinct from
+both `--color-primary` (the default fill) and `--color-success`
+(`"ganho"`'s existing special case) — a `_classeBarraFunil(status)`
+helper replaces the old inline ternary (which only had one special case
+to check, `"ganho"`; a second `? :` branch would have been unreadable)
+and returns `dashboard-funil-barra-fill-perdido` for `"perdido"`, which
+maps to **`--color-danger`** (red) in `DashboardPage.css` — the same
+red already used one section below for "Motivos de perda," chosen
+specifically for that consistency (both sections on the same page are
+now talking about the same concept, loss, in the same color) rather
+than introducing a third gray/red variant. The on-page honesty note
+(`.dashboard-funil-nota`) was extended with a sentence explaining that
+`"perdido"` is now in the total but still isn't a progress stage — the
+same "the caveat needs to live on the screen, not just in code
+comments" principle already established for this element in Fase 2.
 
 ### Migrations (`backend/alembic/`)
 

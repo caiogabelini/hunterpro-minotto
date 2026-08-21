@@ -272,6 +272,16 @@
   background: var(--color-success);
 }
 
+/* Etapa "Perdido" -- pedido explícito: precisa ficar visualmente
+   distinta de navy/verde, pra deixar claro que é uma SAÍDA do funil,
+   não uma etapa de progresso, mesmo estando na mesma lista de 9 barras.
+   Mesmo --color-danger já usado na seção "Motivos de perda" logo
+   abaixo -- consistência entre as duas seções desta página em vez de
+   introduzir um terceiro tom de vermelho/cinza. */
+.dashboard-funil-barra-fill-perdido {
+  background: var(--color-danger);
+}
+
 .dashboard-funil-numeros {
   font-size: 12px;
   color: var(--text-secondary);
