@@ -116,6 +116,26 @@ export interface DashboardPremissas {
   ticket_medio: number;
 }
 
+/** Mesmo shape de FunilEtapa em app/schemas/dashboard.py.
+ * ⚠️ `percentual` é uma FOTOGRAFIA da distribuição atual dos leads por
+ * etapa, não uma taxa de conversão real de coorte -- este projeto não
+ * tem histórico de transição de status, só o `kanban_status` atual de
+ * cada lead. Ver a mesma ressalva em DashboardPage.tsx (nota exibida
+ * abaixo do funil) e no docstring de `get_funil` no backend. */
+export interface FunilEtapa {
+  status: string;
+  label: string;
+  quantidade: number;
+  percentual: number;
+}
+
+/** Mesmo shape de MotivoPerda em app/schemas/dashboard.py -- agrupado
+ * por texto exato de `motivo_perda`, sem normalização semântica. */
+export interface MotivoPerda {
+  motivo: string;
+  quantidade: number;
+}
+
 /** Lançada quando o backend devolve 401 -- o token guardado em memória
  * (ver AuthContext) expirou ou é inválido. Quem chama decide o que fazer
  * (tipicamente: deslogar e redirecionar pro /login). */
@@ -229,6 +249,20 @@ export async function salvarPremissas(token: string, premissas: DashboardPremiss
     headers: { "Content-Type": "application/json", ...authHeaders(token) },
     body: JSON.stringify(premissas),
   });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchFunil(token: string): Promise<FunilEtapa[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/funil`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchMotivosPerda(token: string): Promise<MotivoPerda[]> {
+  const res = await fetch(`${API_URL}/api/dashboard/motivos-perda`, { headers: authHeaders(token) });
   if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   return res.json();

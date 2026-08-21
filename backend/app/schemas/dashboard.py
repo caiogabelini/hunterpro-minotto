@@ -27,3 +27,26 @@ class DashboardPremissas(BaseModel):
     leads_qualificados: int
     taxa_fechamento: float
     ticket_medio: float
+
+
+class FunilEtapa(BaseModel):
+    """
+    Uma etapa do funil -- FOTOGRAFIA da distribuição atual dos leads por
+    coluna do Kanban (quantos estão em cada uma agora), não uma taxa de
+    conversão real de coorte. Não existe uma tabela de histórico de
+    transição de status neste projeto -- só o `kanban_status` atual de
+    cada `Lead` -- então não há como saber "quantos leads que passaram
+    pela etapa X avançaram pra Y" sem reconstruir esse histórico. Ver
+    `app/api/routes/dashboard.py::get_funil` e CLAUDE.md "Dashboard
+    (Fase 2)" pra essa limitação por extenso.
+    """
+
+    status: str
+    label: str
+    quantidade: int
+    percentual: float
+
+
+class MotivoPerda(BaseModel):
+    motivo: str
+    quantidade: int

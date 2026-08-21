@@ -1,6 +1,7 @@
 """
-Testes de GET /api/dashboard/summary, GET /api/dashboard/acoes-recomendadas
-e GET/PUT /api/dashboard/premissas.
+Testes de GET /api/dashboard/summary, GET /api/dashboard/acoes-recomendadas,
+GET/PUT /api/dashboard/premissas, GET /api/dashboard/funil e
+GET /api/dashboard/motivos-perda.
 
 Mesmo padrão de fixtures de test_leads_routes.py: SQLite em memória
 (StaticPool + check_same_thread=False), injetado via
@@ -276,4 +277,124 @@ def test_put_premissas_sem_token_retorna_401(client):
         "/api/dashboard/premissas",
         json={"leads_qualificados": 10, "taxa_fechamento": 20.0, "ticket_medio": 1000.0},
     )
+    assert resp.status_code == 401
+
+
+# --- GET /api/dashboard/funil ---
+
+
+def test_funil_retorna_as_oito_etapas_mesmo_com_zero(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
+
+    resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert len(corpo) == 8
+    assert [item["status"] for item in corpo] == [
+        "novo_lead",
+        "qualificacao",
+        "contatado",
+        "respondeu",
+        "reuniao",
+        "proposta_enviada",
+        "negociacao",
+        "ganho",
+    ]
+    # todas as outras 7 etapas ficam com quantidade 0, não são omitidas
+    por_status = {item["status"]: item for item in corpo}
+    assert por_status["novo_lead"]["quantidade"] == 1
+    assert por_status["qualificacao"]["quantidade"] == 0
+    assert por_status["qualificacao"]["label"] == "Qualificação"
+
+
+def test_funil_percentual_calculado_sobre_total_nao_perdido(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="22", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="33", kanban_status="ganho")
+    _criar_lead(db_session, sufixo="44", kanban_status="perdido", motivo_perda="Preço alto")
+
+    resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    por_status = {item["status"]: item for item in resp.json()}
+    # total não-perdido = 3 (44 é "perdido", fica de fora do denominador)
+    assert por_status["novo_lead"]["quantidade"] == 2
+    assert por_status["novo_lead"]["percentual"] == pytest.approx(66.7)
+    assert por_status["ganho"]["quantidade"] == 1
+    assert por_status["ganho"]["percentual"] == pytest.approx(33.3)
+
+
+def test_funil_nunca_lista_perdido(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="perdido", motivo_perda="Sem orçamento")
+
+    resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    status_presentes = {item["status"] for item in resp.json()}
+    assert "perdido" not in status_presentes
+
+
+def test_funil_sem_nenhum_lead_todas_as_etapas_zeradas_sem_quebrar(client, token):
+    resp = client.get("/api/dashboard/funil", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert len(corpo) == 8
+    assert all(item["quantidade"] == 0 and item["percentual"] == 0.0 for item in corpo)
+
+
+def test_funil_sem_token_retorna_401(client):
+    resp = client.get("/api/dashboard/funil")
+    assert resp.status_code == 401
+
+
+# --- GET /api/dashboard/motivos-perda ---
+
+
+def test_motivos_perda_agrupa_por_texto_exato_ordenado_por_quantidade(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="perdido", motivo_perda="Preço alto")
+    _criar_lead(db_session, sufixo="22", kanban_status="perdido", motivo_perda="Preço alto")
+    _criar_lead(db_session, sufixo="33", kanban_status="perdido", motivo_perda="Preço alto")
+    _criar_lead(db_session, sufixo="44", kanban_status="perdido", motivo_perda="Fechou com concorrente")
+    _criar_lead(db_session, sufixo="55", kanban_status="perdido", motivo_perda="Achou caro")  # texto diferente, não agrupa com "Preço alto"
+
+    resp = client.get("/api/dashboard/motivos-perda", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo[0] == {"motivo": "Preço alto", "quantidade": 3}
+    assert {"motivo": "Fechou com concorrente", "quantidade": 1} in corpo
+    assert {"motivo": "Achou caro", "quantidade": 1} in corpo
+    assert len(corpo) == 3
+
+
+def test_motivos_perda_ignora_leads_nao_perdidos_e_sem_motivo(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", kanban_status="novo_lead")  # nem perdido
+    _criar_lead(db_session, sufixo="22", kanban_status="perdido", motivo_perda=None)  # perdido sem motivo (não deveria existir via API, mas defensivo)
+
+    resp = client.get("/api/dashboard/motivos-perda", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_motivos_perda_lista_vazia_sem_nenhum_lead_perdido(client, token):
+    resp = client.get("/api/dashboard/motivos-perda", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_motivos_perda_limita_a_dez_resultados(client, db_session, token):
+    for i in range(12):
+        _criar_lead(db_session, sufixo=f"{i:02d}", kanban_status="perdido", motivo_perda=f"Motivo {i}")
+
+    resp = client.get("/api/dashboard/motivos-perda", headers={"Authorization": f"Bearer {token}"})
+
+    assert resp.status_code == 200
+    assert len(resp.json()) == 10
+
+
+def test_motivos_perda_sem_token_retorna_401(client):
+    resp = client.get("/api/dashboard/motivos-perda")
     assert resp.status_code == 401

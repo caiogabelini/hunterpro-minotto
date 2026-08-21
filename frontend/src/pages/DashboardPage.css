@@ -175,6 +175,151 @@
   color: var(--color-alert);
 }
 
+/* --- Funil de conversão --- */
+
+.dashboard-funil-lista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dashboard-funil-etapa {
+  display: grid;
+  grid-template-columns: 140px 1fr 84px;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.dashboard-funil-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dashboard-funil-barra-track {
+  height: 20px;
+  border-radius: 6px;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+.dashboard-funil-barra-fill {
+  height: 100%;
+  border-radius: 6px;
+  background: var(--color-primary);
+  transition: width var(--transition-smooth);
+}
+
+/* Etapa "Ganho" destacada em verde -- desfecho positivo do funil, mesma
+   linguagem semântica de cor (verde = sucesso) já usada em todo o
+   resto do app; não pedido explicitamente, mas consistente com o
+   vocabulário estabelecido. */
+.dashboard-funil-barra-fill-ganho {
+  background: var(--color-success);
+}
+
+.dashboard-funil-numeros {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Nota de honestidade metodológica (pedido explícito) -- discreta de
+   propósito: texto pequeno, cor --text-muted, separada do funil por uma
+   linha fina, pra não competir visualmente com o funil em si mas ainda
+   ficar visível sem precisar procurar. */
+.dashboard-funil-nota {
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* --- Motivos de perda --- */
+
+.dashboard-perda-vazio {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-success);
+}
+
+.dashboard-perda-vazio-texto {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dashboard-perda-lista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.dashboard-perda-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.dashboard-perda-posicao {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.dashboard-perda-corpo {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-perda-topo {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 4px;
+}
+
+.dashboard-perda-motivo {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.dashboard-perda-quantidade {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-danger);
+  white-space: nowrap;
+}
+
+.dashboard-perda-barra-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+.dashboard-perda-barra-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-danger);
+  transition: width var(--transition-smooth);
+}
+
 /* --- Ações recomendadas --- */
 
 .dashboard-acoes-lista {

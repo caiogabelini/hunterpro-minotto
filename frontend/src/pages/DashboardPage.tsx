@@ -2,14 +2,17 @@ import {
   ArrowRight,
   Calculator,
   FileSearch,
+  Funnel,
   Gauge,
   Handshake,
   Landmark,
   ListChecks,
   Loader2,
   Package,
+  PartyPopper,
   Percent,
   Target,
+  ThumbsDown,
   UserCheck,
   type LucideIcon,
 } from "lucide-react";
@@ -18,12 +21,16 @@ import { Link } from "react-router-dom";
 import {
   fetchAcoesRecomendadas,
   fetchDashboardSummary,
+  fetchFunil,
+  fetchMotivosPerda,
   fetchPremissas,
   salvarPremissas,
   UnauthorizedError,
   type AcaoRecomendada,
   type DashboardPremissas,
   type DashboardSummary,
+  type FunilEtapa,
+  type MotivoPerda,
 } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { formatCurrencyBRL } from "../format";
@@ -57,6 +64,8 @@ export function DashboardPage() {
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [acoes, setAcoes] = useState<AcaoRecomendada[]>([]);
+  const [funil, setFunil] = useState<FunilEtapa[]>([]);
+  const [motivosPerda, setMotivosPerda] = useState<MotivoPerda[]>([]);
   const [form, setForm] = useState<PremissasForm>(PREMISSAS_PADRAO);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
@@ -67,11 +76,19 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (!token) return;
-    Promise.all([fetchDashboardSummary(token), fetchAcoesRecomendadas(token), fetchPremissas(token)])
-      .then(([summaryData, acoesData, premissasData]) => {
+    Promise.all([
+      fetchDashboardSummary(token),
+      fetchAcoesRecomendadas(token),
+      fetchPremissas(token),
+      fetchFunil(token),
+      fetchMotivosPerda(token),
+    ])
+      .then(([summaryData, acoesData, premissasData, funilData, motivosPerdaData]) => {
         setSummary(summaryData);
         setAcoes(acoesData);
         setForm(premissasData);
+        setFunil(funilData);
+        setMotivosPerda(motivosPerdaData);
       })
       .catch((e) => {
         if (e instanceof UnauthorizedError) {
@@ -120,6 +137,8 @@ export function DashboardPage() {
         <>
           <SecaoResumoExecutivo summary={summary} />
           <SecaoConsumoPlano summary={summary} />
+          <SecaoFunil funil={funil} />
+          <SecaoMotivosPerda motivos={motivosPerda} />
           <SecaoAcoesRecomendadas acoes={acoes} />
           <SecaoSimulador
             form={form}
@@ -207,6 +226,92 @@ function SecaoConsumoPlano({ summary }: { summary: DashboardSummary }) {
           </p>
         )}
       </div>
+    </section>
+  );
+}
+
+// --- Funil de Conversão ------------------------------------------------------
+// Barras horizontais, largura proporcional ao `percentual` de cada etapa
+// (0-100%, sobre o total de leads NÃO perdidos -- ver a mesma ressalva
+// abaixo do funil e o docstring de get_funil no backend). Preenchimento
+// em --color-primary pra todas as etapas, exceto "ganho", que usa
+// --color-success -- judgment call pra marcar visualmente a etapa de
+// desfecho positivo do funil, mesma lógica semântica (verde = sucesso)
+// já usada no resto do dashboard/dossiê, não pedido explicitamente mas
+// consistente com o vocabulário de cor já estabelecido.
+
+function SecaoFunil({ funil }: { funil: FunilEtapa[] }) {
+  return (
+    <section className="dashboard-section">
+      <SectionHeading icon={Funnel}>Funil de conversão</SectionHeading>
+      <div className="dashboard-card">
+        <div className="dashboard-funil-lista">
+          {funil.map((etapa) => (
+            <div key={etapa.status} className="dashboard-funil-etapa">
+              <span className="dashboard-funil-label">{etapa.label}</span>
+              <div className="dashboard-funil-barra-track">
+                <div
+                  className={`dashboard-funil-barra-fill ${etapa.status === "ganho" ? "dashboard-funil-barra-fill-ganho" : ""}`}
+                  style={{ width: `${etapa.percentual}%` }}
+                />
+              </div>
+              <span className="dashboard-funil-numeros">
+                {etapa.quantidade} · {etapa.percentual}%
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="dashboard-funil-nota">
+          Esta é a distribuição atual dos leads por etapa, não uma taxa de conversão histórica -- o sistema ainda não
+          guarda um histórico de quando cada lead mudou de etapa, só o status de agora.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+// --- Motivos de Perda ------------------------------------------------------
+// Mesmo padrão visual de barra horizontal do funil, mas em --color-danger
+// (perda = semântica de "negativo", mesma cor já usada em outros lugares
+// do app) e a largura é relativa ao motivo MAIS frequente da própria
+// lista (não a um total geral) -- não faz sentido comparar contra o
+// total de leads perdidos aqui, o que importa é o ranking relativo entre
+// os motivos.
+
+function SecaoMotivosPerda({ motivos }: { motivos: MotivoPerda[] }) {
+  const maiorQuantidade = Math.max(1, ...motivos.map((m) => m.quantidade));
+
+  return (
+    <section className="dashboard-section">
+      <SectionHeading icon={ThumbsDown}>Motivos de perda</SectionHeading>
+      {motivos.length === 0 ? (
+        <div className="dashboard-card dashboard-perda-vazio">
+          <PartyPopper size={20} />
+          <p className="dashboard-perda-vazio-texto">Nenhum lead perdido registrado ainda — ótimo sinal!</p>
+        </div>
+      ) : (
+        <div className="dashboard-card">
+          <div className="dashboard-perda-lista">
+            {motivos.map((item, indice) => (
+              <div key={item.motivo} className="dashboard-perda-item">
+                <span className="dashboard-perda-posicao">{indice + 1}</span>
+                <div className="dashboard-perda-corpo">
+                  <div className="dashboard-perda-topo">
+                    <span className="dashboard-perda-motivo">{item.motivo}</span>
+                    <span className="dashboard-perda-quantidade">{item.quantidade}</span>
+                  </div>
+                  <div className="dashboard-perda-barra-track">
+                    <div
+                      className="dashboard-perda-barra-fill"
+                      style={{ width: `${(item.quantidade / maiorQuantidade) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

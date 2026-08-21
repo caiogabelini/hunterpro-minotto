@@ -1,8 +1,10 @@
 """
-Dashboard (Fase 1) -- resumo executivo, consumo do plano, ações
-recomendadas e simulador de receita. Ver app/schemas/dashboard.py pros
-shapes de resposta e CLAUDE.md "Dashboard (Fase 1)" pro racional
-completo de cada métrica/regra.
+Dashboard (Fases 1 e 2) -- resumo executivo, consumo do plano, ações
+recomendadas, simulador de receita, funil de conversão e motivos de
+perda. Ver app/schemas/dashboard.py pros shapes de resposta e
+CLAUDE.md "Dashboard (Fase 1)"/"Dashboard (Fase 2)" pro racional
+completo de cada métrica/regra -- em especial a limitação do funil (ver
+docstring de `get_funil` abaixo antes de mexer nele).
 """
 from datetime import datetime
 
@@ -15,14 +17,36 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.lead import Lead
 from app.models.user import User
-from app.schemas.dashboard import AcaoRecomendada, DashboardPremissas, DashboardSummary
+from app.schemas.dashboard import AcaoRecomendada, DashboardPremissas, DashboardSummary, FunilEtapa, MotivoPerda
 
 router = APIRouter()
 
 _STATUS_GANHO = "ganho"
 _STATUS_NOVO_LEAD = "novo_lead"
+_STATUS_PERDIDO = "perdido"
 _STATUS_EM_NEGOCIACAO = ("proposta_enviada", "negociacao")
 _STATUS_PGFN_NAO_ABORDADO = ("novo_lead", "qualificacao")
+
+# Ordem fixa do funil -- mesma ordem de funil já usada em
+# app/models/lead.py::KanbanStatus e frontend/src/kanbanStatuses.ts,
+# SEM "perdido" (funil é sobre progressão; perda tem sua própria seção,
+# ver get_motivos_perda). Rótulos em português espelham
+# KANBAN_COLUMNS no frontend -- se uma etapa nova for adicionada num dos
+# dois lugares, adicionar aqui também (nada sincroniza isso
+# automaticamente, mesma observação já feita pro par
+# KanbanStatus/KANBAN_COLUMNS).
+_ETAPAS_FUNIL = [
+    ("novo_lead", "Novo Lead"),
+    ("qualificacao", "Qualificação"),
+    ("contatado", "Contatado"),
+    ("respondeu", "Respondeu"),
+    ("reuniao", "Reunião"),
+    ("proposta_enviada", "Proposta Enviada"),
+    ("negociacao", "Negociação"),
+    ("ganho", "Ganho"),
+]
+
+_LIMITE_MOTIVOS_PERDA = 10
 
 # Defaults do simulador de receita quando o usuário nunca salvou
 # premissas próprias (`User.dashboard_premissas is None`) -- taxa de
@@ -185,3 +209,80 @@ def put_premissas(
     db.commit()
     db.refresh(current_user)
     return DashboardPremissas(**current_user.dashboard_premissas)
+
+
+@router.get("/funil", response_model=list[FunilEtapa])
+def get_funil(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Funil de conversão -- as 8 etapas de `_ETAPAS_FUNIL` (todo
+    `KanbanStatus` exceto "perdido"), sempre todas as 8, mesmo com
+    `quantidade=0` (diferente de `get_acoes_recomendadas`, que omite
+    zero -- aqui o zero É informação: "essa etapa do funil está vazia
+    agora" é um dado válido de se mostrar, não ruído).
+
+    ⚠️ LIMITAÇÃO CONHECIDA, LEIA ANTES DE ALTERAR ESTE ENDPOINT: isto é
+    uma FOTOGRAFIA da distribuição atual dos leads por `kanban_status`,
+    NÃO uma taxa de conversão real de coorte entre etapas. `Lead` só
+    guarda o status ATUAL de cada lead -- não existe nenhuma tabela de
+    histórico de transição (tipo "em que data cada lead passou por cada
+    coluna") neste projeto. Sem esse histórico, não há como calcular
+    "de todo lead que passou pela etapa X, quantos avançaram pra Y" --
+    isso exigiria reconstruir a sequência temporal de mudanças de
+    status por lead, dado que não existe. `percentual` aqui é só
+    "quantidade nesta etapa ÷ total de leads não-perdidos agora × 100"
+    -- uma proporção do momento, não uma taxa de avanço. Não adicione
+    nenhum campo/cálculo que implique causalidade ou progressão
+    histórica (ex.: "taxa de conversão de X pra Y") sem antes construir
+    a tabela de histórico que isso exigiria.
+    """
+    contagem_por_status = dict(
+        db.execute(
+            select(Lead.kanban_status, func.count())
+            .where(Lead.kanban_status != _STATUS_PERDIDO)
+            .group_by(Lead.kanban_status)
+        ).all()
+    )
+    total_nao_perdidos = sum(contagem_por_status.values())
+
+    def _percentual(quantidade: int) -> float:
+        return round(quantidade / total_nao_perdidos * 100, 1) if total_nao_perdidos > 0 else 0.0
+
+    return [
+        FunilEtapa(
+            status=status,
+            label=label,
+            quantidade=contagem_por_status.get(status, 0),
+            percentual=_percentual(contagem_por_status.get(status, 0)),
+        )
+        for status, label in _ETAPAS_FUNIL
+    ]
+
+
+@router.get("/motivos-perda", response_model=list[MotivoPerda])
+def get_motivos_perda(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Ranking dos motivos de perda mais comuns -- leads com
+    `kanban_status="perdido"` e `motivo_perda` preenchido, agrupados
+    pelo texto EXATO (sem normalização/agrupamento semântico via IA --
+    "Preço alto" e "Achou caro" contam como dois motivos distintos hoje;
+    ver README "O que falta" se uma normalização mais esperta for
+    pedida numa sessão futura), ordenado por contagem decrescente,
+    limitado a `_LIMITE_MOTIVOS_PERDA` (10). Lista vazia (não erro)
+    quando não há nenhum lead perdido com motivo -- o frontend trata
+    esse caso com um estado vazio de tom positivo, não como falha.
+    """
+    linhas = db.execute(
+        select(Lead.motivo_perda, func.count())
+        .where(Lead.kanban_status == _STATUS_PERDIDO, Lead.motivo_perda.is_not(None), Lead.motivo_perda != "")
+        .group_by(Lead.motivo_perda)
+        .order_by(func.count().desc())
+        .limit(_LIMITE_MOTIVOS_PERDA)
+    ).all()
+
+    return [MotivoPerda(motivo=motivo, quantidade=quantidade) for motivo, quantidade in linhas]

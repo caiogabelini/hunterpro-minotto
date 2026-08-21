@@ -690,7 +690,37 @@ interno do Docker.
   de função pura + teste que `getScoreBreakdown`/`getInsights` tiveram.
   `npm run build`/`npm run lint`/`npm run test` e `pytest` limpos; sem
   validação visual real, mesma ressalva de sempre.
-- ✅ 287 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Dashboard (Fase 2)** (21/08/2026) — completa o dashboard com
+  funil de conversão e motivos de perda, mesma tela `/dashboard` da
+  Fase 1 (sem migration nova — as duas seções só agregam colunas que já
+  existiam). Backend: `GET /api/dashboard/funil` (as 8 etapas do
+  Kanban exceto "perdido", sempre todas as 8 mesmo com contagem zero —
+  zero é informação, não ruído — cada uma com `percentual` sobre o
+  total de leads não-perdidos; **⚠️ é uma fotografia da distribuição
+  atual, não uma taxa de conversão histórica entre etapas** — este
+  projeto não tem tabela de histórico de transição de status, só o
+  `kanban_status` atual de cada lead, então não dá pra calcular "de
+  quem passou por X, quantos avançaram pra Y" — ver limitação
+  documentada no código, na tela e no item 17 de "O que falta"),
+  `GET /api/dashboard/motivos-perda` (ranking dos motivos de perda
+  agrupados por texto EXATO — sem normalização por IA, de propósito —,
+  ordenado por contagem decrescente, top 10). Frontend: funil como
+  barras horizontais (etapa "Ganho" destacada em verde, judgment call
+  não pedido explicitamente mas consistente com o resto do vocabulário
+  de cor do app) com a mesma ressalva de honestidade metodológica
+  reproduzida na própria tela, não só no código; motivos de perda como
+  ranking numerado com barra relativa ao motivo mais frequente da
+  própria lista, estado vazio com tom positivo ("Nenhum lead perdido
+  registrado ainda — ótimo sinal!", ícone `PartyPopper` verde). 10
+  testes novos no backend (todas as 8 etapas presentes mesmo zeradas,
+  percentual calculado certo inclusive sem dividir por zero, "perdido"
+  nunca aparece no funil, agrupamento por texto exato não funde motivos
+  parecidos, lista vazia, limite de 10 respeitado). Nenhum teste novo
+  no frontend — mesmo raciocínio da Fase 1 (cálculo de largura de barra
+  é simples demais pra função pura + teste dedicados). `npm run
+  build`/`npm run lint`/`npm run test` e `pytest` limpos; sem validação
+  visual real, mesma ressalva de sempre.
+- ✅ 297 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -814,6 +844,30 @@ Em ordem de prioridade combinada com o cliente:
       construída neste sandbox sem navegador; particularmente relevante
       aqui pela barra de progresso e pelo card de CTA "em destaque" das
       ações recomendadas, nunca vistos renderizados de verdade.
+17. ~~Dashboard (Fase 2) — funil de conversão, motivos de perda~~ ✅
+    feito (21/08/2026) — ver bullet dedicado abaixo. Pendência deixada
+    de propósito:
+    - **⚠️ Limitação conhecida do funil, não um bug a corrigir sem
+      pensar**: `GET /api/dashboard/funil` mostra a distribuição ATUAL
+      de leads por etapa do Kanban (uma fotografia), não uma taxa de
+      conversão real entre etapas — este projeto não guarda histórico
+      de quando cada lead mudou de status, só o status de agora.
+      Calcular "de quem passou pela etapa X, quantos avançaram pra Y"
+      exigiria uma tabela de histórico de transição que não existe.
+      Documentado no código (`get_funil`), na tela (nota abaixo do
+      funil) e aqui — não adicionar uma métrica de "taxa de conversão
+      entre etapas" numa sessão futura sem primeiro construir esse
+      histórico.
+    - **Motivos de perda agrupados por texto exato, sem normalização**
+      — "Preço alto" e "Achou caro" contam como dois motivos distintos
+      hoje, de propósito (pedido explícito: "agrupamento simples, sem
+      IA/normalização"). Uma normalização semântica via IA (mesmo
+      padrão já usado em `gerar_insights_estrategicos`) é um upgrade
+      natural pra uma sessão futura, se o cliente achar o ranking
+      fragmentado demais na prática.
+    - **Validação visual real** — mesma ressalva de sempre; peculiar
+      aqui porque as duas seções são só barras horizontais posicionadas
+      via `style` inline (largura em `%`), nunca vistas renderizadas.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

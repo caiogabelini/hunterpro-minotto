@@ -2232,6 +2232,130 @@ authenticated screen):
   `npm run build`/`npm run lint`/`npm run test` all clean, 18 frontend
   tests (unchanged — see the "no new test file" note above).
 
+### Dashboard (Fase 2) — funil de conversão, motivos de perda (follow-up session, 2026-08-21)
+
+Adds the two remaining sections planned for the dashboard. No model
+changes, no migration — both endpoints are pure aggregate queries over
+columns that already existed (`Lead.kanban_status`, `Lead.motivo_perda`).
+
+**⚠️ The funnel is a snapshot, not a cohort conversion rate — read this
+before adding anything that implies otherwise.** `GET
+/api/dashboard/funil` (`app/api/routes/dashboard.py::get_funil`)
+reports "how many leads sit in each Kanban column right now," not "of
+the leads that entered stage X, how many advanced to stage Y." This
+project has no status-transition history table — `Lead` only stores
+the *current* `kanban_status`, never a log of past values or when they
+changed — so a real cohort/funnel-drop-off metric is **not
+computable** with the data that exists today; building one would
+require adding that history table first, which this session
+deliberately did not do (out of scope, not forgotten). The docstring on
+`get_funil` carries the same warning verbatim, specifically so a future
+session skimming the code (not this doc) still hits it before adding a
+"conversion rate between stages" field. `percentual` is always
+`quantidade ÷ total-of-leads-NOT-"perdido" × 100` — a proportion of the
+current pipeline, nothing more.
+
+- `GET /funil` — the 8 non-`"perdido"` `KanbanStatus` values, **always
+  all 8, including ones with `quantidade: 0`** (deliberately the
+  opposite of `get_acoes_recomendadas`'s "omit zero" rule from Fase 1 —
+  here a zero-count stage is itself meaningful information: "this stage
+  of the pipeline is currently empty," not noise to hide). One
+  `GROUP BY kanban_status` query (excluding `"perdido"` at the SQL
+  level) builds a `{status: count}` dict, then the fixed-order stage
+  list (`_ETAPAS_FUNIL`, mirrors `KanbanStatus`/`KANBAN_COLUMNS` order
+  minus `"perdido"` — same "nothing syncs this automatically between
+  the three places" caveat already noted for the other two) fills in
+  `0` for any status absent from that dict — no N+1, one query total.
+  `"perdido"` is excluded from **both** the numerator (it's not in the
+  returned list) and the denominator (`total_nao_perdidos` sums only
+  the grouped, already-`"perdido"`-excluded counts) — funnel is about
+  progression, loss gets its own section per the explicit request.
+- `GET /motivos-perda` — `Lead` rows with `kanban_status == "perdido"`
+  and a non-empty `motivo_perda`, grouped by the **exact** string (no
+  AI normalization, no fuzzy grouping — "Preço alto" and "Achou caro"
+  are two separate rows today, explicitly requested this way), ordered
+  by count descending, capped at 10 (`_LIMITE_MOTIVOS_PERDA`). Empty
+  list (not an error) when there's no lost lead with a reason yet — the
+  frontend's empty state treats that as good news, not a failure state.
+- Tests: `tests/test_dashboard.py` gained 10 cases — all 8 funnel
+  stages present even with several at zero, percentual computed
+  correctly (including the zero-total case not dividing by zero),
+  `"perdido"` never appears in the funnel response under any
+  circumstance, motivos-perda groups by exact text (a near-duplicate
+  human-written variant does **not** merge), ignores non-`"perdido"`
+  leads and `"perdido"` leads with no reason, empty-list case, and the
+  10-result cap. 297 backend tests total now (270 + 17 from Fase 1 + 10
+  from this session).
+
+**Frontend** (both sections added to the existing `DashboardPage.tsx`/
+`.css` from Fase 1, same file — no new page):
+
+- **Section order is a judgment call, not specified in the request.**
+  Fase 1 built Resumo Executivo → Consumo do Plano → Ações Recomendadas
+  → Simulador de Receita. This session inserted Funil de Conversão and
+  Motivos de Perda **between** "Consumo do Plano" and "Ações
+  Recomendadas" — reasoning: KPI numbers, then plan usage, then "what
+  does the pipeline actually look like" (funnel + where it leaks),
+  *then* "what should I do about it" (recommended actions), *then* a
+  forward-looking projection (revenue simulator) last. If this reads
+  wrong once seen for real, reordering `<SecaoFunil>`/
+  `<SecaoMotivosPerda>` in `DashboardPage()`'s JSX is a two-line move,
+  not a structural change.
+- **Funnel**: one horizontal bar per stage (`dashboard-funil-etapa`,
+  a 3-column grid — label / bar / "`quantidade · percentual%`" text),
+  width set inline via `style={{ width: \`${etapa.percentual}% \`}}`
+  (the one place in this project's CSS that sets a color-unrelated
+  inline style — same precedent as the Fase 1 plan-consumption bar and
+  the dossier's score-breakdown bars). Fill is `--color-primary` for
+  every stage **except `"ganho"`, which uses `--color-success`** — a
+  judgment call, not requested explicitly: marks the funnel's positive
+  terminal stage green, consistent with the green-means-success
+  vocabulary already established everywhere else (priority A, RQE high
+  confidence, breakdown "estruturado" layer, etc.), easy to revert to a
+  single flat color if it reads as inconsistent once seen. **The
+  honesty note is a literal, required element, not decoration** —
+  `.dashboard-funil-nota`, small `--text-muted` text below the bars,
+  restates in the UI itself (not just code comments) that this is a
+  current-distribution snapshot, not a historical conversion rate,
+  mirroring the backend docstring's warning so the caveat travels all
+  the way to whoever reads the screen, not just whoever reads the code.
+- **Motivos de perda**: ranked list, same horizontal-bar visual
+  language as the funnel but in `--color-danger` (loss ↔ the same
+  "negative" semantic red already used for PGFN-ajuizado, priority C,
+  etc.) — a numbered position badge (`dashboard-perda-posicao`, small
+  red circle) plus a bar whose width is relative to **the list's own
+  highest count** (`Math.max(1, ...quantidades)`), not to any total
+  leads figure — ranking the reasons against each other is the point,
+  not showing what fraction of anything they represent. Empty state
+  (`motivos.length === 0`): a `PartyPopper` icon in `--color-success`
+  green plus "Nenhum lead perdido registrado ainda — ótimo sinal!" in
+  full-weight `--text-primary` (not the usual small muted
+  `.dashboard-muted` treatment other empty states on this page use) —
+  deliberately reads as good news worth noticing, not a bland "no data"
+  placeholder, per the explicit "tom positivo" instruction.
+- **`api.ts`**: `FunilEtapa`/`MotivoPerda` interfaces + `fetchFunil`/
+  `fetchMotivosPerda`, same fetch-with-401-handling shape as every
+  other function in that file. Both added to the page's single
+  `Promise.all(...)` fetch alongside the 3 Fase 1 calls — one
+  `carregando`/`erro` pair for the whole page, unchanged from Fase 1
+  (no new loading granularity was needed or added).
+- Icons: `Funnel` (section heading), `ThumbsDown` (section heading),
+  `PartyPopper` (empty state) — all confirmed present in this project's
+  pinned `lucide-react` version before use, same due-diligence habit as
+  every icon choice in this codebase.
+- Audited for hardcoded colors the same way every CSS-touching session
+  since the retheme has been — the only literal hex remaining in
+  `DashboardPage.css` after this session is still just the one `#fff`
+  (white text on the solid navy button) already noted in the Fase 1
+  write-up above.
+- **Not tested in an actual browser** — same standing limitation as
+  every frontend session in this project. `npm run build`/`npm run
+  lint`/`npm run test` all clean, 18 frontend tests (unchanged — the
+  bar-width math here is the same class of "too simple to need its own
+  pure-function test file" as Fase 1's revenue calculation, not the
+  kind of subtle heuristic that earned `getScoreBreakdown`/`getInsights`
+  dedicated tests).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
