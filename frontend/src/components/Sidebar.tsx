@@ -8,37 +8,16 @@ const ROLE_LABELS: Record<string, string> = {
   client: "Cliente",
 };
 
-/**
- * Decodifica só o payload do JWT (sem verificar assinatura -- não tem
- * como verificar client-side mesmo, o token já veio de um login bem-
- * sucedido no backend; isso é só leitura de um campo pra exibição, não
- * uma checagem de segurança). O payload hoje só tem `user_id` e `role`
- * (ver app/api/routes/auth.py) -- sem e-mail nem nome, por isso a
- * sidebar mostra o papel do usuário ("Administrador"/"Cliente"), não um
- * nome de verdade. Mostrar um nome real exigiria o backend incluir
- * e-mail/nome no payload (ou um endpoint tipo GET /api/auth/me) -- fora
- * do escopo desta sessão (só polimento visual), fica como próximo passo
- * natural se o cliente pedir.
- */
-function decodeRole(token: string): string | null {
-  try {
-    const payloadBase64 = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    const payload = JSON.parse(atob(payloadBase64)) as { role?: unknown };
-    return typeof payload.role === "string" ? payload.role : null;
-  } catch {
-    return null;
-  }
-}
-
 export function Sidebar() {
-  const { token, logout } = useAuth();
+  const { role, logout } = useAuth();
   const location = useLocation();
 
-  const role = token ? decodeRole(token) : null;
   const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "Usuário";
+  const ehAdmin = role === "admin";
 
   const kanbanAtivo = location.pathname === "/";
   const dashboardAtivo = location.pathname === "/dashboard";
+  const buscaLeadsAtivo = location.pathname === "/busca-leads";
 
   return (
     <aside className="sidebar">
@@ -53,11 +32,20 @@ export function Sidebar() {
           <span>Kanban</span>
         </Link>
 
-        <span className="sidebar-nav-item sidebar-nav-item-desabilitado" aria-disabled="true">
-          <Search size={18} />
-          <span>Busca de Leads</span>
-          <span className="sidebar-nav-badge">em breve</span>
-        </span>
+        {/* "Busca de Leads" -- painel de disparo da busca mensal, só
+            admin (Caio/Vinícius). Pra um usuário "client" (Douglas/
+            Sulamita) o item nem existe na lista -- não é um estado
+            desabilitado/"em breve" como já foi no passado, é omitido
+            de verdade. Isso é só UX (esconder o que a pessoa não pode
+            usar); a proteção real é o `require_admin` do backend (403)
+            + o guard `AdminRoute` na rota (ver App.tsx), que redireciona
+            mesmo que alguém digite a URL direto. */}
+        {ehAdmin && (
+          <Link to="/busca-leads" className={`sidebar-nav-item ${buscaLeadsAtivo ? "sidebar-nav-item-ativo" : ""}`}>
+            <Search size={18} />
+            <span>Busca de Leads</span>
+          </Link>
+        )}
 
         <Link to="/dashboard" className={`sidebar-nav-item ${dashboardAtivo ? "sidebar-nav-item-ativo" : ""}`}>
           <BarChart3 size={18} />

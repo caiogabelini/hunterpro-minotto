@@ -1,7 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AdminRoute } from "./components/AdminRoute";
 import { AuthenticatedLayout } from "./components/AuthenticatedLayout";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
+import { BuscaLeadsPage } from "./pages/BuscaLeadsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { KanbanPage } from "./pages/KanbanPage";
 import { LeadDossierPage } from "./pages/LeadDossierPage";
@@ -40,6 +42,18 @@ function App() {
                 <AuthenticatedLayout>
                   <DashboardPage />
                 </AuthenticatedLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/busca-leads"
+            element={
+              <ProtectedRoute>
+                <AdminRoute>
+                  <AuthenticatedLayout>
+                    <BuscaLeadsPage />
+                  </AuthenticatedLayout>
+                </AdminRoute>
               </ProtectedRoute>
             }
           />

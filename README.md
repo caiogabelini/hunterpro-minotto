@@ -28,16 +28,18 @@ backend/          FastAPI + PostgreSQL + Celery + Redis
 
 frontend/         React + Vite + TypeScript
   src/
-    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status, dashboard)
+    api.ts                cliente HTTP pro backend (leads, mensagens, login, PATCH status, dashboard, admin/buscas)
     tokens.css             paleta de cor (navy/dourado, tema claro) + sombra/transição/espaçamento (design tokens)
     index.css               tipografia + estilos globais + badges compartilhados (consome tokens.css)
-    context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
-    components/           Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn,
-                          KanbanCard, LossReasonModal, PriorityBadge, Modal (genérico,
-                          reutilizável), SimuladorReceitaModal
-    pages/                LoginPage, KanbanPage, LeadDossierPage, DashboardPage
+    context/AuthContext.tsx  token JWT em memória (React Context) + login/logout + `role` decodificado (admin/client)
+    components/           Sidebar, AuthenticatedLayout, ProtectedRoute, AdminRoute (guard
+                          admin-only), KanbanColumn, KanbanCard, LossReasonModal,
+                          PriorityBadge, Modal (genérico, reutilizável), SimuladorReceitaModal
+    pages/                LoginPage, KanbanPage, LeadDossierPage, DashboardPage,
+                          BuscaLeadsPage (admin only)
     App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id +
-                          /dashboard (protegidas, com sidebar via AuthenticatedLayout)
+                          /dashboard + /busca-leads (admin only, guard AdminRoute) --
+                          todas protegidas, com sidebar via AuthenticatedLayout
 ```
 
 **Deploy (EasyPanel):** backend, worker (Celery) e frontend como **App
@@ -772,7 +774,69 @@ interno do Docker.
   etapa), e a contagem total bate com uma query direta no banco. `npm
   run build`/`npm run lint`/`npm run test` e `pytest` limpos; sem
   validação visual real, mesma ressalva de sempre.
-- ✅ 298 testes automatizados passando (`pytest`) + 18 testes no
+- ✅ **Painel admin de "busca mensal"** (22/08/2026) — dispara o
+  pipeline completo (`gerar_semente_leads` + `process_lead_pipeline`
+  por CNPJ) manualmente pela tela, visível e acessível SÓ pra usuários
+  admin (Caio/Vinícius) — nunca aparece na sidebar nem carrega por URL
+  direta pra um usuário "client" (Douglas/Sulamita). **⚠️ Dispara custo
+  real de API em produção, não é simulação** — aviso permanente na tela
+  + modal de confirmação antes de disparar, pedido explícito desta
+  sessão. Backend: modelo `BuscaLeads` (histórico de execuções, uma
+  linha por disparo, nunca sobrescrita — migration validada contra
+  Postgres real), task orquestradora `executar_busca_mensal` (Celery) —
+  roda `gerar_semente_leads` uma vez, depois `process_lead_pipeline`
+  pra cada CNPJ, erro isolado por CNPJ nunca derruba o loop inteiro
+  (acumula em `erros`, uma string por CNPJ que falhou), status vira
+  `"erro"` só se mais de 50% dos CNPJs falharam (critério simples,
+  configurável só via constante no código). `POST /api/admin/buscas`
+  (cria o registro e dispara `.delay()` — **primeira chamada
+  assíncrona de verdade a uma task Celery neste projeto**, todo o resto
+  sempre chamou tasks-irmãs direto, em processo, pra testabilidade),
+  `GET /api/admin/buscas` (histórico) e `GET /api/admin/buscas/{id}`
+  (status pra polling) — todas atrás de `require_admin` (403 pra
+  "client", não 401 — **primeira rota deste projeto a realmente usar
+  `require_admin`**, que já existia desde a sessão de autenticação mas
+  nunca tinha uma rota pra proteger). Frontend: `role` (decodificado do
+  JWT) centralizado em `AuthContext` (antes vivia só dentro da
+  Sidebar) — reaproveitado pelo item condicional da sidebar E pelo novo
+  guard `AdminRoute`, que redireciona um "client" que digitar a URL
+  direto pro Kanban, não pro login (ele já está autenticado, só não tem
+  permissão pra essa tela — mesma distinção 401 vs. 403 do backend).
+  Tela: botão "Executar busca do mês" → modal de confirmação → spinner
+  "Buscando leads..." **sem barra de progresso falsa** (pedido
+  explícito de honestidade — não há progresso percentual granular pra
+  mostrar) com polling a cada 4s até a busca terminar (retoma sozinho
+  se a página for recarregada no meio de uma busca em andamento),
+  resumo final (CNPJs encontrados/leads processados/erros, com lista
+  expansível de erros) e histórico de buscas anteriores. 18 testes
+  novos no backend (7 da task, cobrindo status ao longo da execução,
+  isolamento de erro por CNPJ, critério de >50% de falha, semente
+  vazia, falha da própria `gerar_semente_leads`; 11 das rotas, incluindo
+  403 explícito pra "client" em todas as 3). Nenhum teste novo no
+  frontend (lógica de estado/efeitos, não função pura). `npm run
+  build`/`npm run lint`/`npm run test` e `pytest` limpos; sem validação
+  visual real, mesma ressalva de sempre — particularmente relevante
+  aqui pela quantidade de lógica de estado (polling, retomada,
+  confirmação) que só uma tela de verdade confirma de ponta a ponta.
+- ✅ **Trava contra disparo duplo em `POST /api/admin/buscas`**
+  (22/08/2026) — antes de criar uma nova `BuscaLeads`, a rota checa se
+  já existe alguma com `status="executando"`; se sim, **409 Conflict**
+  com mensagem pronta pro usuário ("Já existe uma busca em andamento,
+  iniciada em DD/MM/AAAA HH:MM."), sem criar registro novo nem disparar
+  a task. ⚠️ Best-effort, não uma garantia formal sob concorrência real
+  (`SELECT` simples, não um lock de banco) — documentado assim de
+  propósito, ver item 21 em "O que falta". Frontend: `ConflictError`
+  novo em `api.ts` (mesmo padrão de `UnauthorizedError`, carrega a
+  mensagem do backend pronta), tratado separado de erro genérico —
+  mensagem em tom informativo (navy, não vermelho — não é uma falha do
+  usuário) e a tela passa a acompanhar a busca já em andamento
+  (reaproveitando o polling que já existia), o que também é o que faz o
+  botão "Executar busca do mês" sumir sozinho enquanto uma busca já
+  está rodando. 3 testes novos no backend (409 sem criar registro, e
+  duas variações confirmando que uma busca nova pode ser criada depois
+  que a anterior concluiu com sucesso OU com erro). `npm run
+  build`/`npm run lint`/`npm run test` e `pytest` limpos.
+- ✅ 319 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
 ## O que falta (próximas sessões)
@@ -947,6 +1011,38 @@ Em ordem de prioridade combinada com o cliente:
     dedicado abaixo. Nenhuma pendência nova deixada por este ajuste —
     a limitação de fotografia-não-taxa-de-conversão do item 17 continua
     valendo exatamente como estava.
+20. ~~Painel admin de "busca mensal" (disparo manual do pipeline
+    completo, só admin)~~ ✅ feito (22/08/2026) — ver bullet dedicado
+    abaixo. Pendências deixadas de propósito:
+    - **`gerar_semente_leads()` roda sem filtro nenhum** — a task
+      `executar_busca_mensal` chama `gerar_semente_leads()` sem
+      parâmetros (usa os defaults de UF/região dela, que é "sem
+      filtro" — todo o Brasil). Deixar o admin escolher UF/região no
+      próprio painel antes de disparar é um upgrade natural, não pedido
+      nesta sessão.
+    - ~~Nada impede duas buscas rodando ao mesmo tempo~~ ✅ trava simples
+      adicionada numa sessão seguinte (22/08/2026, ver item 21 abaixo) —
+      `POST /buscas` agora devolve 409 se já existe uma `"executando"`.
+      **Não é uma garantia de concorrência real** (não usa `SELECT ...
+      FOR UPDATE` nem constraint de banco) — ver ressalva completa no
+      item 21 e no docstring de `disparar_busca`.
+    - **Sem cancelamento** — uma vez disparada, uma busca corre até o
+      fim (sucesso ou erro por CNPJ), não há como interrompê-la pelo
+      painel nem por outro endpoint.
+    - **Validação visual real** — mesma ressalva de sempre; esta tela
+      em particular tem bastante lógica de estado (polling, retomada
+      após reload, modal de confirmação) que só um teste manual na tela
+      de verdade confirma de ponta a ponta.
+21. ~~Trava simples contra disparo duplo em `POST /api/admin/buscas`~~
+    ✅ feito (22/08/2026) — ver bullet dedicado abaixo. Pendência
+    deixada de propósito:
+    - **Ainda não é uma garantia de concorrência real** — é um `SELECT`
+      seguido de `INSERT`, não um lock de banco nem uma constraint
+      única. Dois requests chegando no mesmíssimo instante ainda podem,
+      em teoria, criar duas buscas `"executando"`. Suficiente pro caso
+      real (clique duplo, dois admins na mesma tela em segundos
+      normais de reação humana) — endurecer isso de verdade (constraint
+      de banco) só se algum dia isso se provar um problema na prática.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

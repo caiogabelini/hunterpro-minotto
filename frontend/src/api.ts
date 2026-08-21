@@ -136,6 +136,24 @@ export interface MotivoPerda {
   quantidade: number;
 }
 
+/** Mesmo shape de BuscaLeadsRead em app/schemas/busca_leads.py -- um
+ * registro de execução do painel admin de "busca mensal" (ver
+ * pages/BuscaLeadsPage.tsx). `status` é `"executando" | "concluido" |
+ * "erro"` (mesmos valores de StatusBusca no backend), tipado como
+ * `string` aqui (não união literal) pelo mesmo motivo de `Lead.kanban_status`
+ * já ser `string` solto neste arquivo -- simplicidade, sem necessidade
+ * de um union type estrito pra um campo só comparado por igualdade. */
+export interface BuscaLeadsRegistro {
+  id: string;
+  iniciado_por_id: string;
+  iniciado_em: string;
+  concluido_em?: string | null;
+  status: string;
+  total_cnpjs_encontrados?: number | null;
+  total_leads_processados?: number | null;
+  erros?: string[] | null;
+}
+
 /** Lançada quando o backend devolve 401 -- o token guardado em memória
  * (ver AuthContext) expirou ou é inválido. Quem chama decide o que fazer
  * (tipicamente: deslogar e redirecionar pro /login). */
@@ -143,6 +161,18 @@ export class UnauthorizedError extends Error {
   constructor() {
     super("Sessão expirada ou token inválido");
     this.name = "UnauthorizedError";
+  }
+}
+
+/** Lançada quando o backend devolve 409 -- hoje só `dispararBusca`
+ * (POST /api/admin/buscas), quando já existe uma BuscaLeads com
+ * status "executando". `message` já vem pronta do `detail` do backend
+ * ("Já existe uma busca em andamento, iniciada em ...") -- quem chama
+ * mostra direto, não precisa montar uma mensagem própria. */
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
   }
 }
 
@@ -263,6 +293,31 @@ export async function fetchFunil(token: string): Promise<FunilEtapa[]> {
 
 export async function fetchMotivosPerda(token: string): Promise<MotivoPerda[]> {
   const res = await fetch(`${API_URL}/api/dashboard/motivos-perda`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function dispararBusca(token: string): Promise<BuscaLeadsRegistro> {
+  const res = await fetch(`${API_URL}/api/admin/buscas`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (res.status === 409) throw new ConflictError(await parseErrorDetail(res));
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchBuscas(token: string): Promise<BuscaLeadsRegistro[]> {
+  const res = await fetch(`${API_URL}/api/admin/buscas`, { headers: authHeaders(token) });
+  if (res.status === 401) throw new UnauthorizedError();
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json();
+}
+
+export async function fetchBusca(token: string, buscaId: string): Promise<BuscaLeadsRegistro> {
+  const res = await fetch(`${API_URL}/api/admin/buscas/${buscaId}`, { headers: authHeaders(token) });
   if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   return res.json();

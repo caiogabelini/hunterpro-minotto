@@ -596,10 +596,14 @@ tokens, password recovery, public registration) rather than forgotten.
   at login) — a deactivated user's still-valid token stops working
   immediately, not just at next login. `require_admin` is wired and
   tested (`tests/test_deps.py`, called directly with constructed `User`
-  objects — no admin-only route exists yet to exercise it through HTTP)
-  but **doesn't protect anything yet** — no admin-only route has been
-  built. `GET /api/leads` requires only `get_current_user` (any
-  authenticated role), not `require_admin`.
+  objects). **⚠️ Superseded (22/08/2026)**: this paragraph originally
+  said `require_admin` "doesn't protect anything yet — no admin-only
+  route has been built." That's no longer true — `app/api/routes/admin.py`
+  (the "busca mensal" panel, see "Admin panel" below) is the first
+  route to actually use it, exercised through HTTP now too
+  (`tests/test_admin_routes.py`). `GET /api/leads` still requires only
+  `get_current_user` (any authenticated role), not `require_admin` —
+  that part is still accurate.
 - `scripts/create_user.py`: CLI (argparse: `--email`, `--senha`,
   `--role`) for creating users — the only way to create one, since
   there's no public registration endpoint by design (only Minotto and
@@ -2553,6 +2557,284 @@ than introducing a third gray/red variant. The on-page honesty note
 same "the caveat needs to live on the screen, not just in code
 comments" principle already established for this element in Fase 2.
 
+### Admin panel: monthly search (`BuscaLeads`, `executar_busca_mensal`, `/api/admin/buscas`, follow-up session, 2026-08-22)
+
+A new, **admin-only** panel that manually fires the whole prospecting
+pipeline end to end — `gerar_semente_leads` (ETAPA 0) then
+`process_lead_pipeline` for every CNPJ the seed finds — from a button
+in the frontend, instead of only being runnable by hand (a shell/REPL
+call). This is the first feature in the project gated by role, both in
+the backend (`require_admin`, previously wired but unused — see the
+amended note in "Authentication" above) and in the frontend (a
+sidebar item + a route that a "client" user, Douglas/Sulamita, never
+sees or can reach — only "admin", Caio/Vinícius).
+
+**⚠️ Triggers real, billed API calls.** Every CNPJ in the seed runs the
+full enrichment pipeline documented in "Pipeline orchestration" above
+(Receita Federal, PGFN, CNES, Google Places, Firecrawl + Anthropic,
+Evolution/WhatsApp, Hunter.io + ZeroBounce) — this is not a dry run or
+a preview. Both the backend route's docstring and the frontend UI say
+this explicitly and prominently (see the frontend section below) — per
+the user's own explicit instruction to be "cuidadoso e claro" about
+this, since it's the one feature in this project that spends real money
+per click.
+
+**Backend**:
+
+- `app/models/busca_leads.py` (new) — `BuscaLeads`: `id`, `iniciado_por_id`
+  (FK → `users.id`), `iniciado_em`, `concluido_em` (nullable — `None`
+  means "still running or the task never got to update it"), `status`
+  (`StatusBusca`: `"executando"` | `"concluido"` | `"erro"`, same
+  plain-string-plus-Python-Enum convention as `Lead.kanban_status`/
+  `User.role`), `total_cnpjs_encontrados`/`total_leads_processados`
+  (nullable ints, filled in progressively — the first as soon as
+  `gerar_semente_leads` returns, the second only at the very end),
+  `erros` (nullable JSON list of strings, one `"{cnpj}: {mensagem}"`
+  per CNPJ that failed — never a full traceback, and never causes the
+  whole run to abort). One row per **execution**, never overwritten —
+  same "history table, not a singular value" shape as `LeadMessage`,
+  for the same reason: the histórico list in the frontend needs every
+  past run, not just the latest.
+- `app/workers/celery_app.py::executar_busca_mensal(busca_id, db=None)`
+  (new task, appended at the end of the file, own dependency-graph-style
+  comment block matching `process_lead_pipeline`'s) — the orchestrator
+  that the individual per-CNPJ `process_lead_pipeline` task was always
+  missing: something that actually loops over `gerar_semente_leads`'s
+  output and calls `process_lead_pipeline` for each one (this exact gap
+  was called out as unfinished business in "Pipeline orchestration"
+  above — "no task loops over `gerar_semente_leads`'s output... that
+  glue is still manual"; this task is that glue, finally). Sequence:
+  mark `busca.status = "executando"` and commit immediately (so a
+  poller sees it right away, not after the whole run finishes) → call
+  `gerar_semente_leads()` (bare name, no `.delay()` — same
+  call-sibling-task-directly convention as `process_lead_pipeline` uses
+  for its own sibling stages) → set `total_cnpjs_encontrados` and commit
+  → loop `process_lead_pipeline(cnpj, razao_social=...)` per
+  estabelecimento, **each call wrapped in its own try/except** — an
+  exception here is caught, logged, and appended to a local `erros`
+  list as `f"{cnpj}: {exc}"`; the loop keeps going. This is one level
+  "outside" `process_lead_pipeline`'s own internal resilience
+  (`_rodar_etapa` catches failures *within* one CNPJ's pipeline stages,
+  never letting a stage failure propagate) — this task additionally
+  catches failures *of* an entire CNPJ's pipeline run (e.g. the final
+  DB commit inside `process_lead_pipeline` itself raising), so a fully
+  failed CNPJ doesn't take down the other 300 in the batch either.
+- **Each `process_lead_pipeline(cnpj)` call gets its own DB session**
+  (default `db=None`), deliberately **not** the orchestrator's own
+  `db_session` for the `BuscaLeads` row — passing the same session
+  across many CNPJ iterations would risk one CNPJ's failed
+  transaction leaving the shared session in an aborted state that
+  poisons every subsequent iteration's commits. Keeping the sessions
+  separate means a failed CNPJ's session is simply discarded (closed
+  without commit, in `process_lead_pipeline`'s own `finally`) while
+  `executar_busca_mensal`'s own session for bookkeeping is never
+  touched by that failure. This costs a few more DB connections per run
+  (one per CNPJ instead of one shared) — an accepted trade-off for
+  correctness, not measured/tuned for connection-pool pressure at scale.
+- **Error-rate cutoff, not error-count**: `status` becomes `"erro"`
+  only when **more than `_CRITERIO_ERRO_TAXA_FALHA` (50%)** of the
+  seed's CNPJs failed — a handful of isolated failures (one dead
+  website, one API timeout) still counts as `"concluido"`, with the
+  failures visible in `erros` for the admin to read, not as a run-level
+  failure. Zero CNPJs found (empty seed, or `gerar_semente_leads`
+  returning its `"sem_arquivos"` shape because the RFB bulk files
+  aren't in `RECEITA_FEDERAL_DADOS_ABERTOS_DIR`) also counts as
+  `"concluido"` — there's no CNPJ that "failed," so the 50% rule
+  vacuously doesn't trigger; the `total_cnpjs_encontrados: 0` on the
+  record is itself the signal something's off, not a fabricated error
+  status.
+- **`gerar_semente_leads()` itself raising is handled separately from
+  per-CNPJ failures**, and deliberately so: if it's not wrapped, an
+  exception there (e.g., a malformed bulk file) would propagate out of
+  the whole task, leaving `busca.status` stuck at `"executando"`
+  forever — the frontend's poll loop would then run indefinitely with
+  nothing to show for it. Caught explicitly, marks the run `"erro"`
+  immediately with the exception message in `erros`, and returns early
+  (never enters the per-CNPJ loop).
+- `app/api/routes/admin.py` (new file, mounted at `/api/admin`, every
+  route behind `require_admin` — **not** `get_current_user`): `POST
+  /buscas` creates the `BuscaLeads` row (status `"executando"`), calls
+  `executar_busca_mensal.delay(busca.id)` — **the first real `.delay()`
+  call anywhere in this codebase** (every other task invocation in this
+  project calls sibling task functions directly, in-process, for
+  testability — this is the first case where async dispatch to an
+  actual Celery worker is the whole point, since the route must return
+  immediately rather than block on a potentially very long pipeline
+  run) — then returns the row immediately (201). `GET /buscas` lists
+  history, most recent first, `limit` query param (default 20, capped
+  at 100, same `Query(default=..., le=...)` pattern as `GET /api/leads`).
+  `GET /buscas/{busca_id}` is what the frontend polls — 404 if the id
+  doesn't exist.
+- **Testing `.delay()` without a real broker**: `tests/test_admin_routes.py`
+  monkeypatches `app.api.routes.admin.executar_busca_mensal` (the name
+  as it lives in the *route module's* namespace, per this project's
+  established "monkeypatch at the call site" convention) with a small
+  `_FakeTask` object exposing just a `.delay()` method that records its
+  calls — confirms the route dispatches with the right `busca_id`
+  without ever touching Redis/Celery. `tests/test_executar_busca_mensal.py`
+  tests the task itself as a plain function call (same pattern as
+  `test_process_lead_pipeline.py`) — `gerar_semente_leads` and
+  `process_lead_pipeline` monkeypatched at the `celery_app` module
+  level, DB via an injected in-memory SQLite session. 18 new backend
+  tests total (7 task-level + 11 route-level), 316 backend tests overall.
+
+**Frontend**:
+
+- **`role` centralized in `AuthContext`, not just Sidebar anymore** —
+  `decodeRole(token)` (the JWT-payload-only, no-signature-verification
+  decode, unchanged logic) moved from living solely inside
+  `components/Sidebar.tsx` into `context/AuthContext.tsx`, exposed as
+  `useAuth().role`. Needed in two places now (the sidebar's conditional
+  menu item, and the new `AdminRoute` guard) — centralizing avoids a
+  third copy of the same decode snippet. **Still explicitly not a
+  security boundary** — same caveat as before, now stated once in
+  `AuthContext.tsx` instead of only in `Sidebar.tsx`: real authorization
+  is `require_admin` server-side (403 for "client"), this is read-only
+  UX.
+- `components/AdminRoute.tsx` (new) — composes with `ProtectedRoute`
+  the same way `AuthenticatedLayout` already does (two single-purpose
+  wrappers nested, not one component doing both jobs): `<ProtectedRoute><AdminRoute><AuthenticatedLayout>...`.
+  Redirects a non-admin to `/` (Kanban), **not** `/login` — the user
+  *is* authenticated, just not authorized for this one route, mirroring
+  the backend's 401-vs-403 distinction (`get_current_user` vs.
+  `require_admin`) at the routing layer.
+- **Sidebar**: "Busca de Leads" changed from the long-standing disabled
+  "em breve" placeholder to a real `<Link to="/busca-leads">` — but
+  **only rendered at all when `role === "admin"`**, not shown-disabled
+  for "client" (unlike the earlier "em breve" treatment, which was
+  visible-but-inert for everyone). A "client" user's sidebar simply
+  doesn't have this row.
+- `pages/BuscaLeadsPage.tsx` + `.css` (new):
+  - **Permanent, always-visible warning banner** (`.busca-leads-aviso`,
+    `--color-danger`/`--color-danger-bg`) above the trigger button,
+    listing every external system the pipeline actually calls, plus a
+    **confirmation modal** (reusing `components/Modal.tsx`, the generic
+    modal from the "Revenue simulator" session) that must be confirmed
+    before the `POST` actually fires — two layers, not one, given the
+    user's explicit "seja cuidadoso e claro" instruction for this
+    specific feature. `--color-danger` was chosen over `--color-alert`
+    (the orange token from the Dashboard Fase 2 session, meant for
+    "approaching a plan limit") — real production API spend reads as
+    more serious than a soft usage warning, closer to the danger-tier
+    treatment already used for PGFN-ajuizado elsewhere in the app.
+  - **The trigger button itself stays the standard primary-navy CTA
+    style**, not styled as a "dangerous" red button — a judgment call:
+    the action itself is constructive (it creates/updates leads), not
+    destructive, so a red "delete"-style button would send the wrong
+    signal; the caution lives in the banner and the confirmation step,
+    not in making every primary action on this page look alarming.
+  - **While `status === "executando"`: a spinner + "Buscando leads..."
+    text, explicitly with NO percentage or fake progress bar** — per
+    the explicit "seja honesto, não invente uma barra de progresso
+    falsa" instruction. The only granular detail shown is
+    `total_cnpjs_encontrados` once `gerar_semente_leads` has finished
+    (before that, it says "Levantando a lista de CNPJs..."), because
+    that's genuinely known at that point — everything past it (which
+    CNPJ is currently processing, how many remain) genuinely isn't,
+    without polling `process_lead_pipeline`'s internals, which this
+    session didn't add.
+  - **Polling**: chained `setTimeout` (not `setInterval`) every
+    `INTERVALO_POLLING_MS` (4000ms) — deliberately recursive-timeout
+    rather than a fixed-interval timer, so a slow response never causes
+    two in-flight polls to overlap; the next poll is only scheduled
+    after the current one resolves. Stops on its own once `status`
+    leaves `"executando"`. A network error *during* polling (not a
+    real backend error) doesn't give up — it just retries on the next
+    tick, since the actual `BuscaLeads` row on the server is unaffected
+    by a client-side polling hiccup.
+  - **Resumes tracking after a page reload**: on mount, `GET /buscas`
+    (the history list) is checked for any row still `"executando"` — if
+    one exists (e.g. the admin reloaded mid-run), polling resumes on it
+    automatically instead of leaving the admin with no visibility until
+    it finishes on its own.
+  - **On conclusion**: a result panel (`ResumoBusca`) — green/red per
+    `status`, counts of CNPJs found vs. leads processed vs. errors, and
+    a `<details>`/`<summary>` (native HTML disclosure, no extra JS) list
+    of every individual error message when `erros.length > 0`.
+  - **History section**: every row from `GET /buscas`, a status pill
+    (navy/`"executando"`, green/`"concluido"`, red/`"erro"` — same
+    three-color vocabulary as the result panel) plus the same
+    CNPJs/processed/erros counts. Timestamp uses a plain
+    `Date.toLocaleString("pt-BR")` inline rather than adding a new
+    shared formatter to `format.ts` — a one-off need (date *and* time,
+    unlike `formatDate`'s date-only), not worth generalizing yet.
+  - `api.ts` gained `BuscaLeadsRegistro` (mirrors `BuscaLeadsRead`) and
+    `dispararBusca`/`fetchBuscas`/`fetchBusca`, same
+    fetch-with-401-handling shape as every other function in the file.
+- **Not tested in an actual browser** — same standing sandbox
+  limitation as every frontend session in this project; particularly
+  worth checking here given how much of this page's behavior is
+  timing/state-machine-shaped (polling start/stop, reload-resume,
+  confirm-then-fire) rather than static layout. `npm run build`/`npm
+  run lint`/`npm run test` all clean, 18 frontend tests unchanged (no
+  new pure-function logic — this session's frontend work is
+  state/effects/API wiring, not the kind of standalone parsing logic
+  `leadScore.ts`/`insights.ts` earned tests for).
+
+### Duplicate-launch lock on `POST /api/admin/buscas` (follow-up session, 2026-08-22)
+
+Closes the "nothing prevents two searches running at once" gap flagged
+as a known limitation in the admin panel session above (README "O que
+falta", item 20) — but only the specific case actually asked for
+(double-click / two admins both hitting "Executar busca do mês" around
+the same time), not full concurrency-safety.
+
+- `disparar_busca` (`app/api/routes/admin.py`) now does one extra
+  `SELECT` — any `BuscaLeads` row with `status == "executando"` — before
+  creating a new row. If one exists, **409 Conflict**, with a
+  human-readable `detail` built from the existing row's own
+  `iniciado_em` (`"Já existe uma busca em andamento, iniciada em
+  DD/MM/AAAA HH:MM."`) — no new row is created, `executar_busca_mensal.delay(...)`
+  is never called.
+- **Explicitly documented as best-effort, not a real concurrency
+  guarantee** — the docstring says so directly: this is a plain
+  `SELECT` then `INSERT`, not a `SELECT ... FOR UPDATE` or a DB-level
+  unique constraint (e.g. a partial unique index on `status =
+  'executando'`). Two requests landing in the same instant could both
+  pass the `SELECT` before either commits, in principle creating two
+  `"executando"` rows anyway. Good enough for the real scenario this
+  was asked to solve (a person clicking twice, or two admins on the
+  same screen within normal human reaction time) — not hardened against
+  a genuine race, which would need a DB-level constraint if it ever
+  matters in practice. Don't read the 409 behavior as "this is now
+  safe under concurrency" if extending this route later.
+- Tests (`tests/test_admin_routes.py`, +3, 319 backend tests total):
+  a second `POST` while one `BuscaLeads` is `"executando"` returns 409,
+  includes the formatted timestamp in `detail`, never calls
+  `.delay()`, and never creates a second row (`BuscaLeads` count stays
+  at 1); a parametrized case (`StatusBusca.CONCLUIDO` /
+  `StatusBusca.ERRO`) confirms a **new** search can be created normally
+  once the previous one has actually finished, either way.
+- **Frontend**: `api.ts` gained `ConflictError` (mirrors
+  `UnauthorizedError` — a typed exception `dispararBusca` throws
+  specifically on a 409, carrying the backend's already-friendly
+  `detail` string as `.message`, so the page never has to compose its
+  own copy of the same sentence). `BuscaLeadsPage.tsx`'s `executarBusca`
+  catches it separately from the generic-failure branch: shows the
+  message in a **new, distinct state** (`mensagemInfoDisparo`,
+  `--color-primary` navy text, not `--color-danger` red) — deliberately
+  not styled as an error, since "someone already started a search" is
+  informational, not a failure the user caused. It then also calls the
+  same data-fetching helper the mount effect uses
+  (`buscarHistoricoEEmAndamento`, refactored out of the original
+  reload-resume logic specifically so both call sites could share it)
+  to pick up the *actual* in-progress `BuscaLeads` row and start polling
+  it — this is what makes "Executar busca do mês" disappear (replaced
+  by the existing progress panel) after a 409, reusing the
+  already-built polling/tracking machinery rather than adding a
+  separate disabled-state flag. **A lint-driven refactor worth knowing
+  about**: the first version of this shared helper called `setState`
+  directly inside itself and was invoked from a `useEffect` — oxlint's
+  `set-state-in-effect` rule flagged it (a locally-defined function
+  calling multiple `setState`s, invoked directly in an effect, reads
+  the same as calling them synchronously even though the actual state
+  updates happen inside a resolved promise). Fixed by having the shared
+  helper only *fetch and return* data, with each call site (the mount
+  effect, and the 409 handler) doing its own `.then()`-committed
+  `setState` calls — slightly more repetition, but keeps the "effects
+  own their own state commits" shape the rest of this file (and the
+  rest of the project) already follows.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -2671,6 +2953,21 @@ chain order, `downgrade -1` reverts only this one, re-upgrade is clean,
 and the resulting `users.dashboard_premissas` (`json`, nullable, no
 default) matches `app/models/user.py` exactly. Cluster stopped and
 deleted immediately after.
+
+An **eighth** migration was added 2026-08-22 (follow-up session):
+`a8017825fae8_cria_tabela_buscas_leads.py` (`down_revision="99454b995104"`,
+creates the `buscas_leads` table for `BuscaLeads` — see "Admin panel:
+monthly search" below). A new table, not columns on an existing one —
+same reasoning as `lead_messages`: one row per busca *execution*
+(history), not a singular per-user/per-lead value. `iniciado_por_id` is
+a FK to `users.id` with an index (same convention as
+`lead_messages.lead_id`). Same throwaway-cluster validation as the
+previous seven: all eight migrations upgrade cleanly in chain order,
+`downgrade -1` reverts only this one, re-upgrade is clean, and the
+resulting `buscas_leads` schema (FK to `users.id`, index on
+`iniciado_por_id`, `status` `NOT NULL` `varchar(20)`, everything else
+nullable with no default) matches `app/models/busca_leads.py` exactly.
+Cluster stopped and deleted immediately after.
 
 ### Deployment note (EasyPanel)
 

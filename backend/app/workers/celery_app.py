@@ -82,6 +82,7 @@ app/services/site_scraping.py); `process_lead_pipeline` pula essa etapa
 também se a chave não estiver configurada ou se não houver `site_url`.
 """
 import logging
+from datetime import datetime
 
 from celery import Celery
 
@@ -879,6 +880,116 @@ def process_lead_pipeline(
             "etapas_puladas": etapas_puladas,
             "score_total": resultado_score["score_total"],
             "breakdown": resultado_score["breakdown"],
+        }
+    finally:
+        if owns_session:
+            db_session.close()
+
+
+# ---------------------------------------------------------------------------
+# executar_busca_mensal — orquestra uma "busca mensal" completa (painel admin)
+# ---------------------------------------------------------------------------
+#
+# Diferente de process_lead_pipeline (que roda 1 CNPJ e é chamada num
+# loop por quem quer que itere sobre a semente), esta task É o loop --
+# roda gerar_semente_leads uma vez, depois process_lead_pipeline pra
+# CADA CNPJ encontrado, e persiste o progresso/resultado num registro
+# BuscaLeads (app/models/busca_leads.py) ao longo do caminho, pra
+# app/api/routes/admin.py::get_busca poder devolver o status via
+# polling do frontend enquanto ela roda.
+#
+# ⚠️ CUSTO REAL: cada CNPJ na semente dispara todo o pipeline de
+# enriquecimento (Receita Federal, PGFN, CNES, Google Places, Firecrawl+IA,
+# WhatsApp, Hunter.io/ZeroBounce -- ver o docstring do módulo, topo deste
+# arquivo) -- não é uma simulação. Só admins disparam isso
+# (app/api/deps.py::require_admin), por isso o painel existe fora do
+# fluxo normal de qualquer usuário "client".
+
+_CRITERIO_ERRO_TAXA_FALHA = 0.5  # >50% dos CNPJs falharam -> status "erro"
+
+
+@celery_app.task(name="executar_busca_mensal")
+def executar_busca_mensal(busca_id: str, db=None) -> dict:
+    """
+    Orquestra uma busca mensal completa: `gerar_semente_leads()` uma vez
+    (sem parâmetros -- usa os defaults de UF/região do próprio
+    `gerar_semente_leads`, ver docstring dela; refinar isso com filtros
+    configuráveis pelo admin é um passo natural futuro, não pedido nesta
+    sessão) para obter a lista de CNPJs, depois `process_lead_pipeline`
+    pra cada um.
+
+    Cada chamada de `process_lead_pipeline` roda isolada -- uma exceção
+    (não capturada internamente por `_rodar_etapa`, ex.: falha na
+    persistência) é capturada aqui, registrada em `busca.erros` como uma
+    string `"{cnpj}: {mensagem}"`, e o loop CONTINUA pro próximo CNPJ.
+    Mesmo padrão de resiliência já usado dentro de `process_lead_pipeline`
+    (uma etapa que falha não derruba as outras) -- aqui, um CNPJ que
+    falha não derruba os outros.
+
+    `busca.status` vira `"erro"` só se mais de `_CRITERIO_ERRO_TAXA_FALHA`
+    (50%) dos CNPJs da semente falharam -- critério simples e explícito;
+    um punhado de falhas isoladas (ex.: um site fora do ar) ainda conta
+    como busca "concluída" com ressalvas visíveis em `erros`, não como
+    falha geral. Zero CNPJs encontrados (`gerar_semente_leads` sem
+    arquivo disponível, ou semente vazia depois do filtro) também conta
+    como "concluído" -- não há CNPJ nenhum que tenha "falhado".
+
+    Se `gerar_semente_leads()` em si lançar uma exceção (fora do padrão
+    "sem_arquivos", que é um retorno normal, não uma exceção), a busca
+    inteira vira `"erro"` imediatamente, com a mensagem em `erros` -- sem
+    isso, `busca.status` ficaria travado em `"executando"` pra sempre e o
+    polling do frontend nunca terminaria.
+    """
+    from app.models.busca_leads import BuscaLeads, StatusBusca
+
+    db_session, owns_session = _get_db_session(db)
+    try:
+        busca = db_session.get(BuscaLeads, busca_id)
+        if busca is None:
+            logger.error("executar_busca_mensal: BuscaLeads %s não encontrada -- abortando.", busca_id)
+            return {"status": "erro", "motivo": "busca não encontrada"}
+
+        busca.status = StatusBusca.EXECUTANDO.value
+        db_session.commit()
+
+        try:
+            semente = gerar_semente_leads()
+        except Exception as exc:
+            logger.exception("executar_busca_mensal: gerar_semente_leads falhou pra busca %s.", busca_id)
+            busca.status = StatusBusca.ERRO.value
+            busca.erros = [f"gerar_semente_leads: {exc}"]
+            busca.concluido_em = datetime.utcnow()
+            db_session.commit()
+            return {"busca_id": busca_id, "status": busca.status, "erros": busca.erros}
+
+        estabelecimentos = semente.get("estabelecimentos") or []
+        busca.total_cnpjs_encontrados = len(estabelecimentos)
+        db_session.commit()
+
+        erros: list[str] = []
+        total_processados = 0
+        for estabelecimento in estabelecimentos:
+            cnpj = estabelecimento.get("cnpj")
+            try:
+                process_lead_pipeline(cnpj, razao_social=estabelecimento.get("razao_social"))
+                total_processados += 1
+            except Exception as exc:
+                logger.exception("executar_busca_mensal: CNPJ %s falhou na busca %s.", cnpj, busca_id)
+                erros.append(f"{cnpj}: {exc}")
+
+        taxa_falha = len(erros) / len(estabelecimentos) if estabelecimentos else 0.0
+        busca.status = StatusBusca.ERRO.value if taxa_falha > _CRITERIO_ERRO_TAXA_FALHA else StatusBusca.CONCLUIDO.value
+        busca.total_leads_processados = total_processados
+        busca.erros = erros
+        busca.concluido_em = datetime.utcnow()
+        db_session.commit()
+
+        return {
+            "busca_id": busca_id,
+            "status": busca.status,
+            "total_cnpjs_encontrados": busca.total_cnpjs_encontrados,
+            "total_leads_processados": busca.total_leads_processados,
+            "erros": erros,
         }
     finally:
         if owns_session:
