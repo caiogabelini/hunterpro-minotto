@@ -123,6 +123,60 @@
   color: var(--text-secondary);
 }
 
+/* 4º card do Resumo Executivo (Receita Estimada do Pipeline) --
+   destacado dos outros 3 com um fundo em tom suave de --color-gold
+   (pedido explícito: "esse é especial"). O ícone reforça o mesmo tom
+   (fundo/cor dourados em vez do navy-tint dos outros cards), mas o
+   valor grande continua em --color-primary -- mesma regra já
+   estabelecida no retema claro de que números grandes/importantes usam
+   navy, não dourado (dourado aqui é só o "tema" do card, não a cor do
+   dado em si, que precisa continuar com o contraste mais forte). */
+.dashboard-kpi-card-destaque {
+  background: var(--color-gold-bg);
+  border-color: rgba(201, 162, 39, 0.3);
+}
+
+.dashboard-kpi-card-destaque .dashboard-kpi-icone {
+  background: rgba(201, 162, 39, 0.18);
+  color: var(--color-gold-dark);
+}
+
+/* Valor deste card é uma string de moeda ("R$ 12.345,00"), bem mais
+   larga que os números curtos dos outros 3 KPIs -- fonte reduzida em
+   relação ao --dashboard-kpi-valor padrão (36px) pra não estourar a
+   largura do card em telas menores. */
+.dashboard-kpi-card-destaque .dashboard-kpi-valor {
+  font-size: 26px;
+}
+
+.dashboard-kpi-premissas {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.dashboard-kpi-simular-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--space-3);
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-body);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.dashboard-kpi-simular-btn:hover {
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+}
+
 /* --- Consumo do plano --- */
 
 .dashboard-plano-topo {
@@ -398,6 +452,13 @@
 
 /* --- Simulador de receita --- */
 
+/* --- Simulador de receita (campos, dentro do SimuladorReceitaModal) ---
+   Não é mais uma seção própria da página -- essas classes agora
+   estilizam o conteúdo do modal aberto pelo card de destaque "Receita
+   Estimada do Pipeline" (ver .dashboard-kpi-card-destaque acima e
+   components/SimuladorReceitaModal.tsx). Renderizadas dentro de
+   `.hp-modal-corpo` (Modal.css), que já não tem fundo/borda próprios
+   pra não duplicar o card que .hp-modal-card já desenha. */
 .dashboard-simulador-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -490,12 +551,6 @@
   opacity: 0.7;
   cursor: default;
   transform: none;
-}
-
-.dashboard-simulador-sucesso {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-success);
 }
 
 .dashboard-simulador-erro {

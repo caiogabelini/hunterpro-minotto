@@ -2356,6 +2356,122 @@ current pipeline, nothing more.
   kind of subtle heuristic that earned `getScoreBreakdown`/`getInsights`
   dedicated tests).
 
+### Revenue simulator moved into a card + modal (`components/Modal.tsx`, `components/SimuladorReceitaModal.tsx`, follow-up session, 2026-08-21)
+
+Frontend-only, no backend change (the `PUT`/`GET /api/dashboard/premissas`
+contract from Fase 1 is untouched). Repositions the revenue simulator
+from its own bottom-of-page section into a 4th "Resumo executivo" KPI
+card, with the 3 editable fields moved into a modal opened from that
+card — same underlying calculation and API call, different UI shape.
+
+**First reusable modal in this project.** `components/LossReasonModal.tsx`
+(Kanban's "confirm loss reason" dialog) is an older, ad-hoc
+implementation — its own inline backdrop/card/click-outside-to-close
+logic, styled by `.modal-*` classes that live in `pages/KanbanPage.css`
+and are only available because `KanbanPage.tsx` happens to import that
+stylesheet. **This session did not touch `LossReasonModal.tsx` or
+`KanbanPage.css` at all** — out of scope for what was asked, and
+refactoring it wasn't requested. Instead, `components/Modal.tsx` is a
+new, independent, generic wrapper (`titulo`, `onClose`, `children`
+props; backdrop-click and a header X button both close it; Escape also
+closes it — not explicitly requested, but a one-`useEffect` addition
+and the behavior every user already expects from any modal, so treated
+as free rather than scope creep). **Deliberately given prefixed class
+names (`hp-modal-*`), not `.modal-*`** — since Vite concatenates every
+imported stylesheet into one bundle, reusing the exact `.modal-backdrop`/
+`.modal-card` names `KanbanPage.css` already defines would silently
+collide (both would apply to elements matching those selectors,
+whichever CSS ends up later in bundle order would win in ways that are
+easy to get backwards). The prefix sidesteps this without needing to
+touch the older component. A future session consolidating both modals
+onto the new `Modal` component is a reasonable follow-up, not done here
+since it wasn't asked.
+
+**`SimuladorReceitaModal.tsx` owns a separate draft from the card's
+committed values — this is the one non-obvious design decision here,
+worth understanding before changing either.** The request said the
+modal's calculated value updates live as the user types, but the **top
+card only updates when the user clicks "Salvar premissas."** Reading
+those two sentences together rules out the naive approach (lifting the
+3 form fields to `DashboardPage` state and having both the card and the
+modal read the same state) — that would make the card update on every
+keystroke too, before anything is saved. Instead:
+
+- `DashboardPage` keeps `premissas: DashboardPremissas` — the last
+  **saved** value, what the top card renders. It's only ever set twice:
+  once from `GET /api/dashboard/premissas` on mount, and once via
+  `SimuladorReceitaModal`'s `onSalvo` callback after a successful `PUT`.
+- `SimuladorReceitaModal` takes `premissasAtuais` only to seed its own
+  local `draft` state (`useState(premissasAtuais)` at mount) — after
+  that, editing the draft never touches the parent's `premissas`.
+  Closing the modal without saving (backdrop click, X, Escape, or just
+  navigating away) silently discards the draft; the card underneath was
+  never touched in the first place, so there's nothing to roll back.
+- The modal computes its own `receitaEstimada` from `draft` for its
+  live-updating display; `DashboardPage` separately computes its own
+  `receitaEstimada` from `premissas` for the card. Two separate
+  calculations of the same formula, deliberately — they're allowed to
+  disagree while the modal is open (draft ahead of the last save), and
+  that disagreement is the whole point of "the card only updates on
+  save."
+- This is the same "self-contained subcomponent" pattern already
+  established in `LeadDossierPage.tsx` (`CanalAbordagemCard`/
+  `AbaInsights` — own `useAuth()` call, own `salvando`/`erro` state, own
+  API call) — `SimuladorReceitaModal` calls `salvarPremissas` itself
+  rather than receiving a save callback from `DashboardPage`, so all of
+  "editing → saving → loading/error state → success" lives in one file.
+  On success it calls `onSalvo(salvo)` (updates the parent's committed
+  `premissas`) **then** `onClose()` — in that order, so the card
+  already has the new value by the time it's visible again once the
+  modal closes. On failure, the modal stays open with an inline error
+  (`dashboard-simulador-erro`, same class/treatment as before) so the
+  user can retry without re-typing everything.
+
+**The old `SecaoSimulador` bottom section is gone, not hidden** — the
+function was deleted from `DashboardPage.tsx`, not commented out or
+feature-flagged. Its 3-field-grid/result/button JSX moved essentially
+verbatim into `SimuladorReceitaModal.tsx` (now reading `draft` instead
+of `form`, calling the local `salvar()` instead of a prop). The CSS
+classes it used (`.dashboard-simulador-grid/campo/resultado/acoes/btn/
+erro`) **stayed in `DashboardPage.css`** rather than moving to a new
+file — they're rendered inside `.hp-modal-corpo` now instead of inside
+a `.dashboard-card`, and still make sense there (the modal card already
+supplies the white background/border/shadow, so the simulator content
+itself needed no restyling, just a new container). One dead rule was
+removed: `.dashboard-simulador-sucesso` (the old inline "Premissas
+salvas." message) — no longer needed since saving now closes the modal
+immediately instead of showing an inline success line first.
+
+**The new 4th card** (`CardReceitaEstimada`, inside `SecaoResumoExecutivo`)
+— per the explicit request, visually distinct from the other 3 KPI
+cards: `--color-gold-bg` background (a pale gold wash) instead of the
+plain white the other 3 use, plus a gold-tinted icon circle
+(`--color-gold-dark` on a stronger gold tint) instead of the navy-tinted
+one every other KPI card uses. **The big number itself stays
+`--color-primary` (navy), not gold** — deliberate, follows the retheme
+session's established rule that important/prominent numbers use navy
+regardless of a card's accent color; gold here is the card's "theme,"
+not the color of the data itself. Font size for that number was reduced
+from the shared `36px` to `26px` (card-scoped override,
+`.dashboard-kpi-card-destaque .dashboard-kpi-valor`) since a currency
+string (`"R$ 12.345,00"`) is much wider than the short numbers/percentages
+the other 3 cards show — at 36px it risked overflowing the card on
+narrower viewports. Below the number: the premises as a one-line
+sentence (`"{leads} leads · {taxa}% conversão · {ticket} ticket médio"`,
+literally the example format from the request) in `--text-secondary`,
+then a small text-only "Simular cenário" button in `--color-primary`
+(a link/action, so navy per the established buttons-and-links rule, not
+gold) that just calls `setModalAberto(true)` in the parent.
+
+**Not tested in an actual browser** — same standing limitation as every
+frontend session in this project; particularly worth a close look here
+given the draft-vs-committed-state split above is exactly the kind of
+logic that's easy to get right in code review but wrong in practice
+(e.g., does the modal really discard edits on backdrop-click the way
+intended). `npm run build`/`npm run lint`/`npm run test` all clean, 18
+frontend tests unchanged (no new pure-function logic was added — the
+revenue formula itself didn't change, just where it's computed).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

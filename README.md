@@ -33,7 +33,8 @@ frontend/         React + Vite + TypeScript
     index.css               tipografia + estilos globais + badges compartilhados (consome tokens.css)
     context/AuthContext.tsx  token JWT em memória (React Context) + login/logout
     components/           Sidebar, AuthenticatedLayout, ProtectedRoute, KanbanColumn,
-                          KanbanCard, LossReasonModal, PriorityBadge
+                          KanbanCard, LossReasonModal, PriorityBadge, Modal (genérico,
+                          reutilizável), SimuladorReceitaModal
     pages/                LoginPage, KanbanPage, LeadDossierPage, DashboardPage
     App.tsx                React Router: /login (público, sem sidebar) e / + /leads/:id +
                           /dashboard (protegidas, com sidebar via AuthenticatedLayout)
@@ -720,6 +721,31 @@ interno do Docker.
   é simples demais pra função pura + teste dedicados). `npm run
   build`/`npm run lint`/`npm run test` e `pytest` limpos; sem validação
   visual real, mesma ressalva de sempre.
+- ✅ **Simulador de Receita movido pra card + modal** (21/08/2026) —
+  frontend-only, `PUT`/`GET /api/dashboard/premissas` da Fase 1 sem
+  mudança nenhuma. O simulador deixou de ser uma seção própria no fim
+  da página e virou um 4º card na seção "Resumo executivo" (fundo em
+  tom suave de dourado, o único dos 4 cards com esse destaque visual),
+  mostrando o valor calculado + as premissas atuais como texto pequeno
+  + um botão "Simular cenário" que abre um modal com os 3 campos
+  editáveis. **Primeiro modal reutilizável do projeto**
+  (`components/Modal.tsx`, novo — overlay escurecido, fecha ao clicar
+  fora/X/Esc) — o modal antigo do Kanban (`LossReasonModal.tsx`) é uma
+  implementação própria mais antiga e não foi tocado/migrado nesta
+  sessão (fora do escopo pedido), os dois convivem lado a lado com
+  classes CSS deliberadamente diferentes (`.hp-modal-*` vs. `.modal-*`)
+  pra não colidir no bundle único do Vite. Decisão de design que vale
+  entender antes de mexer: o modal (`SimuladorReceitaModal.tsx`) guarda
+  um RASCUNHO PRÓPRIO das premissas, separado do valor já salvo que o
+  card mostra — o pedido foi "cálculo atualiza em tempo real [dentro do
+  modal]" mas "AO SALVAR... atualiza o card do topo", então editar (ou
+  fechar sem salvar) nunca muda o que o card já exibe; só um `PUT` bem-
+  sucedido atualiza os dois. Nenhum teste novo (nem backend, que não
+  mudou, nem frontend — a fórmula da receita é a mesma de sempre, só
+  mudou de lugar). `npm run build`/`npm run lint`/`npm run test`
+  limpos; sem validação visual real, mesma ressalva de sempre —
+  particularmente a lógica de rascunho separado, fácil de acertar no
+  código e errar na prática.
 - ✅ 297 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
@@ -868,6 +894,20 @@ Em ordem de prioridade combinada com o cliente:
     - **Validação visual real** — mesma ressalva de sempre; peculiar
       aqui porque as duas seções são só barras horizontais posicionadas
       via `style` inline (largura em `%`), nunca vistas renderizadas.
+18. ~~Simulador de Receita movido pra card + modal~~ ✅ feito
+    (21/08/2026) — ver bullet dedicado abaixo. Pendência deixada de
+    propósito:
+    - **`LossReasonModal` (Kanban) não foi migrado pro novo componente
+      `Modal` genérico** — os dois modais convivem lado a lado hoje,
+      cada um com seu próprio estilo (`.modal-*` em `KanbanPage.css`
+      pro antigo, `.hp-modal-*` em `Modal.css` pro novo). Consolidar os
+      dois no mesmo componente é um upgrade natural pra uma sessão
+      futura, não feito aqui por estar fora do escopo pedido.
+    - **Validação visual real** — mesma ressalva de sempre; a lógica de
+      rascunho separado do modal (o card só atualiza depois de salvar,
+      editar e fechar sem salvar não deve mudar nada) é o tipo de coisa
+      fácil de acertar no código e errar na prática — primeira coisa a
+      conferir na tela de verdade.
 
 **Nota operacional:** o download do CSV trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

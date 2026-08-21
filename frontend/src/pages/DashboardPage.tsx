@@ -1,16 +1,16 @@
 import {
   ArrowRight,
-  Calculator,
+  DollarSign,
   FileSearch,
   Funnel,
   Gauge,
   Handshake,
   Landmark,
   ListChecks,
-  Loader2,
   Package,
   PartyPopper,
   Percent,
+  SlidersHorizontal,
   Target,
   ThumbsDown,
   UserCheck,
@@ -24,7 +24,6 @@ import {
   fetchFunil,
   fetchMotivosPerda,
   fetchPremissas,
-  salvarPremissas,
   UnauthorizedError,
   type AcaoRecomendada,
   type DashboardPremissas,
@@ -32,6 +31,7 @@ import {
   type FunilEtapa,
   type MotivoPerda,
 } from "../api";
+import { SimuladorReceitaModal } from "../components/SimuladorReceitaModal";
 import { useAuth } from "../context/AuthContext";
 import { formatCurrencyBRL } from "../format";
 import "./DashboardPage.css";
@@ -50,14 +50,7 @@ const ACAO_ICONES: Record<string, LucideIcon> = {
 };
 const ACAO_ICONE_PADRAO = ListChecks;
 
-/** Premissas em edição no formulário -- inputs numéricos HTML sempre
- * mandam string em `onChange`, então o form guarda os 3 campos já como
- * `number` (convertidos na hora, `|| 0` cobre o caso de campo vazio/
- * inválido) pra poder calcular a receita estimada a cada tecla sem
- * parsear de novo em outro lugar. */
-type PremissasForm = DashboardPremissas;
-
-const PREMISSAS_PADRAO: PremissasForm = { leads_qualificados: 0, taxa_fechamento: 20, ticket_medio: 1500 };
+const PREMISSAS_PADRAO: DashboardPremissas = { leads_qualificados: 0, taxa_fechamento: 20, ticket_medio: 1500 };
 
 export function DashboardPage() {
   const { token, logout } = useAuth();
@@ -66,13 +59,14 @@ export function DashboardPage() {
   const [acoes, setAcoes] = useState<AcaoRecomendada[]>([]);
   const [funil, setFunil] = useState<FunilEtapa[]>([]);
   const [motivosPerda, setMotivosPerda] = useState<MotivoPerda[]>([]);
-  const [form, setForm] = useState<PremissasForm>(PREMISSAS_PADRAO);
+  // Premissas JÁ SALVAS do simulador -- o que o card de destaque mostra.
+  // Só muda quando SimuladorReceitaModal chama `onSalvo` depois de um
+  // PUT bem-sucedido; editar dentro do modal não toca este estado (ver
+  // docstring de SimuladorReceitaModal pro porquê).
+  const [premissas, setPremissas] = useState<DashboardPremissas>(PREMISSAS_PADRAO);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
-
-  const [salvando, setSalvando] = useState(false);
-  const [erroSalvar, setErroSalvar] = useState<string | null>(null);
-  const [salvoAgora, setSalvoAgora] = useState(false);
+  const [modalAberto, setModalAberto] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -86,7 +80,7 @@ export function DashboardPage() {
       .then(([summaryData, acoesData, premissasData, funilData, motivosPerdaData]) => {
         setSummary(summaryData);
         setAcoes(acoesData);
-        setForm(premissasData);
+        setPremissas(premissasData);
         setFunil(funilData);
         setMotivosPerda(motivosPerdaData);
       })
@@ -100,28 +94,7 @@ export function DashboardPage() {
       .finally(() => setCarregando(false));
   }, [token, logout]);
 
-  async function salvar() {
-    if (!token) return;
-    setSalvando(true);
-    setErroSalvar(null);
-    setSalvoAgora(false);
-    try {
-      const salvo = await salvarPremissas(token, form);
-      setForm(salvo);
-      setSalvoAgora(true);
-      setTimeout(() => setSalvoAgora(false), 2000);
-    } catch (e) {
-      if (e instanceof UnauthorizedError) {
-        logout();
-        return;
-      }
-      setErroSalvar("Não foi possível salvar as premissas agora. Tente novamente.");
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  const receitaEstimada = form.leads_qualificados * (form.taxa_fechamento / 100) * form.ticket_medio;
+  const receitaEstimada = premissas.leads_qualificados * (premissas.taxa_fechamento / 100) * premissas.ticket_medio;
 
   return (
     <div className="dashboard-page">
@@ -135,21 +108,25 @@ export function DashboardPage() {
 
       {summary && (
         <>
-          <SecaoResumoExecutivo summary={summary} />
+          <SecaoResumoExecutivo
+            summary={summary}
+            premissas={premissas}
+            receitaEstimada={receitaEstimada}
+            onAbrirSimulador={() => setModalAberto(true)}
+          />
           <SecaoConsumoPlano summary={summary} />
           <SecaoFunil funil={funil} />
           <SecaoMotivosPerda motivos={motivosPerda} />
           <SecaoAcoesRecomendadas acoes={acoes} />
-          <SecaoSimulador
-            form={form}
-            onChange={setForm}
-            receitaEstimada={receitaEstimada}
-            salvando={salvando}
-            salvoAgora={salvoAgora}
-            erroSalvar={erroSalvar}
-            onSalvar={salvar}
-          />
         </>
+      )}
+
+      {modalAberto && (
+        <SimuladorReceitaModal
+          premissasAtuais={premissas}
+          onClose={() => setModalAberto(false)}
+          onSalvo={setPremissas}
+        />
       )}
     </div>
   );
@@ -157,7 +134,17 @@ export function DashboardPage() {
 
 // --- Resumo Executivo ----------------------------------------------------
 
-function SecaoResumoExecutivo({ summary }: { summary: DashboardSummary }) {
+function SecaoResumoExecutivo({
+  summary,
+  premissas,
+  receitaEstimada,
+  onAbrirSimulador,
+}: {
+  summary: DashboardSummary;
+  premissas: DashboardPremissas;
+  receitaEstimada: number;
+  onAbrirSimulador: () => void;
+}) {
   return (
     <section className="dashboard-section">
       <SectionHeading icon={Gauge}>Resumo executivo</SectionHeading>
@@ -165,6 +152,7 @@ function SecaoResumoExecutivo({ summary }: { summary: DashboardSummary }) {
         <KpiCard icon={Gauge} label="Score médio" valor={summary.score_medio} sufixo="/100" />
         <KpiCard icon={Handshake} label="Leads em negociação" valor={summary.leads_em_negociacao} />
         <KpiCard icon={Percent} label="Taxa de conversão" valor={summary.taxa_conversao} sufixo="%" />
+        <CardReceitaEstimada premissas={premissas} receitaEstimada={receitaEstimada} onAbrirSimulador={onAbrirSimulador} />
       </div>
     </section>
   );
@@ -181,6 +169,43 @@ function KpiCard({ icon: Icon, label, valor, sufixo }: { icon: LucideIcon; label
         {sufixo && <span className="dashboard-kpi-sufixo">{sufixo}</span>}
       </div>
       <div className="dashboard-kpi-label">{label}</div>
+    </div>
+  );
+}
+
+/**
+ * 4º card do Resumo Executivo -- visualmente diferenciado dos outros 3
+ * (pedido explícito: "destaque visual diferente... pra chamar atenção
+ * como 'esse é especial'"), fundo em tom suave de --color-gold em vez
+ * do branco/navy-accent dos outros três. Mostra o mesmo cálculo que já
+ * existia na antiga seção "Simulador de Receita" (agora só editável via
+ * modal, ver SimuladorReceitaModal.tsx), com as premissas atuais como
+ * texto pequeno de contexto embaixo do valor.
+ */
+function CardReceitaEstimada({
+  premissas,
+  receitaEstimada,
+  onAbrirSimulador,
+}: {
+  premissas: DashboardPremissas;
+  receitaEstimada: number;
+  onAbrirSimulador: () => void;
+}) {
+  return (
+    <div className="dashboard-kpi-card dashboard-kpi-card-destaque">
+      <div className="dashboard-kpi-icone">
+        <DollarSign size={20} />
+      </div>
+      <div className="dashboard-kpi-valor">{formatCurrencyBRL(receitaEstimada)}</div>
+      <div className="dashboard-kpi-label">Receita Estimada do Pipeline</div>
+      <p className="dashboard-kpi-premissas">
+        {premissas.leads_qualificados} leads · {premissas.taxa_fechamento}% conversão ·{" "}
+        {formatCurrencyBRL(premissas.ticket_medio)} ticket médio
+      </p>
+      <button type="button" className="dashboard-kpi-simular-btn" onClick={onAbrirSimulador}>
+        <SlidersHorizontal size={13} />
+        <span>Simular cenário</span>
+      </button>
     </div>
   );
 }
@@ -356,91 +381,6 @@ function SecaoAcoesRecomendadas({ acoes }: { acoes: AcaoRecomendada[] }) {
           })}
         </div>
       )}
-    </section>
-  );
-}
-
-// --- Simulador de Receita ---------------------------------------------------
-
-function SecaoSimulador({
-  form,
-  onChange,
-  receitaEstimada,
-  salvando,
-  salvoAgora,
-  erroSalvar,
-  onSalvar,
-}: {
-  form: PremissasForm;
-  onChange: (form: PremissasForm) => void;
-  receitaEstimada: number;
-  salvando: boolean;
-  salvoAgora: boolean;
-  erroSalvar: string | null;
-  onSalvar: () => void;
-}) {
-  function atualizarCampo(campo: keyof PremissasForm, valor: string) {
-    const numero = Number(valor);
-    onChange({ ...form, [campo]: Number.isFinite(numero) ? numero : 0 });
-  }
-
-  return (
-    <section className="dashboard-section">
-      <SectionHeading icon={Calculator}>Simulador de receita</SectionHeading>
-      <div className="dashboard-card">
-        <div className="dashboard-simulador-grid">
-          <label className="dashboard-simulador-campo">
-            <span>Leads qualificados/mês</span>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={form.leads_qualificados}
-              onChange={(e) => atualizarCampo("leads_qualificados", e.target.value)}
-            />
-          </label>
-          <label className="dashboard-simulador-campo">
-            <span>Taxa de fechamento (%)</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={0.1}
-              value={form.taxa_fechamento}
-              onChange={(e) => atualizarCampo("taxa_fechamento", e.target.value)}
-            />
-          </label>
-          <label className="dashboard-simulador-campo">
-            <span>Ticket médio (R$)</span>
-            <input
-              type="number"
-              min={0}
-              step={50}
-              value={form.ticket_medio}
-              onChange={(e) => atualizarCampo("ticket_medio", e.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="dashboard-simulador-resultado">
-          <span className="dashboard-simulador-resultado-label">Receita estimada / mês</span>
-          <span className="dashboard-simulador-resultado-valor">{formatCurrencyBRL(receitaEstimada)}</span>
-        </div>
-
-        <div className="dashboard-simulador-acoes">
-          <button
-            type="button"
-            className="dashboard-simulador-btn"
-            onClick={onSalvar}
-            disabled={salvando}
-            aria-busy={salvando}
-          >
-            {salvando ? <Loader2 size={15} className="spin" aria-label="Salvando..." /> : "Salvar premissas"}
-          </button>
-          {salvoAgora && <span className="dashboard-simulador-sucesso">Premissas salvas.</span>}
-          {erroSalvar && <span className="dashboard-simulador-erro">{erroSalvar}</span>}
-        </div>
-      </div>
     </section>
   );
 }
