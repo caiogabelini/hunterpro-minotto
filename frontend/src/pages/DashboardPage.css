@@ -72,19 +72,31 @@
   margin: 0;
 }
 
-/* --- Resumo executivo (KPIs) --- */
+/* --- Resumo executivo (KPIs) ---
+   5 cards desde a Receita Fechada (23/08/2026) -- o `minmax(220px, ...)`
+   antigo só cabia 4 por linha no container de 976px (max-width 1040px
+   de .dashboard-page menos os 2x --space-8 de padding), sobrando o 5º
+   numa linha sozinho. Reduzido pra minmax(176px, 1fr) + gap de
+   --space-3 (12px, era --space-4/16px): 5 colunas de ~186px cabem em
+   976px (5*188-12=928px, ainda com folga) -- ver a conta completa no
+   commit/PR que introduziu este ajuste. Continua `auto-fit`, não um
+   `repeat(5, 1fr)` fixo -- é o que já fazia o wrap responsivo pra
+   telas menores funcionar antes, e com os novos números o grid ainda
+   quebra pra 4 colunas por volta de ~1044px de viewport, 2 colunas por
+   volta de ~856px e 1 coluna abaixo de ~668px (sidebar fixa de 240px
+   descontada do viewport pra chegar na largura real do container). */
 
 .dashboard-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: var(--space-3);
 }
 
 .dashboard-kpi-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-4) var(--space-5);
   box-shadow: var(--shadow-sm);
 }
 
@@ -92,17 +104,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 10px;
   background: var(--overlay-primary-weak);
   color: var(--color-primary);
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .dashboard-kpi-valor {
   font-family: var(--font-display);
-  font-size: 36px;
+  font-size: 30px;
   color: var(--color-primary);
   line-height: 1;
 }
@@ -143,10 +155,12 @@
 
 /* Valor deste card é uma string de moeda ("R$ 12.345,00"), bem mais
    larga que os números curtos dos outros 3 KPIs -- fonte reduzida em
-   relação ao --dashboard-kpi-valor padrão (36px) pra não estourar a
-   largura do card em telas menores. */
+   relação ao --dashboard-kpi-valor padrão (30px, era 36px antes do
+   ajuste de 5 colunas) pra não estourar a largura do card, agora ainda
+   mais estreito (~186px com 5 colunas por linha, ver comentário acima
+   de .dashboard-kpi-grid). */
 .dashboard-kpi-card-destaque .dashboard-kpi-valor {
-  font-size: 26px;
+  font-size: 22px;
 }
 
 /* 5º card do Resumo Executivo (Receita Fechada) -- mesmo tratamento
@@ -166,7 +180,7 @@
 }
 
 .dashboard-kpi-card-destaque-verde .dashboard-kpi-valor {
-  font-size: 26px;
+  font-size: 22px;
 }
 
 .dashboard-kpi-premissas {

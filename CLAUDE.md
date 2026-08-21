@@ -3225,10 +3225,16 @@ placed directly after the existing `.dashboard-kpi-card-destaque` (gold)
 rules — deliberately the same structure (soft-tint background, tinted
 icon background, reduced `font-size` on the currency value for the same
 width reason as the gold card) with `rgba(22, 163, 74, ...)` (green)
-swapped in for `rgba(201, 162, 39, ...)` (gold). No grid change needed
+swapped in for `rgba(201, 162, 39, ...)` (gold). ~~No grid change needed
 — `.dashboard-kpi-grid`'s existing `repeat(auto-fit, minmax(220px,
 1fr))` already wraps a 5th card responsively without a fixed
-column-count to update.
+column-count to update.~~ **⚠️ Wrong guess, corrected the same week —
+see "Resumo Executivo grid: 5 cards per row on desktop" immediately
+below.** `auto-fit` did make the 5th card wrap onto its own row instead
+of erroring or overlapping, so nothing was visually broken, but "wraps
+gracefully" isn't the same as "still fits 4 columns' worth of card at
+the same `minmax` floor" — the floor itself needed to shrink once a 5th
+card joined the row.
 
 **Not visually validated** — same standing sandbox limitation as every
 frontend session in this project (no browser here). `npm run
@@ -3236,6 +3242,68 @@ build`/`npm run lint`/`npm run test` all clean (same 2 pre-existing
 accepted warnings, no new ones; 18 frontend tests unchanged — no new
 pure-function logic, this is UI wiring over an already-tested backend
 field).
+
+### Resumo Executivo grid: 5 cards per row on desktop (follow-up session, 2026-08-24)
+
+Real-look feedback on the "Receita Fechada" card above: the 5th card
+was wrapping onto its own row alone instead of sitting alongside the
+other 4, since `.dashboard-kpi-grid`'s `grid-template-columns:
+repeat(auto-fit, minmax(220px, 1fr))` needed a column at least 220px
+wide, and 5×220px plus 4 gaps didn't fit the page's own content width.
+
+**The math, worked from this project's own layout constants** (so a
+future session doesn't have to re-derive it): `.dashboard-page` has
+`max-width: 1040px` and `padding: var(--space-8)` (32px) each side, so
+its content area tops out at `1040 - 64 = 976px` on any viewport wide
+enough to hit that cap. The sidebar (`--sidebar-width`, 240px) never
+collapses at any breakpoint in this project (no responsive rule for it
+exists yet), so content width is `min(1040, viewport - 240) - 64` at
+narrower viewports. With the old `minmax(220px, ...)` + `gap:
+var(--space-4)` (16px), 5 columns needed `5×220 + 4×16 = 1164px` —
+more than the 976px ceiling — so `auto-fit` could only ever fit 4,
+wrapping the 5th every time, regardless of how wide the screen was.
+
+**Fix**: `minmax(220px, 1fr)` → `minmax(176px, 1fr)`, `gap:
+var(--space-4)` → `gap: var(--space-3)` (16px → 12px). 5 columns now
+need `5×176 + 4×12 = 928px`, comfortably under the 976px ceiling (48px
+to spare) — 5 cards sit in one row at the page's full max-width, which
+in practice means any viewport ≳1044px wide (`976 + 240 + 64` worked
+backwards from the content-width formula above). Below that,
+`auto-fit` keeps degrading the same way it always did — the docstring
+now sitting above `.dashboard-kpi-grid` in `DashboardPage.css` spells
+out the approximate viewport thresholds for 4/2/1 columns (~1044px,
+~856px, ~668px) so nobody has to re-derive them from scratch next time
+this grid changes. This is still `auto-fit`, not a hardcoded
+`repeat(5, 1fr)` — the responsive wrap for tablet/mobile the earlier
+paragraph already relied on is unchanged in kind, just recalibrated to
+a smaller floor.
+
+**Cards got shorter and narrower to match, not just the grid**: since
+5 narrower cards still need to hold the same content without text
+getting cut off or overlapping, `.dashboard-kpi-card` padding went
+`var(--space-5) var(--space-6)` (20px/24px) → `var(--space-4)
+var(--space-5)` (16px/20px), the icon box `40px×40px` → `36px×36px`
+with its `margin-bottom` `var(--space-3)` → `var(--space-2)`, the base
+`.dashboard-kpi-valor` font-size `36px` → `30px`, and both currency
+cards' (`.dashboard-kpi-card-destaque`/`-verde`) larger-string variant
+`26px` → `22px`. Labels, the premissas context line, and the "Simular
+cenário" button kept their existing font sizes (12px/13px) — at ~186px
+of card width minus the new padding (~146px of content width), those
+short strings still fit on one or two lines without truncation; the
+premissas line (e.g. "R$ X pontual · R$ Y/mês recorrente") may now
+wrap to 2 lines on the narrowest card width where it previously fit on
+one — accepted, since wrapping is explicitly fine per the request
+("não pode ficar cortado/sobreposto" — wrapping is neither).
+
+**Not visually validated** — same standing sandbox limitation as every
+frontend session in this project; this one is worth flagging with
+extra weight since the whole fix is a numeric prediction (976px
+ceiling, ~1044px breakpoint) that's never been rendered. `npm run
+build`/`npm run lint`/`npm run test` all clean (same 2 pre-existing
+accepted warnings, no new ones; no test run requested for this task —
+pure CSS/layout change, no pure-function logic touched; 18 frontend
+tests unchanged, 350 backend tests untouched since nothing backend
+changed).
 
 ### Migrations (`backend/alembic/`)
 

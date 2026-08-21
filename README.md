@@ -936,7 +936,16 @@ interno do Docker.
   frontend (wiring de UI sobre um campo já testado no backend). `npm
   run build`/`npm run lint`/`npm run test` (mesmos 2 avisos já aceitos)
   e `pytest` limpos; sem validação visual real, mesma ressalva de
-  sempre.
+  sempre. **Ajuste de layout (24/08/2026)**: o grid de 5 cards estava
+  quebrando o 5º pra uma linha sozinho — `.dashboard-kpi-grid` reduzido
+  de `minmax(220px, 1fr)`/gap 16px pra `minmax(176px, 1fr)`/gap 12px
+  (5 colunas cabem em 928px, dentro do teto de 976px do container),
+  cards um pouco mais estreitos/baixos (padding, ícone e fonte dos
+  números reduzidos proporcionalmente) sem cortar nenhum texto — ver
+  CLAUDE.md pra conta completa e os breakpoints aproximados de wrap
+  (~1044px/4 colunas, ~856px/2, ~668px/1). `npm run build`/`npm run
+  lint` limpos; sem `pytest`/`npm run test` (mudança pura de CSS, não
+  pedidos); sem validação visual real, mesma ressalva de sempre.
 - ✅ 350 testes automatizados passando (`pytest`) + 18 testes no
   frontend (`vitest`)
 
