@@ -91,9 +91,15 @@ def sem_tabela_de_municipios(monkeypatch, tmp_path):
     monkeypatch.setattr(celery_app.settings, "RECEITA_FEDERAL_DADOS_ABERTOS_DIR", str(tmp_path))
 
 
+# Prefixos das mensagens que são AVISO de degradação, não erro de CNPJ.
+# `busca.erros` carrega os dois; os testes de caminho feliz só se importam
+# com os erros de verdade.
+_PREFIXOS_DE_AVISO = ("Tabela de municípios", "Volume suspeito")
+
+
 def _erros_de_cnpj(busca) -> list[str]:
     """Só os erros por CNPJ, descartando os avisos de degradação da fase 1."""
-    return [e for e in (busca.erros or []) if not e.startswith("Tabela de municípios")]
+    return [e for e in (busca.erros or []) if not e.startswith(_PREFIXOS_DE_AVISO)]
 
 
 def _db_session_sqlite():
@@ -254,7 +260,10 @@ def test_semente_sem_arquivos_conclui_com_zero_cnpjs(monkeypatch):
     assert busca.status == StatusBusca.CONCLUIDO.value
     assert busca.total_cnpjs_encontrados == 0
     assert busca.total_leads_processados == 0
-    assert busca.erros == []
+    assert _erros_de_cnpj(busca) == []
+    # 0 CNPJs num filtro nacional é justamente o caso que o aviso existe
+    # pra sinalizar -- ver `_aviso_universo_suspeito`.
+    assert any("Volume suspeito" in e for e in busca.erros)
 
 
 def test_gerar_semente_leads_falha_marca_busca_como_erro(monkeypatch):
@@ -684,3 +693,63 @@ def test_cota_cheia_de_devedores_nao_processa_ninguem_sem_divida(monkeypatch, re
     assert len(processados) == 5
     assert all(cnpj in devedores for cnpj in processados)
     assert resultado["composicao_selecao"]["para_completar_cota"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Aviso de volume suspeito (`_aviso_universo_suspeito`)
+# ---------------------------------------------------------------------------
+
+
+def test_aviso_de_volume_dispara_abaixo_de_10_por_cento_da_cota():
+    # cota 60 -> limiar 6
+    assert celery_app._aviso_universo_suspeito(5, 60, "/dados") is not None
+    assert celery_app._aviso_universo_suspeito(0, 60, "/dados") is not None
+
+
+def test_aviso_de_volume_nao_dispara_no_limiar_nem_acima():
+    assert celery_app._aviso_universo_suspeito(6, 60, "/dados") is None
+    assert celery_app._aviso_universo_suspeito(1000, 60, "/dados") is None
+    assert celery_app._aviso_universo_suspeito(300_000, 60, "/dados") is None
+
+
+def test_aviso_de_volume_aponta_o_diretorio_e_a_causa_provavel():
+    aviso = celery_app._aviso_universo_suspeito(2, 60, "/dados/receita")
+
+    assert "/dados/receita" in aviso
+    assert "2 CNPJs" in aviso
+    assert "Estabelecimentos*.zip" in aviso
+
+
+def test_busca_com_universo_minusculo_registra_aviso_mas_conclui(monkeypatch, redis_fake):
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(3))
+    monkeypatch.setattr(celery_app, "_top_n_pre_selecao", lambda: 60)
+    monkeypatch.setattr(
+        celery_app, "process_lead_pipeline", lambda cnpj, razao_social=None, cache_cnes=None: None
+    )
+
+    celery_app.executar_busca_mensal(busca.id, db=db_session)
+
+    db_session.refresh(busca)
+    # não é erro -- a busca conclui e processa os 3 que existem
+    assert busca.status == StatusBusca.CONCLUIDO.value
+    assert busca.total_leads_processados == 3
+    assert any("Volume suspeito" in e for e in busca.erros)
+
+
+def test_busca_com_universo_normal_nao_registra_aviso_de_volume(monkeypatch, redis_fake):
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(500))
+    monkeypatch.setattr(celery_app, "_top_n_pre_selecao", lambda: 60)
+    monkeypatch.setattr(
+        celery_app, "process_lead_pipeline", lambda cnpj, razao_social=None, cache_cnes=None: None
+    )
+
+    celery_app.executar_busca_mensal(busca.id, db=db_session)
+
+    db_session.refresh(busca)
+    assert not any("Volume suspeito" in e for e in (busca.erros or []))

@@ -75,13 +75,76 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import re
+import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator
 
 logger = logging.getLogger(__name__)
+
+
+class ArquivoZipInvalidoError(ValueError):
+    """
+    O .zip não tem exatamente um arquivo dentro.
+
+    Herda de ValueError pra continuar sendo pego por quem captura exceções
+    genéricas (ex.: `_rodar_etapa` no pipeline, o try/except de
+    `executar_busca_mensal`), mas com tipo próprio pra quem quiser tratar
+    especificamente.
+    """
+
+
+@contextmanager
+def _abrir_csv(path: Path, encoding: str = None, delimiter: str = None):
+    """
+    Abre um arquivo de dados abertos da Receita como stream de TEXTO,
+    aceitando tanto o `.zip` baixado direto do site quanto o CSV já
+    extraído. Decide pelo sufixo do arquivo.
+
+    Os dois caminhos devolvem um objeto de arquivo pronto pro
+    `csv.reader` e são igualmente STREAMING -- em nenhum dos dois o
+    conteúdo inteiro entra na memória. `zipfile.ZipFile.open()` devolve
+    um stream binário descomprimido sob demanda, e o `io.TextIOWrapper`
+    decodifica em blocos; medido em 400 mil linhas de um CSV de 53 MB, o
+    pico de memória ficou em 0,15 MB (não proporcional ao arquivo).
+
+    Ler direto do .zip corta o pico de DISCO: hoje é preciso ter o .zip
+    e o CSV extraído ao mesmo tempo na pasta; lendo de dentro, só o .zip.
+
+    ⚠️ Um .zip com mais de um arquivo dentro levanta
+    `ArquivoZipInvalidoError` em vez de assumir o primeiro em silêncio.
+    Os arquivos da Receita têm exatamente um membro cada; um zip com
+    vários é sinal de que alguém juntou fatias manualmente, e adivinhar
+    qual usar processaria dados errados sem ninguém perceber. Zip vazio
+    dá o mesmo erro, pelo mesmo motivo.
+
+    `delimiter` é aceito e ignorado de propósito: mantém a assinatura
+    simétrica à das funções `iter_*` que chamam este helper, pra que
+    ninguém precise lembrar quais parâmetros repassar.
+    """
+    encoding = encoding or DEFAULT_ENCODING
+
+    if path.suffix.lower() != ".zip":
+        with open(path, encoding=encoding, newline="") as f:
+            yield f
+        return
+
+    with zipfile.ZipFile(path) as arquivo_zip:
+        membros = [info for info in arquivo_zip.infolist() if not info.is_dir()]
+        if len(membros) != 1:
+            nomes = [info.filename for info in membros]
+            raise ArquivoZipInvalidoError(
+                f"{path.name} tem {len(membros)} arquivos dentro (esperado exatamente 1): {nomes}. "
+                "Os arquivos de dados abertos da Receita vêm com um único membro por .zip -- "
+                "extraia o que você quer usar e coloque o CSV direto na pasta."
+            )
+        with arquivo_zip.open(membros[0]) as bruto:
+            with io.TextIOWrapper(bruto, encoding=encoding, newline="") as f:
+                yield f
 
 # ---------------------------------------------------------------------------
 # Layout confirmado contra o PDF oficial da Receita Federal (ver docstring
@@ -226,7 +289,7 @@ def iter_estabelecimentos(
     Linhas com menos colunas que o layout esperado são puladas (arquivo
     corrompido/truncado) em vez de derrubar o parser inteiro.
     """
-    with open(csv_path, encoding=encoding, newline="") as f:
+    with _abrir_csv(csv_path, encoding=encoding) as f:
         reader = csv.reader(f, delimiter=delimiter, quotechar='"')
         for row in reader:
             if len(row) < len(ESTABELECIMENTOS_COLUNAS):
@@ -278,17 +341,58 @@ def filtrar_semente_leads(
             )
 
 
-def find_estabelecimentos_rfb_files(directory: str | Path) -> list[Path]:
+def _localizar_arquivos_rfb(directory: str | Path, marcador_csv: str, prefixo_zip: str) -> list[Path]:
     """
-    Localiza os arquivos ESTABELECIMENTOS já baixados numa pasta — mesmo
-    padrão de `find_pgfn_csv_files`. A Receita nomeia os arquivos tipo
-    K3241.K03200Y0.D60411.ESTABELE (o número da fatia varia, "ESTABELE"
-    não muda).
+    Localiza os arquivos de um tipo de dado da Receita numa pasta,
+    aceitando os DOIS formatos:
+
+      - CSV já extraído -- casa por marcador no nome
+        (ex.: "ESTABELE" em `K3241.K03200Y0.D50308.ESTABELE`);
+      - `.zip` baixado direto do site -- casa por prefixo + sufixo
+        (ex.: `Estabelecimentos0.zip` ... `Estabelecimentos9.zip`).
+
+    Comparação sem diferenciar maiúscula/minúscula. Isso importa: o
+    marcador dos CSVs é MAIÚSCULO (`ESTABELE`) e o nome do .zip é
+    capitalizado (`Estabelecimentos0.zip`), então um glob case-sensitive
+    -- o comportamento até 23/08/2026 -- ignorava os .zip em silêncio, e
+    quem esquecesse de descompactar via a busca "concluir com sucesso"
+    trazendo zero leads.
+
+    ⚠️ Se a pasta tiver os dois formatos do mesmo dado, os dois vêm na
+    lista. A deduplicação acontece por CNPJ em `gerar_semente_leads`
+    (app/workers/celery_app.py), não aqui: correlacionar
+    `Estabelecimentos0.zip` com `K3241.K03200Y0.D50308.ESTABELE` pelo
+    nome não é confiável, e escolher um formato "vencedor" descartaria
+    silenciosamente fatias de quem extraiu só parte dos .zip.
     """
     dir_path = Path(directory)
     if not dir_path.exists():
         return []
-    return sorted(dir_path.glob("*ESTABELE*"))
+
+    marcador = marcador_csv.lower()
+    prefixo = prefixo_zip.lower()
+    encontrados: list[Path] = []
+    for caminho in dir_path.iterdir():
+        if not caminho.is_file():
+            continue
+        nome = caminho.name.lower()
+        eh_csv_extraido = marcador in nome and not nome.endswith(".zip")
+        eh_zip_da_receita = nome.startswith(prefixo) and nome.endswith(".zip")
+        if eh_csv_extraido or eh_zip_da_receita:
+            encontrados.append(caminho)
+    return sorted(encontrados)
+
+
+def find_estabelecimentos_rfb_files(directory: str | Path) -> list[Path]:
+    """
+    Localiza os arquivos ESTABELECIMENTOS já baixados numa pasta, nos
+    dois formatos aceitos (ver `_localizar_arquivos_rfb`):
+
+      - `.zip` direto do site: `Estabelecimentos0.zip` .. `Estabelecimentos9.zip`
+      - CSV extraído: `K3241.K03200Y0.D60411.ESTABELE` (o número da fatia
+        varia, "ESTABELE" não muda)
+    """
+    return _localizar_arquivos_rfb(directory, marcador_csv="ESTABELE", prefixo_zip="Estabelecimentos")
 
 
 def iter_empresas(
@@ -301,7 +405,7 @@ def iter_empresas(
     na memória) — mesmo padrão de `iter_estabelecimentos`, devolvendo
     cada linha como dict nomeado por `EMPRESAS_COLUNAS`.
     """
-    with open(csv_path, encoding=encoding, newline="") as f:
+    with _abrir_csv(csv_path, encoding=encoding) as f:
         reader = csv.reader(f, delimiter=delimiter, quotechar='"')
         for row in reader:
             if len(row) < len(EMPRESAS_COLUNAS):
@@ -361,15 +465,13 @@ def enriquecer_com_razao_social(
 
 def find_empresas_rfb_files(directory: str | Path) -> list[Path]:
     """
-    Localiza os arquivos EMPRESAS já baixados numa pasta — mesmo padrão
-    de `find_estabelecimentos_rfb_files`. A Receita nomeia os arquivos
-    tipo K3241.K03200Y0.D10612.EMPRECSV (o número da fatia varia,
-    "EMPRECSV" não muda).
+    Localiza os arquivos EMPRESAS já baixados numa pasta, nos dois
+    formatos aceitos (ver `_localizar_arquivos_rfb`):
+
+      - `.zip` direto do site: `Empresas0.zip` .. `Empresas9.zip`
+      - CSV extraído: `K3241.K03200Y0.D10612.EMPRECSV`
     """
-    dir_path = Path(directory)
-    if not dir_path.exists():
-        return []
-    return sorted(dir_path.glob("*EMPRECSV*"))
+    return _localizar_arquivos_rfb(directory, marcador_csv="EMPRECSV", prefixo_zip="Empresas")
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +510,7 @@ def iter_municipios(
     `iter_estabelecimentos`/`iter_empresas`. Linhas com menos colunas que
     o layout esperado são puladas.
     """
-    with open(csv_path, encoding=encoding, newline="") as f:
+    with _abrir_csv(csv_path, encoding=encoding) as f:
         reader = csv.reader(f, delimiter=delimiter, quotechar='"')
         for row in reader:
             if len(row) < len(MUNICIPIOS_COLUNAS):
@@ -448,7 +550,7 @@ def build_municipios_index(
                 descricao = linha["descricao"].strip()
                 if codigo and descricao:
                     indice[codigo] = descricao
-        except (OSError, UnicodeDecodeError, csv.Error):
+        except (OSError, UnicodeDecodeError, csv.Error, zipfile.BadZipFile, ArquivoZipInvalidoError):
             logger.exception("Falha lendo a tabela de municípios da RFB em %s -- ignorando esse arquivo.", path)
             continue
     return indice
@@ -456,12 +558,10 @@ def build_municipios_index(
 
 def find_municipios_rfb_files(directory: str | Path) -> list[Path]:
     """
-    Localiza a tabela de domínio de municípios já baixada — mesmo padrão
-    de `find_estabelecimentos_rfb_files`/`find_empresas_rfb_files`. A
-    Receita nomeia o arquivo como F.K03200$Z.D<data>.MUNICCSV ("MUNICCSV"
-    é a parte estável do nome).
+    Localiza a tabela de domínio de municípios já baixada, nos dois
+    formatos aceitos (ver `_localizar_arquivos_rfb`):
+
+      - `.zip` direto do site: `Municipios.zip`
+      - CSV extraído: `F.K03200$Z.D<data>.MUNICCSV`
     """
-    dir_path = Path(directory)
-    if not dir_path.exists():
-        return []
-    return sorted(dir_path.glob("*MUNICCSV*"))
+    return _localizar_arquivos_rfb(directory, marcador_csv="MUNICCSV", prefixo_zip="Municipios")

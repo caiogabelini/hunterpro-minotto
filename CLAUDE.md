@@ -360,6 +360,60 @@ expected in production with the real same-month files. `razao_social` is
 the primary field on the `gerar_semente_leads` output; `nome_fantasia` is
 the fallback, chosen by `nome_busca_google_places()` in `celery_app.py`.
 
+**Reads `.zip` directly, no extraction needed (2026-08-23).** All three
+`iter_*` functions go through `_abrir_csv(path)`, which branches on
+`path.suffix == ".zip"`: `zipfile.ZipFile` + `io.TextIOWrapper` for zips,
+plain `open()` otherwise. Both paths stream — peak memory measured at
+0.15 MB over 400k rows of a 53 MB CSV, not proportional to file size.
+Reading from the zip halves peak *disk* (no need to hold zip + extracted
+CSV simultaneously). Already-extracted CSVs keep working unchanged.
+
+A zip with anything other than exactly one member raises
+`ArquivoZipInvalidoError` (a `ValueError` subclass) listing the members,
+rather than silently assuming the first — RFB zips ship one file each, so
+several members means someone assembled it by hand and guessing would
+process the wrong data invisibly. `build_municipios_index` catches it
+(along with `BadZipFile`) to preserve its documented never-raises
+contract; for Estabelecimentos/Empresas it propagates and fails the
+search loudly.
+
+**Finders accept both naming conventions**, case-insensitively, via
+`_localizar_arquivos_rfb(directory, marcador_csv, prefixo_zip)`:
+
+| Data | zip | extracted CSV |
+|---|---|---|
+| Estabelecimentos | `Estabelecimentos0.zip`…`9.zip` | `*ESTABELE*` |
+| Empresas | `Empresas0.zip`…`9.zip` | `*EMPRECSV*` |
+| Municípios | `Municipios.zip` | `*MUNICCSV*` |
+
+⚠️ **The silent trap this fixed.** The old globs were case-sensitive
+(`*ESTABELE*`), and `Estabelecimentos0.zip` matched none of them. A folder
+containing only the zips returned `{"status": "sem_arquivos"}`, which
+`executar_busca_mensal` treats as **"concluded with 0 CNPJs"** — forget to
+extract, and the search reports success with zero leads and no clue why.
+Neither the README nor this file had ever documented that the download is
+a zip needing extraction.
+
+**`gerar_semente_leads` now dedupes by CNPJ.** Necessary *because* the
+finders match both formats: a folder holding `Estabelecimentos0.zip` and
+its extracted CSV returns both paths, and without dedup the same CNPJ
+would enter the seed twice — double the paid API calls to write the same
+`Lead` (the CNPJ upsert would hide the waste in the DB). Deduping by CNPJ
+rather than picking a "winning" format is deliberate: correlating a zip
+with its extracted CSV by filename isn't reliable, and preferring one
+format would silently drop shards from anyone who extracted only some of
+the zips. Logs a warning naming the likely cause.
+
+**Suspicious-volume warning** (`_aviso_universo_suspeito` in
+`celery_app.py`): fires when the seed returns less than
+`_LIMIAR_UNIVERSO_SUSPEITO` (10%) of the quota — under 6 CNPJs at the
+default 60. Goes to the log *and* to `busca.erros`, so it surfaces in the
+admin panel. Covers what remains of the missing-file class of problem
+(missing shard, renamed file, partial download) now that the
+zips-ignored case is gone. Not an error — the search still processes
+whatever it found. The threshold is deliberately low: it catches
+"clearly wrong", not "smaller universe than expected".
+
 **`municipio` here is not an IBGE code** — it's an RFB-internal
 jurisdiction code from RFB's own domain table, unrelated to IBGE codes.
 Don't feed it to `ibge_municipios.py` or CNES; `enrich_receita_federal`'s

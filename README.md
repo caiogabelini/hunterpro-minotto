@@ -1186,12 +1186,62 @@ navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar
 `refresh_pgfn_index`. Automação desse download fica para uma sessão
 futura, se valer a pena frente ao volume (atualiza só 1x por trimestre).
-Mesma lógica pros arquivos ESTABELECIMENTOS **e** EMPRESAS da Receita
-Federal (arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/,
-atualização mensal, publicados juntos no mesmo lote) — baixar manualmente
-e colocar os dois em `RECEITA_FEDERAL_DADOS_ABERTOS_DIR` antes de rodar
-`gerar_semente_leads`. Sem o(s) arquivo(s) EMPRESAS na pasta, a task
-ainda funciona (filtra e devolve os CNPJs), só que sem razão social.
+Mesma lógica pros arquivos da Receita Federal
+(arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/, atualização
+mensal, publicados juntos no mesmo lote) — baixar manualmente e colocar em
+`RECEITA_FEDERAL_DADOS_ABERTOS_DIR` antes de rodar `gerar_semente_leads`.
+**Não é preciso descompactar** — ver "Arquivos da Receita: .zip ou
+extraído" logo abaixo. Sem o(s) arquivo(s) EMPRESAS na pasta, a task ainda
+funciona (filtra e devolve os CNPJs), só que sem razão social.
+
+### Arquivos da Receita: `.zip` ou extraído (as duas formas funcionam)
+
+Desde 23/08/2026 o parser lê **direto de dentro do `.zip`**, em streaming,
+sem nunca escrever o CSV descompactado no disco. Coloque na pasta o que
+for mais conveniente — os dois formatos são reconhecidos, e podem até
+conviver:
+
+| Dado | `.zip` (direto do site) | CSV já extraído |
+|---|---|---|
+| Estabelecimentos | `Estabelecimentos0.zip` … `Estabelecimentos9.zip` | `K3241.K03200Y0.D<data>.ESTABELE` |
+| Empresas | `Empresas0.zip` … `Empresas9.zip` | `K3241.K03200Y0.D<data>.EMPRECSV` |
+| Municípios | `Municipios.zip` | `F.K03200$Z.D<data>.MUNICCSV` |
+
+**Por que usar o `.zip`:** corta o pico de disco pela metade ou mais.
+Extraindo, é preciso ter o `.zip` **e** o CSV ao mesmo tempo na pasta;
+lendo de dentro, só o `.zip`. O consumo de memória é o mesmo nos dois
+casos — medido em 400 mil linhas de um CSV de 53 MB, o pico ficou em
+0,15 MB, não proporcional ao arquivo.
+
+**Se a pasta tiver os dois formatos do mesmo lote**, ambos são lidos e a
+semente **deduplica por CNPJ** — nenhum CNPJ é enriquecido duas vezes (o
+que gastaria API em dobro). Um warning no log informa quantas duplicatas
+foram descartadas.
+
+**Um `.zip` com mais de um arquivo dentro** levanta
+`ArquivoZipInvalidoError` com a lista dos membros, em vez de adivinhar
+qual usar. Os arquivos da Receita têm exatamente um membro cada.
+
+⚠️ **Armadilha corrigida (23/08/2026):** antes disso os localizadores
+usavam globs case-sensitive (`*ESTABELE*`), e `Estabelecimentos0.zip` não
+casava com nenhum deles. Uma pasta só com os `.zip` devolvia
+`{"status": "sem_arquivos"}`, que `executar_busca_mensal` tratava como
+**"concluído com 0 CNPJs"** — quem esquecesse de descompactar via a busca
+terminar "com sucesso" sem nenhum lead e sem pista do motivo.
+
+### Aviso de volume suspeito
+
+Como rede de segurança para o que sobrou dessa classe de problema (fatia
+faltando, arquivo renomeado, download parcial), `executar_busca_mensal`
+emite um **warning** — no log e em `busca.erros`, visível no painel admin
+— quando a semente traz menos de **10% da cota** (com a cota padrão de 60,
+dispara abaixo de 6 CNPJs).
+
+O nicho é nacional, então o universo esperado é de centenas de milhares.
+Um punhado de CNPJs quase nunca significa "o nicho tem poucas empresas";
+significa arquivo faltando. O limiar é propositalmente baixo: pega
+"claramente algo errado", não opina sobre um universo apenas menor que o
+esperado. **Não é erro** — a busca continua e processa o que existe.
 
 **Nota operacional (19/08/2026):** `FIRECRAWL_API_KEY` foi adicionada em
 `app/core/config.py` mas **não** em `backend/.env.example` — o sandbox

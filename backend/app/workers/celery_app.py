@@ -143,6 +143,38 @@ def gerar_semente_leads(
         filtrar_semente_leads(estabelecimentos_paths, ufs=set(ufs) if ufs else None, regiao=regiao)
     )
 
+    # Deduplica por CNPJ. Necessário desde 23/08/2026, quando os finders
+    # passaram a reconhecer TAMBÉM os .zip da Receita: uma pasta com
+    # `Estabelecimentos0.zip` e o CSV extraído dele lado a lado devolve os
+    # dois caminhos, e sem isto o mesmo CNPJ entraria duas vezes na semente
+    # -- gastando o dobro de chamadas pagas no pipeline pra gravar o mesmo
+    # Lead (o upsert por CNPJ esconderia o desperdício no banco).
+    #
+    # Deduplicar por CNPJ em vez de escolher um formato "vencedor" é
+    # deliberado: correlacionar zip e CSV extraído pelo nome não é
+    # confiável, e preferir um formato descartaria fatias de quem extraiu
+    # só parte dos .zip. Também protege contra sobreposição entre fatias,
+    # qualquer que seja a causa.
+    total_bruto = len(estabelecimentos)
+    vistos: set[str] = set()
+    unicos = []
+    for estabelecimento in estabelecimentos:
+        if estabelecimento.cnpj in vistos:
+            continue
+        vistos.add(estabelecimento.cnpj)
+        unicos.append(estabelecimento)
+    estabelecimentos = unicos
+
+    if total_bruto != len(estabelecimentos):
+        logger.warning(
+            "gerar_semente_leads: %s CNPJs duplicados descartados (%s -> %s). "
+            "Causa provável: a pasta %s tem o .zip E o CSV extraído do mesmo lote.",
+            total_bruto - len(estabelecimentos),
+            total_bruto,
+            len(estabelecimentos),
+            settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR,
+        )
+
     empresas_paths = find_empresas_rfb_files(settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR)
     if empresas_paths:
         estabelecimentos = enriquecer_com_razao_social(estabelecimentos, empresas_paths)
@@ -972,6 +1004,43 @@ def process_lead_pipeline(
 
 _CRITERIO_ERRO_TAXA_FALHA = 0.5  # >50% dos CNPJs SELECIONADOS falharam -> status "erro"
 
+# Abaixo de 10% da cota, o universo da semente é suspeito de estar
+# incompleto -- ver `_aviso_universo_suspeito`.
+_LIMIAR_UNIVERSO_SUSPEITO = 0.10
+
+
+def _aviso_universo_suspeito(total_encontrado: int, top_n: int, diretorio: str) -> str | None:
+    """
+    Devolve um aviso se a semente trouxe CNPJs demais de menos, ou None se
+    o volume parece normal.
+
+    O nicho é nacional (CNAE 8630 em todo o Brasil), então o universo
+    esperado é de centenas de milhares. Um punhado de CNPJs quase nunca
+    significa "o nicho tem poucas empresas" -- significa arquivo faltando,
+    arquivo mal nomeado, ou só uma fatia dos .zip na pasta.
+
+    Esse cenário era INDISTINGUÍVEL de uma busca legítima até 23/08/2026:
+    a busca concluía "com sucesso" trazendo quase nada e nada na tela
+    explicava por quê. O caso mais grave (só .zip na pasta, todos
+    ignorados por glob case-sensitive) foi eliminado na mesma data, quando
+    os finders passaram a reconhecer os dois formatos -- este aviso cobre
+    o que sobrou: fatia faltando, arquivo renomeado, download parcial.
+
+    O limiar é 10% da cota (com a cota padrão de 60, dispara abaixo de 6).
+    É proposital que seja bem baixo: o objetivo é pegar "claramente algo
+    errado", não opinar sobre um universo apenas menor que o esperado.
+    """
+    limite = top_n * _LIMIAR_UNIVERSO_SUSPEITO
+    if total_encontrado >= limite:
+        return None
+    return (
+        f"Volume suspeito: a semente trouxe apenas {total_encontrado} CNPJs, menos de "
+        f"{_LIMIAR_UNIVERSO_SUSPEITO:.0%} da cota de {top_n}. Para um filtro NACIONAL de CNAE 8630 "
+        f"isso quase certamente indica arquivo da Receita ausente, incompleto ou mal nomeado em "
+        f"{diretorio} -- e não que o nicho tem poucas empresas. Confira se os arquivos "
+        f"Estabelecimentos*.zip (ou os CSVs *ESTABELE*) estão todos lá."
+    )
+
 
 def _top_n_pre_selecao() -> int:
     """
@@ -1170,11 +1239,22 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         busca.total_cnpjs_encontrados = len(estabelecimentos)
         db_session.commit()
 
+        # Avisos de degradação -- não são erros, mas ficam em `busca.erros`
+        # pra aparecerem no painel admin em vez de só no log do container.
+        avisos: list[str] = []
+        top_n = _top_n_pre_selecao()
+        aviso_volume = _aviso_universo_suspeito(
+            len(estabelecimentos), top_n, settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR
+        )
+        if aviso_volume:
+            logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso_volume)
+            avisos.append(aviso_volume)
+
         if not estabelecimentos:
             busca.status = StatusBusca.CONCLUIDO.value
             busca.total_cnpjs_selecionados = 0
             busca.total_leads_processados = 0
-            busca.erros = []
+            busca.erros = avisos
             busca.concluido_em = agora_utc()
             db_session.commit()
             logger.warning(
@@ -1188,7 +1268,7 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                 "total_cnpjs_encontrados": 0,
                 "total_cnpjs_selecionados": 0,
                 "total_leads_processados": 0,
-                "erros": [],
+                "erros": avisos,
             }
 
         # --- FASE 1b: sinais gratuitos + pré-seleção --------------------------
@@ -1213,7 +1293,6 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             logger.exception("executar_busca_mensal: coleta de sinais gratuitos falhou pra busca %s.", busca_id)
             return _abortar(f"pré-seleção (sinais gratuitos): {exc}")
 
-        avisos: list[str] = []
         if not municipios_por_codigo:
             # Degradação real, registrada onde o admin vê. Sem a tabela de
             # municípios não dá pra saber quem está em Zona Franca antes de
@@ -1226,7 +1305,6 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso)
             avisos.append(aviso)
 
-        top_n = _top_n_pre_selecao()
         selecionados = selecionar_melhores_candidatos(candidatos, top_n)
         busca.total_cnpjs_selecionados = len(selecionados)
         db_session.commit()
