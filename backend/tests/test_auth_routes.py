@@ -6,7 +6,7 @@ Usa um banco SQLite em memória (mesmo padrão de test_process_lead_pipeline.py)
 injetado via `app.dependency_overrides[get_db]` — não precisa de Postgres
 real rodando.
 """
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -111,7 +111,7 @@ def test_rota_protegida_com_token_invalido_retorna_401(client):
 
 def test_rota_protegida_com_token_expirado_retorna_401(client, usuario_admin):
     token_expirado = jwt.encode(
-        {"user_id": usuario_admin.id, "role": usuario_admin.role, "exp": datetime.utcnow() - timedelta(minutes=1)},
+        {"user_id": usuario_admin.id, "role": usuario_admin.role, "exp": datetime.now(UTC) - timedelta(minutes=1)},
         settings.SECRET_KEY,
         algorithm=JWT_ALGORITHM,
     )

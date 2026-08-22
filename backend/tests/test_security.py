@@ -2,7 +2,7 @@
 Testes de app/core/security.py — hash de senha (bcrypt/passlib) e JWT
 (python-jose).
 """
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from jose import jwt
 
@@ -61,7 +61,7 @@ def test_decode_token_invalido_retorna_none():
 
 def test_decode_token_expirado_retorna_none():
     token_expirado = jwt.encode(
-        {"user_id": "abc123", "exp": datetime.utcnow() - timedelta(minutes=1)},
+        {"user_id": "abc123", "exp": datetime.now(UTC) - timedelta(minutes=1)},
         settings.SECRET_KEY,
         algorithm=JWT_ALGORITHM,
     )

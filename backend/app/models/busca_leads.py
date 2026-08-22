@@ -15,6 +15,7 @@ from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.tempo import agora_utc
 
 
 class StatusBusca(str, Enum):
@@ -28,7 +29,7 @@ class BuscaLeads(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     iniciado_por_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True)
-    iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    iniciado_em: Mapped[datetime] = mapped_column(DateTime, default=agora_utc)
     # None até a task terminar (com sucesso ou erro) -- é o próprio
     # `concluido_em is None` que sinaliza "ainda executando" pro
     # polling do frontend, junto com `status`.

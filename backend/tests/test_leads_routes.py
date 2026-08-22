@@ -473,7 +473,7 @@ def test_get_lead_sem_insights_gerados_retorna_null(client, db_session, token):
 def test_listar_mensagens_retorna_so_a_mais_recente_por_canal(client, db_session, token):
     # gerado_em explícito (não o default() do modelo) pra garantir ordem
     # determinística entre as duas mensagens de email -- não depender da
-    # resolução do relógio entre dois datetime.utcnow() em sequência.
+    # resolução do relógio entre duas chamadas de agora_utc() em sequência.
     lead = _criar_lead(db_session)
     db_session.add(
         LeadMessage(

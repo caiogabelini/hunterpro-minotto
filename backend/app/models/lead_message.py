@@ -17,6 +17,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.tempo import agora_utc
 
 
 class CanalMensagem(str, Enum):
@@ -36,4 +37,4 @@ class LeadMessage(Base):
     canal: Mapped[str] = mapped_column(String(10))  # "email" | "whatsapp" (CanalMensagem.value)
     conteudo: Mapped[str] = mapped_column(Text)
     assunto: Mapped[str | None] = mapped_column(Text, nullable=True)  # só faz sentido pro canal "email"
-    gerado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    gerado_em: Mapped[datetime] = mapped_column(DateTime, default=agora_utc)

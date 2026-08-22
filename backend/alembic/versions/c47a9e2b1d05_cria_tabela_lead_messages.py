@@ -23,7 +23,7 @@ regra de cascade explícita nesta sessão, não foi pedido) e um índice
 registro quando a IA gerou algo não-vazio); `assunto` é nullable (só o
 canal "email" preenche) e `gerado_em` é `NOT NULL` sem `server_default`
 — mesma convenção de `created_at`/`updated_at` em `leads`
-(`e119018824e8`), que também confiam só no `default=datetime.utcnow` do
+(`e119018824e8`), que também confiam só no `default=agora_utc` (antes `datetime.utcnow`) do
 lado do SQLAlchemy, não num default do banco.
 
 ✅ VALIDADO CONTRA POSTGRES REAL EM 20/08/2026 — mesmo processo das

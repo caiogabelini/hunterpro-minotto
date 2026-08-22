@@ -82,11 +82,11 @@ app/services/site_scraping.py); `process_lead_pipeline` pula essa etapa
 também se a chave não estiver configurada ou se não houver `site_url`.
 """
 import logging
-from datetime import datetime
 
 from celery import Celery
 
 from app.core.config import settings
+from app.core.tempo import agora_utc
 
 logger = logging.getLogger(__name__)
 
@@ -958,7 +958,7 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             logger.exception("executar_busca_mensal: gerar_semente_leads falhou pra busca %s.", busca_id)
             busca.status = StatusBusca.ERRO.value
             busca.erros = [f"gerar_semente_leads: {exc}"]
-            busca.concluido_em = datetime.utcnow()
+            busca.concluido_em = agora_utc()
             db_session.commit()
             return {"busca_id": busca_id, "status": busca.status, "erros": busca.erros}
 
@@ -981,7 +981,7 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         busca.status = StatusBusca.ERRO.value if taxa_falha > _CRITERIO_ERRO_TAXA_FALHA else StatusBusca.CONCLUIDO.value
         busca.total_leads_processados = total_processados
         busca.erros = erros
-        busca.concluido_em = datetime.utcnow()
+        busca.concluido_em = agora_utc()
         db_session.commit()
 
         return {

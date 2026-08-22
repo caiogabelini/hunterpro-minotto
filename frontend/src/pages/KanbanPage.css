@@ -170,49 +170,80 @@
   line-height: 1.4;
 }
 
-/* Overlay de fundo do modal -- preto semi-transparente escurecendo a
-   página por trás; convenção universal de scrim, independente de tema
-   claro/escuro (a página por trás continua precisando escurecer pra
-   destacar o modal, tema claro ou não). */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-  padding: 24px;
-}
+/* --- Conteúdo interno dos modais do Kanban ---
+   `LossReasonModal` e `FechamentoModal` renderizam os dois dentro do
+   `Modal` genérico (components/Modal.tsx + Modal.css), que já entrega
+   overlay, card, header, botão X e fechar-com-Esc. As classes abaixo
+   estilizam só o conteúdo interno.
 
-.modal-card {
-  width: 100%;
-  max-width: 380px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: var(--space-6);
-  display: flex;
-  flex-direction: column;
-  box-shadow: var(--shadow-lg);
-}
-
-.modal-title {
-  font-family: var(--font-display);
-  font-weight: 400;
-  font-size: 20px;
-  margin: 0 0 4px;
-  color: var(--text-primary);
-}
-
-.modal-subtitle {
+   O prefixo é neutro (`kanban-modal-*`, não `perda-`/`fechamento-`)
+   porque o subtítulo (razão social) e a barra de ações
+   Cancelar/Confirmar são idênticos nos dois modais -- manter um
+   prefixo por modal significaria duas cópias byte a byte da mesma
+   regra, que é exatamente a duplicação que a migração do
+   `LossReasonModal` veio remover. Estilo exclusivo de um modal só
+   continua com o prefixo dele (ex.: `.perda-modal-textarea`,
+   `.fechamento-modal-checkbox`). */
+.kanban-modal-subtitulo {
+  margin: 0 0 var(--space-5);
   font-size: 13px;
   color: var(--text-secondary);
-  margin: 0 0 16px;
 }
 
-.modal-textarea {
+.kanban-modal-acoes {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.kanban-modal-btn-cancelar {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.kanban-modal-btn-cancelar:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.kanban-modal-btn-confirmar {
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font-body);
+  transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.kanban-modal-btn-confirmar:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+  box-shadow: var(--shadow-primary-hover);
+}
+
+.kanban-modal-btn-confirmar:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Conteúdo exclusivo do LossReasonModal (components/LossReasonModal.tsx) ---
+   Só o textarea do motivo; o resto (subtítulo, ações) vem das classes
+   compartilhadas acima. */
+.perda-modal-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  display: block;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -222,52 +253,13 @@
   font-family: var(--font-body);
   min-height: 90px;
   resize: vertical;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   transition: border-color var(--transition-fast);
 }
 
-.modal-textarea:focus {
+.perda-modal-textarea:focus {
   outline: none;
   border-color: var(--color-primary);
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
-.modal-btn-secondary,
-.modal-btn-primary {
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: var(--font-body);
-  border: none;
-  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
-}
-
-.modal-btn-secondary {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-}
-
-.modal-btn-secondary:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.modal-btn-primary {
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.modal-btn-primary:hover {
-  background: var(--color-primary-dark);
-  box-shadow: var(--shadow-primary-hover);
 }
 
 /* --- Conteúdo do FechamentoModal (components/FechamentoModal.tsx) ---
@@ -279,11 +271,6 @@
    radios usam `accent-color` (suportado por todo navegador moderno)
    pra herdar a cor da marca sem precisar de um componente customizado
    -- controle nativo, só recolorido. */
-.fechamento-modal-subtitulo {
-  margin: 0 0 var(--space-5);
-  font-size: 13px;
-  color: var(--text-secondary);
-}
 
 .fechamento-modal-secao {
   margin-bottom: var(--space-5);
@@ -381,49 +368,6 @@
   border-color: var(--color-primary);
 }
 
-.fechamento-modal-acoes {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
-}
 
-.fechamento-modal-btn-cancelar {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: var(--font-body);
-  transition: border-color var(--transition-fast), color var(--transition-fast);
-}
 
-.fechamento-modal-btn-cancelar:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
 
-.fechamento-modal-btn-confirmar {
-  background: var(--color-primary);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  font-family: var(--font-body);
-  transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
-}
-
-.fechamento-modal-btn-confirmar:hover:not(:disabled) {
-  background: var(--color-primary-dark);
-  box-shadow: var(--shadow-primary-hover);
-}
-
-.fechamento-modal-btn-confirmar:disabled {
-  opacity: 0.5;
-  cursor: default;
-}

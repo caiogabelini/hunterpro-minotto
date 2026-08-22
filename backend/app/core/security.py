@@ -11,7 +11,7 @@ batendo nesse bug de verdade em 20/08/2026 (bcrypt 4.0.1 é o que instala
 por padrão via `passlib[bcrypt]`, sem uma versão travada). Não trocar a
 versão do bcrypt sem revalidar essa combinação.
 """
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -42,7 +42,7 @@ def create_access_token(data: dict) -> str:
     `settings.ACCESS_TOKEN_EXPIRE_MINUTES` minutos a partir de agora.
     """
     to_encode = data.copy()
-    to_encode["exp"] = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode["exp"] = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 

@@ -7,9 +7,10 @@ import { Modal } from "./Modal";
  * Modal de dados de fechamento -- aberto quando um card é arrastado pra
  * coluna "Ganho" no Kanban (mesmo gatilho estrutural de
  * `LossReasonModal` pra "Perdido", espelhado do lado positivo). Usa o
- * `Modal` genérico (ver components/Modal.tsx), diferente de
- * `LossReasonModal`, que é uma implementação ad-hoc mais antiga e não
- * foi migrada nesta sessão (fora do escopo do pedido).
+ * `Modal` genérico (ver components/Modal.tsx), assim como
+ * `LossReasonModal` -- as classes de conteúdo comuns aos dois
+ * (subtítulo e barra de ações) ficam no prefixo `kanban-modal-*` em
+ * pages/KanbanPage.css; as específicas daqui, em `fechamento-modal-*`.
  */
 export function FechamentoModal({
   razaoSocial,
@@ -57,7 +58,7 @@ export function FechamentoModal({
 
   return (
     <Modal titulo="Detalhes do fechamento" onClose={onCancel}>
-      <p className="fechamento-modal-subtitulo">{razaoSocial}</p>
+      <p className="kanban-modal-subtitulo">{razaoSocial}</p>
 
       <div className="fechamento-modal-secao">
         <span className="fechamento-modal-label">Serviços vendidos</span>
@@ -129,13 +130,13 @@ export function FechamentoModal({
         />
       </div>
 
-      <div className="fechamento-modal-acoes">
-        <button type="button" className="fechamento-modal-btn-cancelar" onClick={onCancel}>
+      <div className="kanban-modal-acoes">
+        <button type="button" className="kanban-modal-btn-cancelar" onClick={onCancel}>
           Cancelar
         </button>
         <button
           type="button"
-          className="fechamento-modal-btn-confirmar"
+          className="kanban-modal-btn-confirmar"
           onClick={confirmar}
           disabled={!podeConfirmar}
         >

@@ -15,6 +15,7 @@ from sqlalchemy import JSON, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.core.tempo import agora_utc
 
 
 class UserRole(str, Enum):
@@ -38,4 +39,4 @@ class User(Base):
     # sozinho. Ver app/api/routes/dashboard.py.
     dashboard_premissas: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=agora_utc)

@@ -9,14 +9,17 @@ import "./Modal.css";
  * custo de adicionar é um `useEffect` de poucas linhas -- baixo risco,
  * comportamento que todo usuário já espera.
  *
- * Deliberadamente com nomes de classe prefixados (`hp-modal-*`), não
- * `.modal-*` -- o projeto já tem um modal ad-hoc (`LossReasonModal.tsx`,
- * classes `.modal-backdrop`/`.modal-card`/etc. definidas em
- * `pages/KanbanPage.css`) que não foi tocado nesta sessão (fora do
- * escopo do pedido). Como o build do Vite concatena todo CSS importado
- * num único arquivo, reusar os mesmos nomes de classe aqui colidiria
- * com o estilo do modal do Kanban -- o prefixo evita isso sem precisar
- * refatorar o componente existente.
+ * Nomes de classe prefixados (`hp-modal-*`) porque o build do Vite
+ * concatena todo CSS importado num único arquivo -- nomes genéricos
+ * como `.modal-card` colidiriam com qualquer outra folha de estilo da
+ * aplicação. O prefixo era originalmente também pra não colidir com o
+ * `LossReasonModal` ad-hoc, que definia `.modal-*` em
+ * `pages/KanbanPage.css`; esse modal foi migrado pra cá desde então e
+ * aquelas classes não existem mais, mas o prefixo continua valendo
+ * como higiene de nome.
+ *
+ * Usado por `LossReasonModal`, `FechamentoModal` e
+ * `SimuladorReceitaModal` -- é o único padrão de modal do projeto.
  */
 export function Modal({
   titulo,

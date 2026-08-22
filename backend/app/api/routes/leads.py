@@ -1,11 +1,10 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
+from app.core.tempo import agora_utc
 from app.models.lead import KanbanStatus, Lead
 from app.models.lead_message import CanalMensagem, LeadMessage
 from app.models.user import User
@@ -371,7 +370,7 @@ def gerar_insights(
         )
 
     lead.insights_ia = resultado
-    lead.insights_gerado_em = datetime.utcnow()
+    lead.insights_gerado_em = agora_utc()
     db.commit()
     db.refresh(lead)
     return lead

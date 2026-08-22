@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from app.core.database import Base, get_db
 from app.core.security import create_access_token, hash_password
+from app.core.tempo import agora_utc
 from app.main import app
 from app.models.lead import Lead
 from app.models.user import User, UserRole
@@ -76,7 +77,7 @@ def _criar_lead(db_session, **overrides) -> Lead:
 
 
 def test_summary_leads_no_mes_conta_so_leads_do_mes_corrente(client, db_session, token):
-    agora = datetime.utcnow()
+    agora = agora_utc()
     inicio_mes = datetime(agora.year, agora.month, 1)
     _criar_lead(db_session, sufixo="11", created_at=inicio_mes + timedelta(days=1))
     _criar_lead(db_session, sufixo="22", created_at=inicio_mes + timedelta(days=2))

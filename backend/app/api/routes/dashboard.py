@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.tempo import agora_utc
 from app.models.lead import Lead
 from app.models.user import User
 from app.schemas.dashboard import AcaoRecomendada, DashboardPremissas, DashboardSummary, FunilEtapa, MotivoPerda
@@ -61,7 +62,7 @@ _TICKET_MEDIO_PADRAO = 1500.0
 
 
 def _inicio_do_mes_atual() -> datetime:
-    agora = datetime.utcnow()
+    agora = agora_utc()
     return datetime(agora.year, agora.month, 1)
 
 
