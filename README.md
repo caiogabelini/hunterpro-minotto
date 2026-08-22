@@ -1356,28 +1356,62 @@ Depois da primeira execução real, comparar `total_leads_processados` com
 `total_cnpjs_selecionados` na tabela `buscas_leads` dá a taxa real e
 permite ajustar com dado em vez de palpite.
 
-### ⚠️ Efeito emergente: Zona Franca pode dominar o lote
+### Seleção em duas fases: dívida ativa primeiro
 
-Os pesos foram fechados com o Douglas para **ranquear leads já
-encontrados**, não para **decidir quem é enriquecido**. Reaproveitá-los
-como porta de entrada tem uma consequência que ninguém aprovou
-explicitamente:
+**Dívida ativa é o principal critério de venda do Douglas** — é o que ele
+quer priorizar de verdade na entrada do processamento. A seleção reflete
+isso com prioridade **estrutural**, não com calibragem de peso:
 
-Zona Franca vale 20 de um máximo preliminar de 45, e é **binário**. Um
-candidato em ALC sem dívida nenhuma (25 pontos) **empata com** um
-candidato com a dívida no teto da fórmula, 6+ inscrições (25 pontos), e
-**supera** qualquer dívida menor. Se existirem 60+ clínicas de CNAE 8630
-nos 10 municípios da lista, o lote tende a ser quase só delas — o que na
-prática restringe a busca àquelas cidades, exatamente o que o Douglas
-disse que **não** queria (*"é prioridade, não filtro exclusivo"*,
-`app/scoring/rules.py:66`).
+**FASE 1 — quem tem dívida ativa.** Todo candidato com
+`qtd_inscricoes_ativas > 0`, ordenado por **número de inscrições
+decrescente** (mais dívida entra primeiro). Preenche a cota inteira se
+houver candidatos suficientes.
 
-Isto **não foi "corrigido"**: mudar peso exige aval do cliente (regra do
-próprio `rules.py`). O que foi feito foi tornar o efeito **visível** —
-`executar_busca_mensal` registra a composição do lote (quantos de ALC,
-quantos com dívida ativa, faixa de score) no log e no retorno da task, e
-`test_zona_franca_supera_divida_ativa_no_teto` fixa o comportamento em
-teste. A primeira execução real mostra o problema em números.
+**FASE 2 — só se sobrar vaga.** Candidatos **sem** dívida, ordenados por
+Zona Franca + CNPJ ativo. Se a fase 1 encheu a cota, esta fase não
+seleciona ninguém.
+
+Consequência: **Zona Franca nunca compete com dívida ativa pela mesma
+vaga.** Ela ordena empatados — entre dois candidatos com a mesma
+quantidade de inscrições na fase 1, e entre os sem-dívida na fase 2.
+
+#### Por que não um score único somado
+
+A primeira versão (22/08/2026) somava os 3 sinais e ordenava por esse
+total. Como Zona Franca vale 20 pontos e é **binária**, um candidato em
+ALC sem dívida nenhuma (25 pts) empatava com um candidato no teto da
+fórmula da PGFN e **superava qualquer dívida menor**. O lote podia acabar
+dominado por Zona Franca sem dívida — o oposto da prioridade do cliente.
+
+Corrigido em 23/08/2026. A separação em fases é estrutural de propósito:
+mudar um peso em `SCORING_CRITERIA` **não consegue** reintroduzir o
+problema.
+
+#### `score_preliminar` virou informativo
+
+O campo continua sendo calculado (mesmas funções de
+`rules.py`/`compute_lead_score.py`, então segue comparável com o
+`score_total` final), mas **não é mais a chave de ordenação**.
+
+⚠️ Um candidato da fase 1 pode ter `score_preliminar` **menor** que um da
+fase 2 — 1 inscrição fora de ALC dá 8,3 contra 0 inscrição em ALC dando
+25. Isso é o comportamento correto: a fase manda, não o total.
+
+#### Composição do lote no log
+
+`resumir_composicao` separa as duas fases, e `executar_busca_mensal`
+registra isso no log e no retorno da task:
+
+```
+FASE 1: 42 por dívida ativa (de 1 a 17 inscrições).
+FASE 2: 18 para completar cota, sem dívida.
+```
+
+`para_completar_cota == 0` é o cenário ideal — havia devedores
+suficientes para encher o lote. Qualquer valor acima de zero emite um
+**warning** separado: o universo com dívida ativa se esgotou antes da
+cota, o que sugere filtro estreito demais ou índice da PGFN
+desatualizado.
 
 ### Guardas que abortam antes de gastar
 

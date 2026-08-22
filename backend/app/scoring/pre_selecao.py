@@ -34,35 +34,39 @@ Os outros 6 critérios (RQE, WhatsApp, e-mail, presença digital, decisor,
 rating Google) dependem justamente das etapas pagas — por definição não
 podem entrar aqui, senão a pré-seleção teria o mesmo custo do pipeline.
 
-Mesma escala do score final, de propósito
------------------------------------------
+Duas fases, não um score somado
+-------------------------------
+A seleção NÃO ordena por um score único com os 3 sinais somados. Ela
+tem prioridade estrita: primeiro quem tem dívida ativa (ordenado por
+quantidade de inscrições), e só se sobrar cota é que entra quem não tem
+dívida (aí sim ordenado por Zona Franca / CNPJ ativo). Ver
+`selecionar_melhores_candidatos` para o racional completo.
+
+Dívida ativa é o principal critério de venda do Douglas — é o que ele
+quer priorizar de verdade na entrada do processamento. Zona Franca
+continua sendo sinal de priorização, mas dentro do grupo certo: ela
+ordena empatados, nunca toma a vaga de quem tem dívida.
+
+⚠️ Histórico, pra quem for mexer: a primeira versão (22/08/2026) somava
+os 3 sinais e ordenava por esse total. Como Zona Franca vale 20 e é
+BINÁRIA, um candidato em ALC sem dívida nenhuma (25 pts) empatava com um
+candidato no teto da fórmula da PGFN e superava qualquer dívida menor —
+o lote podia acabar dominado por Zona Franca sem dívida, exatamente o
+oposto da prioridade do cliente. Corrigido em 23/08/2026 pela separação
+em fases. A separação é ESTRUTURAL de propósito: mudar peso em
+`SCORING_CRITERIA` não consegue reintroduzir o problema.
+
+`score_preliminar` continua na mesma escala do score final
+----------------------------------------------------------
 Os pontos vêm das MESMAS funções de `rules.py`/`compute_lead_score.py`
-que o score definitivo usa, não de uma escala paralela inventada. Assim
-um `score_preliminar` de 40 significa literalmente "já garantiu 40 dos
-100 pontos do score real" e é comparável com o `score_total` que o lead
-vai ter no fim. Se um peso mudar em `SCORING_CRITERIA` (com aval do
-cliente), a pré-seleção acompanha sozinha.
+que o score definitivo usa, não de uma escala paralela. Um
+`score_preliminar` de 40 significa literalmente "já garantiu 40 dos 100
+pontos do score real".
 
-⚠️ Efeito emergente que vale conhecer antes da primeira execução
-----------------------------------------------------------------
-Os pesos foram fechados com o Douglas para RANQUEAR leads já
-encontrados, não para DECIDIR quem é enriquecido. Reaproveitá-los como
-porta de entrada tem uma consequência que ninguém aprovou explicitamente:
-
-Como Zona Franca vale 20 pontos de um máximo de 45, e é binário, um
-candidato em ALC praticamente sempre supera um candidato de fora dela —
-mesmo um com 5 inscrições na PGFN (16,7 pontos). Se existirem 60+
-clínicas de CNAE 8630 nos 10 municípios da lista, o top N tende a ser
-composto quase só por elas, o que na prática restringe a busca àquelas
-cidades — exatamente o que o Douglas disse que NÃO queria
-("é prioridade, não filtro exclusivo", ver a nota em rules.py:66).
-
-Isto NÃO foi "corrigido" aqui de propósito: mudar peso exige aval do
-cliente (regra do próprio rules.py). O que foi feito foi tornar o efeito
-visível — `executar_busca_mensal` registra a composição do lote
-selecionado (quantos de ALC, quantos com dívida ativa) no log e no
-retorno, então a primeira execução real mostra o problema em números em
-vez de escondê-lo.
+⚠️ Mas ele é INFORMATIVO, não é mais a chave de ordenação. Um candidato
+selecionado na fase 1 pode ter `score_preliminar` MENOR que um da fase 2
+(1 inscrição fora de ALC = 8,3 contra 0 inscrição em ALC = 25). Isso é o
+comportamento correto — a fase é que manda, não o total.
 
 Este módulo é PURO
 ------------------
@@ -130,72 +134,186 @@ def pontuar_candidato(candidato: dict) -> float:
     )
 
 
+FASE_DIVIDA_ATIVA = "divida_ativa"
+FASE_COMPLETAR_COTA = "completar_cota"
+
+
+def _qtd_inscricoes(candidato: dict) -> int:
+    """Nº de inscrições ativas na PGFN, tolerante a valor ausente/inválido."""
+    bruto = candidato.get("qtd_inscricoes_ativas") or 0
+    try:
+        return max(int(bruto), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def pontuar_sinais_complementares(candidato: dict) -> float:
+    """
+    Pontos dos sinais gratuitos que NÃO são dívida ativa: Zona Franca +
+    CNPJ ativo (0-25).
+
+    É a chave de ordenação da FASE 2 e o desempate dentro da FASE 1 (ver
+    `selecionar_melhores_candidatos`). Existe separada de
+    `pontuar_candidato` justamente para que Zona Franca nunca dispute a
+    mesma vaga que dívida ativa -- ela só ordena candidatos que já estão
+    empatados no critério principal.
+    """
+    criterio_ativo = get_criterion("unidade_cnpj_ativo")
+    pontos_ativo = float(criterio_ativo.weight) if (criterio_ativo and candidato.get("situacao_ativa")) else 0.0
+    return zona_franca_points(bool(candidato.get("zona_franca"))) + pontos_ativo
+
+
 def selecionar_melhores_candidatos(candidatos: list[dict], top_n: int) -> list[dict]:
     """
-    Pontua todos os candidatos, ordena por score preliminar decrescente e
-    devolve os `top_n` primeiros.
+    Escolhe os `top_n` candidatos que recebem o enriquecimento pago, em
+    DUAS FASES com prioridade estrita -- não por um score único somado.
 
-    Devolve dicts NOVOS (cópias rasas) com a chave `score_preliminar`
-    adicionada — não muta a entrada, para que quem chamou continue com a
-    lista original intacta (útil para logar/auditar o universo completo
-    depois de já ter selecionado).
+    FASE 1 -- quem tem dívida ativa na PGFN
+        Todo candidato com `qtd_inscricoes_ativas > 0`, ordenado por
+        número de inscrições DECRESCENTE (mais dívida entra primeiro).
+        Preenche a cota inteira se houver candidatos suficientes.
 
-    Desempate determinístico por CNPJ crescente
-    -------------------------------------------
-    A chave de ordenação é `(-score_preliminar, cnpj)`, não só o score.
-    Isso importa mais do que parece: a esmagadora maioria dos candidatos
-    empata (sem dívida ativa e fora de ALC = 5 pontos para todo mundo),
-    então o critério de desempate é que decide, de fato, quem entra no
-    lote. Ordenar só por score deixaria a escolha à mercê da ordem física
-    das linhas no arquivo da Receita, que muda a cada lote mensal — duas
-    execuções sobre o mesmo universo poderiam selecionar conjuntos
-    diferentes, sem nada no código explicando por quê.
+    FASE 2 -- só se sobrar vaga
+        Candidatos SEM dívida, ordenados por
+        `pontuar_sinais_complementares` (Zona Franca + CNPJ ativo)
+        decrescente. Se a fase 1 preencheu tudo, esta fase não seleciona
+        ninguém.
 
-    Com o CNPJ no desempate o resultado é reproduzível: mesmo universo,
-    mesmos 60 selecionados. O viés introduzido (CNPJ menor tende a ser
-    empresa mais antiga) é arbitrário mas inofensivo, e é uma propriedade
-    conhecida em vez de um acidente.
+    Por que duas fases, e não um score somado
+    -----------------------------------------
+    A primeira versão desta função (22/08/2026) somava os 3 sinais num
+    `score_preliminar` único e ordenava por ele. Com Zona Franca valendo
+    20 pontos e sendo BINÁRIA, um candidato em ALC sem dívida nenhuma
+    (25 pts) empatava com um candidato no teto da fórmula da PGFN e
+    superava qualquer dívida menor -- ou seja, Zona Franca competia com
+    dívida ativa pela mesma vaga e frequentemente ganhava.
 
-    `top_n <= 0` devolve lista vazia (nada a selecionar), em vez de
-    levantar exceção ou devolver tudo — evita que uma configuração
+    Isso invertia a prioridade real do cliente: dívida ativa é o
+    principal critério de venda do Douglas, é o que ele quer priorizar
+    de fato na entrada do processamento. Zona Franca continua sendo um
+    sinal de priorização relevante -- mas dentro do grupo certo, não
+    tomando a vaga de quem tem dívida.
+
+    A separação em fases torna essa prioridade ESTRUTURAL, não uma
+    consequência de calibragem de peso: por construção, nenhum candidato
+    sem dívida entra enquanto houver candidato com dívida fora do lote.
+    Ajustar pesos em `SCORING_CRITERIA` não pode reintroduzir o problema.
+
+    Desempates, determinísticos nas duas fases
+    ------------------------------------------
+      - Fase 1: `(-qtd_inscricoes, -sinais_complementares, cnpj)`. Entre
+        dois candidatos com a MESMA quantidade de inscrições, Zona
+        Franca desempata -- aqui ela não tira vaga de ninguém com mais
+        dívida, só ordena empatados.
+      - Fase 2: `(-sinais_complementares, cnpj)`.
+
+    O CNPJ crescente fecha os dois: a maioria dos candidatos sem dívida
+    empata em tudo, então sem esse critério a escolha ficaria à mercê da
+    ordem física das linhas no arquivo da Receita, que muda a cada lote
+    mensal -- duas execuções sobre o mesmo universo poderiam selecionar
+    conjuntos diferentes sem nada no código explicando por quê. O viés
+    (CNPJ menor tende a ser empresa mais antiga) é arbitrário mas
+    inofensivo, e é propriedade conhecida em vez de acidente.
+
+    Campos adicionados a cada selecionado
+    -------------------------------------
+      - `fase_selecao`: `"divida_ativa"` ou `"completar_cota"` -- qual
+        fase colocou aquele candidato no lote.
+      - `score_preliminar`: os 3 sinais somados (0-45), mantido por ser
+        comparável com o `score_total` que o lead terá no fim.
+        ⚠️ É INFORMATIVO -- não é mais a chave de ordenação. Um candidato
+        de fase 1 pode ter `score_preliminar` menor que um de fase 2 (ex.:
+        1 inscrição e fora de ALC = 8,3 contra 0 inscrição e em ALC = 25);
+        isso é o comportamento correto, não um bug.
+
+    Devolve dicts NOVOS (cópias rasas), sem mutar a entrada.
+
+    `top_n <= 0` devolve lista vazia -- evita que uma configuração
     zerada/negativa vire acidentalmente "processe o universo inteiro",
     que é exatamente o custo que esta função existe pra impedir.
     """
     if top_n <= 0:
         return []
 
-    pontuados = [
-        {**candidato, "score_preliminar": pontuar_candidato(candidato)}
-        for candidato in candidatos
+    com_divida: list[dict] = []
+    sem_divida: list[dict] = []
+    for candidato in candidatos:
+        destino = com_divida if _qtd_inscricoes(candidato) > 0 else sem_divida
+        destino.append(candidato)
+
+    # FASE 1 -- mais dívida primeiro.
+    com_divida.sort(
+        key=lambda c: (
+            -_qtd_inscricoes(c),
+            -pontuar_sinais_complementares(c),
+            c.get("cnpj") or "",
+        )
+    )
+    selecionados = [
+        {**c, "score_preliminar": pontuar_candidato(c), "fase_selecao": FASE_DIVIDA_ATIVA}
+        for c in com_divida[:top_n]
     ]
-    pontuados.sort(key=lambda c: (-c["score_preliminar"], c.get("cnpj") or ""))
-    return pontuados[:top_n]
+
+    # FASE 2 -- só o que sobrou de cota, ordenado pelos demais sinais.
+    vagas_restantes = top_n - len(selecionados)
+    if vagas_restantes > 0:
+        sem_divida.sort(
+            key=lambda c: (
+                -pontuar_sinais_complementares(c),
+                c.get("cnpj") or "",
+            )
+        )
+        selecionados.extend(
+            {**c, "score_preliminar": pontuar_candidato(c), "fase_selecao": FASE_COMPLETAR_COTA}
+            for c in sem_divida[:vagas_restantes]
+        )
+
+    return selecionados
 
 
 def resumir_composicao(selecionados: list[dict]) -> dict:
     """
-    Conta de onde vem a força do lote selecionado — quantos entraram por
-    Zona Franca, quantos por dívida ativa na PGFN, e a faixa de score.
+    Conta de onde veio cada candidato do lote -- quantos entraram pela
+    FASE 1 (dívida ativa) e quantos pela FASE 2 (completar cota), quantos
+    são de Zona Franca, e a faixa de score preliminar.
 
-    Existe por causa do efeito emergente descrito no topo do módulo: sem
-    isto, o fato de o lote inteiro poder ser de ALC só apareceria depois
-    de alguém abrir os 60 leads um a um no dossiê. `executar_busca_mensal`
-    loga este resumo e o devolve no resultado da task.
+    `por_divida_ativa` e `para_completar_cota` são o número que responde
+    "a cota foi preenchida por quem o cliente quer priorizar?" de um
+    olhar só. `para_completar_cota == 0` significa que existiam
+    candidatos com dívida suficientes pra encher o lote inteiro -- o
+    cenário ideal.
+
+    `executar_busca_mensal` loga este resumo e o devolve no resultado da
+    task, pra que a composição do lote apareça já na primeira execução
+    real em vez de só depois de alguém abrir os 60 leads um a um.
     """
     if not selecionados:
         return {
             "total": 0,
+            "por_divida_ativa": 0,
+            "para_completar_cota": 0,
             "com_zona_franca": 0,
             "com_divida_ativa": 0,
+            "inscricoes_pgfn_min": 0,
+            "inscricoes_pgfn_max": 0,
             "score_preliminar_min": 0.0,
             "score_preliminar_max": 0.0,
         }
 
     scores = [c.get("score_preliminar", 0.0) for c in selecionados]
+    por_divida = [c for c in selecionados if c.get("fase_selecao") == FASE_DIVIDA_ATIVA]
+    inscricoes = [_qtd_inscricoes(c) for c in por_divida]
+
     return {
         "total": len(selecionados),
+        "por_divida_ativa": len(por_divida),
+        "para_completar_cota": sum(1 for c in selecionados if c.get("fase_selecao") == FASE_COMPLETAR_COTA),
         "com_zona_franca": sum(1 for c in selecionados if c.get("zona_franca")),
-        "com_divida_ativa": sum(1 for c in selecionados if (c.get("qtd_inscricoes_ativas") or 0) > 0),
+        "com_divida_ativa": sum(1 for c in selecionados if _qtd_inscricoes(c) > 0),
+        # Faixa de inscrições DENTRO da fase 1 -- mostra se a cota foi
+        # preenchida com dívidas altas ou raspando em quem tem 1 inscrição.
+        "inscricoes_pgfn_min": min(inscricoes) if inscricoes else 0,
+        "inscricoes_pgfn_max": max(inscricoes) if inscricoes else 0,
         "score_preliminar_min": min(scores),
         "score_preliminar_max": max(scores),
     }

@@ -1233,18 +1233,34 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
 
         composicao = resumir_composicao(selecionados)
         logger.info(
-            "executar_busca_mensal (%s): %s candidatos no universo -> %s selecionados "
-            "(top %s). Composição: %s em Zona Franca, %s com dívida ativa, "
-            "score preliminar de %.1f a %.1f.",
+            "executar_busca_mensal (%s): %s candidatos no universo -> %s selecionados (cota %s). "
+            "FASE 1: %s por dívida ativa (de %s a %s inscrições). "
+            "FASE 2: %s para completar cota, sem dívida. "
+            "%s em Zona Franca. Score preliminar de %.1f a %.1f.",
             busca_id,
             len(candidatos),
             len(selecionados),
             top_n,
+            composicao["por_divida_ativa"],
+            composicao["inscricoes_pgfn_min"],
+            composicao["inscricoes_pgfn_max"],
+            composicao["para_completar_cota"],
             composicao["com_zona_franca"],
-            composicao["com_divida_ativa"],
             composicao["score_preliminar_min"],
             composicao["score_preliminar_max"],
         )
+        if composicao["para_completar_cota"] > 0:
+            # Não é erro, mas é o sinal de que o universo com dívida ativa
+            # -- o critério de venda principal do Douglas -- se esgotou
+            # antes de encher a cota. Vale saber: ou o filtro está estreito
+            # demais, ou o índice da PGFN está desatualizado.
+            logger.warning(
+                "executar_busca_mensal (%s): só %s candidatos com dívida ativa disponíveis; "
+                "%s vagas preenchidas com candidatos SEM dívida.",
+                busca_id,
+                composicao["por_divida_ativa"],
+                composicao["para_completar_cota"],
+            )
 
         # --- FASE 2: enriquecimento pago, só nos selecionados -----------------
         # Cache de município do CNES compartilhado por TODA esta execução e

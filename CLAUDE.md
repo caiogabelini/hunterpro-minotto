@@ -3350,19 +3350,42 @@ ever sees the selected candidates.
 - **`top_n <= 0` returns `[]`**, never "everything" — a zeroed config
   must not silently become "process the universe".
 
-**⚠️ Emergent effect nobody signed off on.** The weights were closed with
-Douglas to *rank leads already found*, not to *decide who gets enriched*.
-Zona Franca is worth 20 of a 45 max and is binary, so an ALC candidate
-with zero debt (25) **ties** a candidate at the PGFN formula ceiling and
-**beats** any smaller debt. With 60+ CNAE-8630 clinics across the 10 ALC
-municipalities, the batch would be almost entirely ALC — effectively
-restricting the search to those cities, which is exactly what Douglas
-said he did *not* want (`rules.py:66`). **This was deliberately not
-"fixed"** — changing a weight needs client sign-off. Instead it was made
-*visible*: `resumir_composicao` reports the batch makeup in the log and
-the task result, and `test_zona_franca_supera_divida_ativa_no_teto` pins
-the behavior so any future weight change breaks a test instead of
-silently changing who gets selected.
+**Two-phase selection — debt first (fixed 2026-08-23).** PGFN debt is
+Douglas's primary selling criterion, so the selection gives it **strict
+structural priority** rather than relying on weight calibration:
+
+- **Phase 1**: every candidate with `qtd_inscricoes_ativas > 0`, sorted
+  by inscription count descending. Fills the whole quota if there are
+  enough.
+- **Phase 2**: only if quota remains — candidates with no debt, sorted by
+  `pontuar_sinais_complementares` (Zona Franca + CNPJ ativo).
+
+So Zona Franca **never competes with debt for the same slot**; it only
+orders ties (within equal debt in phase 1, and among the no-debt group in
+phase 2). Each selected candidate carries `fase_selecao`
+(`"divida_ativa"` | `"completar_cota"`).
+
+⚠️ **History — don't undo this.** The first version (2026-08-22) summed
+the 3 signals into one `score_preliminar` and sorted by it. Zona Franca
+is worth 20 and is *binary*, so an ALC candidate with zero debt (25) tied
+a candidate at the PGFN formula ceiling and beat any smaller debt — the
+batch could end up dominated by debt-free ALC leads, the exact opposite
+of the client's priority. The phase split is structural on purpose:
+changing a weight in `SCORING_CRITERIA` **cannot** reintroduce it.
+`test_zona_franca_supera_divida_ativa_no_teto` (which pinned the old
+behavior) was replaced by `test_divida_ativa_sempre_vence_zona_franca`.
+
+⚠️ **`score_preliminar` is informational now, not the sort key.** A
+phase-1 candidate can have a *lower* `score_preliminar` than a phase-2
+one (1 inscription outside ALC = 8.3 vs. 0 inscriptions inside ALC = 25).
+That's correct — the phase decides, not the total. The field is kept only
+because it stays comparable with the final `score_total`.
+
+**`resumir_composicao` reports the split** (`por_divida_ativa` /
+`para_completar_cota`, plus the min/max inscription count within phase 1).
+`executar_busca_mensal` logs it and returns it; `para_completar_cota > 0`
+also emits a separate warning — the debt universe ran out before the
+quota, which points at either too narrow a filter or a stale PGFN index.
 
 **Safety margin, `LEADS_POR_BUSCA=50` × `LEADS_MARGEM_PRE_SELECAO=1.2`
 → 60.** The pre-selection sees only 3 signals and can't predict which

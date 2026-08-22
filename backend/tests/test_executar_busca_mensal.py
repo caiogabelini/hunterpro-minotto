@@ -609,3 +609,78 @@ def test_enrich_cnes_sem_cache_mantem_o_comportamento_antigo(monkeypatch):
     celery_app.enrich_cnes("22222222000102", 355030)
 
     assert len(chamadas) == 2
+
+
+def test_composicao_separa_as_duas_fases_da_pre_selecao(monkeypatch, redis_fake):
+    """
+    Integração das duas fases: com 4 candidatos com dívida e cota de 6, o
+    lote sai com 4 da fase 1 (dívida, ordenados por inscrições) e 2 da
+    fase 2 (completando a cota).
+    """
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(20))
+    monkeypatch.setattr(celery_app, "_top_n_pre_selecao", lambda: 6)
+
+    for cnpj, qtd in [
+        ("11111111000015", 2),
+        ("11111111000016", 9),
+        ("11111111000017", 1),
+        ("11111111000018", 5),
+    ]:
+        redis_fake.registrar_divida(cnpj, qtd)
+
+    processados = []
+    monkeypatch.setattr(
+        celery_app,
+        "process_lead_pipeline",
+        lambda cnpj, razao_social=None, cache_cnes=None: processados.append(cnpj),
+    )
+
+    resultado = celery_app.executar_busca_mensal(busca.id, db=db_session)
+
+    composicao = resultado["composicao_selecao"]
+    assert composicao["por_divida_ativa"] == 4
+    assert composicao["para_completar_cota"] == 2
+    assert composicao["inscricoes_pgfn_max"] == 9
+    assert composicao["inscricoes_pgfn_min"] == 1
+
+    # os 4 com dívida vêm primeiro, na ordem decrescente de inscrições
+    assert processados[:4] == [
+        "11111111000016",  # 9
+        "11111111000018",  # 5
+        "11111111000015",  # 2
+        "11111111000017",  # 1
+    ]
+
+
+def test_cota_cheia_de_devedores_nao_processa_ninguem_sem_divida(monkeypatch, redis_fake):
+    """
+    Ponta a ponta da regra principal: havendo devedores suficientes,
+    nenhum CNPJ sem dívida recebe enriquecimento pago.
+    """
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(50))
+    monkeypatch.setattr(celery_app, "_top_n_pre_selecao", lambda: 5)
+
+    # 8 devedores para uma cota de 5 -- sobra devedor de fora, então
+    # nenhuma vaga pode ir para quem não deve.
+    devedores = {f"11111111000{i:03d}": 1 + (i % 4) for i in range(40, 48)}
+    for cnpj, qtd in devedores.items():
+        redis_fake.registrar_divida(cnpj, qtd)
+
+    processados = []
+    monkeypatch.setattr(
+        celery_app,
+        "process_lead_pipeline",
+        lambda cnpj, razao_social=None, cache_cnes=None: processados.append(cnpj),
+    )
+
+    resultado = celery_app.executar_busca_mensal(busca.id, db=db_session)
+
+    assert len(processados) == 5
+    assert all(cnpj in devedores for cnpj in processados)
+    assert resultado["composicao_selecao"]["para_completar_cota"] == 0
