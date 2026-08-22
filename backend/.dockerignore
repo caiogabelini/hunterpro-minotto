@@ -1,0 +1,33 @@
+# Contexto de build do backend.
+#
+# Sem este arquivo, o `COPY . .` do Dockerfile levaria pra dentro da
+# imagem de produção:
+#   - .venv/  (~312 MB medidos em 22/08/2026) -- inútil, a imagem instala
+#     as dependências do zero via requirements.txt
+#   - .env    -- as chaves de API e a SECRET_KEY de DESENVOLVIMENTO,
+#     assadas numa imagem que vai pro registry. Em produção as variáveis
+#     vêm do painel do EasyPanel, nunca de um arquivo versionado/copiado.
+#   - data/   -- os arquivos de dados abertos (PGFN, Receita Federal),
+#     que são de centenas de MB a alguns GB.
+
+# Ambiente virtual e caches do Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Segredos -- inclusive os .example, que não têm uso dentro da imagem
+.env
+.env.*
+
+# Dados abertos baixados manualmente (PGFN / Receita Federal)
+data/
+
+# Metadados de repositório e ruído local
+.git/
+.gitignore
+*.log
+.DS_Store

@@ -1289,6 +1289,236 @@ frontend, de propósito.
 
 ---
 
+## Deploy em Produção (EasyPanel)
+
+Domínio de produção: **https://minotto.4handsai.com.br**
+
+### Topologia: 5 serviços, sem Docker Compose
+
+Cada serviço é um **App Service próprio** no EasyPanel. Docker Compose
+multi-serviço não é bem suportado lá — lição trazida do projeto irmão
+(SR Contábil), não uma preferência de estilo.
+
+| Serviço | Tipo | Origem | Comando de start |
+|---|---|---|---|
+| `hunterpro-minotto-postgres` | Postgres | serviço gerenciado | — |
+| `hunterpro-minotto-redis` | Redis | serviço gerenciado | — |
+| `hunterpro-minotto-backend` | App | `backend/Dockerfile` | *(padrão da imagem)* |
+| `hunterpro-minotto-worker` | App | `backend/Dockerfile` **(a mesma)** | `celery -A app.workers.celery_app worker --loglevel=info` |
+| `hunterpro-minotto-frontend` | App | `frontend/Dockerfile` | *(padrão da imagem)* |
+
+### Backend e worker compartilham a MESMA imagem
+
+Não existe `Dockerfile.worker`. Os dois App Services apontam para o
+mesmo `backend/Dockerfile`; o que os diferencia é **só o comando de
+start**, configurado no campo **"Start Command"** do painel do EasyPanel
+no serviço do worker:
+
+```
+celery -A app.workers.celery_app worker --loglevel=info
+```
+
+O serviço do **backend não precisa de Start Command** — usa o `CMD`
+padrão da imagem (`uvicorn app.main:app --host 0.0.0.0 --port 8000`).
+
+Por que isso funciona: o Dockerfile define `ENTRYPOINT ["/app/entrypoint.sh"]`
+e o `CMD` do uvicorn separadamente. O EasyPanel passa o Start Command
+como **CMD** (argumentos do entrypoint), não como substituto do
+entrypoint — então o worker também passa pela espera do banco, sem
+precisar repetir nada na configuração dele.
+
+> Se algum dia o EasyPanel passar a **substituir o entrypoint** em vez do
+> CMD, a espera do banco seria pulada silenciosamente. O sintoma seria o
+> worker morrendo no boot logo após um redeploy do Postgres. Correção:
+> usar `sh -c "python scripts/wait_for_db.py && celery -A app.workers.celery_app worker --loglevel=info"`
+> como Start Command.
+
+**As variáveis de ambiente precisam ser cadastradas nos DOIS serviços.**
+São a mesma lista (ver `backend/.env.production.example`). Uma chave
+cadastrada só no backend faz a etapa correspondente do pipeline ser
+pulada no worker — em silêncio, com um motivo no log, sem erro visível.
+
+### Espera do banco no boot
+
+`backend/entrypoint.sh` roda `scripts/wait_for_db.py` antes de entregar o
+controle ao uvicorn/celery. É um retry com backoff exponencial (1s, 2s,
+4s, teto de 5s) até o Postgres responder um `SELECT 1` ou estourar 60s,
+ajustáveis por `WAIT_FOR_DB_TIMEOUT` / `WAIT_FOR_DB_INTERVALO_MAX`.
+
+Existe pra resolver o problema clássico do primeiro boot: o container do
+backend sobe em segundos, mas o Postgres pode ainda estar inicializando —
+ou o **DNS interno pode ainda não estar resolvendo** o hostname do
+serviço. Sem a espera, o uvicorn sobe "com sucesso" e toda request morre
+em `could not translate host name`, que é bem pior que falhar no boot.
+
+Estourado o timeout, o script sai com código 1 e o container morre de
+propósito: o EasyPanel reinicia, que é o comportamento certo pra um banco
+que não subiu — melhor que uma aplicação de pé servindo erro.
+
+### Frontend: proxy do nginx (e por que CORS não é problema)
+
+O frontend não fala com o backend por um domínio separado. O nginx
+embutido na imagem do frontend faz proxy de `/api/*` (e de `/health`)
+para `http://hunterpro-minotto-backend:8000` pela rede interna. O
+navegador vê front e API na **mesma origem**, então não existe requisição
+cross-origin — o CORS deixa de ser um problema em produção.
+
+O `FRONTEND_ORIGIN` do backend continua configurado como
+`https://minotto.4handsai.com.br`, mas como **defesa em profundidade**,
+não como o que faz a aplicação funcionar.
+
+O nome do serviço do backend **não está fixo na imagem**:
+`frontend/nginx.conf.template` usa `${BACKEND_HOST}`/`${BACKEND_PORT}`,
+substituídos no boot pelo `envsubst` da imagem oficial do nginx. Os
+valores padrão vêm do `ENV` do Dockerfile — se o serviço tiver outro
+nome, basta ajustar a variável `BACKEND_HOST` no painel e reiniciar, sem
+rebuild.
+
+O template também traz o **fallback de SPA** (`try_files $uri $uri/
+/index.html`). Sem ele, abrir `/dashboard` ou `/leads/123` direto na
+barra de endereço — ou dar F5 nessas telas — devolveria 404 do nginx;
+só a raiz `/` funcionaria.
+
+`frontend/src/api.ts` resolve a base das chamadas assim:
+
+```ts
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? "" : "http://localhost:8000");
+```
+
+Produção cai em `""` (URLs relativas, resolvidas pelo proxy) e
+desenvolvimento em `localhost:8000`, **sem depender de ninguém lembrar de
+definir a variável**. Não defina `VITE_API_URL` no EasyPanel: variável do
+Vite é assada no bundle em tempo de *build*, não lida em runtime —
+defini-la no painel depois do build não tem efeito nenhum.
+
+### Variáveis de ambiente
+
+Todas documentadas, uma a uma, em **`backend/.env.production.example`**.
+Os pontos que mais dão problema no primeiro deploy:
+
+- **`DATABASE_URL` / `REDIS_URL` / `CELERY_*`** — o host é o **nome do
+  serviço** no EasyPanel (ex.: `hunterpro-minotto-postgres`), resolvido
+  pelo DNS interno. **Nunca `localhost`**: dentro do container do
+  backend, `localhost` é o próprio backend, onde não há banco nenhum.
+- **`SECRET_KEY`** — valor **novo e forte**, gerado só pra produção
+  (`python -c "import secrets; print(secrets.token_urlsafe(64))"`).
+  Nunca o `changeme-in-env` do `config.py` nem o do `.env` de
+  desenvolvimento: quem tem essa chave forja um token de admin válido.
+- **`FRONTEND_ORIGIN`** — `https://minotto.4handsai.com.br`.
+- **As 8 chaves de API** — sem chave, a etapa é **pulada**, não falha. O
+  deploy sobe normal e os leads saem com menos dados e score mais baixo,
+  o que é bem mais difícil de perceber que um erro.
+- **`PGFN_DADOS_ABERTOS_DIR` / `RECEITA_FEDERAL_DADOS_ABERTOS_DIR`** —
+  apontam pra dentro do container, cujo disco é **efêmero**. O serviço do
+  **worker** precisa de um volume persistente montado nesses caminhos, e
+  os arquivos precisam ser enviados manualmente (não há download
+  automático). Sem isso, `gerar_semente_leads` devolve `sem_arquivos` e a
+  busca mensal conclui com **0 CNPJs, sem erro aparente**.
+
+### Passo a passo do PRIMEIRO deploy
+
+Ordem importa: o frontend resolve o hostname do backend no boot do nginx,
+e o backend espera o Postgres.
+
+1. Criar o **Postgres** e o **Redis** no EasyPanel. Anotar a senha gerada.
+2. Criar o App Service do **backend** (`backend/Dockerfile`), cadastrar
+   todas as variáveis de ambiente e subir.
+3. Criar o App Service do **worker** — mesmo Dockerfile, **mesmas
+   variáveis**, com o Start Command do Celery (ver acima).
+4. Criar o App Service do **frontend** (`frontend/Dockerfile`) e apontar
+   o domínio `minotto.4handsai.com.br` pra ele.
+5. Rodar os comandos manuais da seção seguinte.
+
+### Comandos manuais após o primeiro deploy
+
+**Não são automatizados** — são executados uma única vez, à mão, no
+terminal/console do App Service do **backend** dentro do EasyPanel.
+
+Decisão consciente: `alembic upgrade head` **não** roda no `entrypoint.sh`.
+Com backend e worker compartilhando a imagem, os dois subiriam a migration
+ao mesmo tempo num redeploy, competindo pelo mesmo lock — e uma migration
+rodando automaticamente em produção, sem alguém olhando, é justamente o
+tipo de coisa que se quer explícita.
+
+**1. Aplicar as migrations** (cria `leads`, `users`, `lead_messages`,
+`buscas_leads` e todas as colunas — são 9 migrations encadeadas):
+
+```bash
+alembic upgrade head
+```
+
+Conferir:
+```bash
+alembic current   # deve mostrar a revision mais recente
+```
+
+**2. Criar o primeiro usuário admin** — não existe endpoint de cadastro
+público, de propósito (só Minotto e 4Hands usam o sistema):
+
+```bash
+python scripts/create_user.py --email douglas@minotto.com.br --senha "uma-senha-forte" --role admin
+```
+
+Os papéis são `admin` (4Hands — Caio/Vinícius) e `client` (Minotto —
+Douglas/Sulamita). Só `admin` enxerga a tela "Busca de Leads", que dispara
+o pipeline de verdade e **gasta crédito real de API**. O script recusa
+e-mail já existente.
+
+**3. Validar** — abrir `https://minotto.4handsai.com.br`, logar com o
+usuário criado e conferir que o Kanban carrega (vazio, sem leads ainda).
+
+### Status de validação desta configuração
+
+Escrita e revisada, **ainda não executada num deploy real**. O que foi
+efetivamente testado nesta sessão:
+
+- ✅ `scripts/wait_for_db.py` — testado contra um Postgres 16 de verdade,
+  nos dois caminhos: host inexistente estoura o timeout e sai com código
+  1; e um banco que **sobe 8s depois** do script começar a esperar é
+  detectado na 5ª tentativa (backoff 1s→2s→4s→5s), saindo com código 0.
+- ✅ `api.ts` — confirmado nos dois builds: o bundle de produção **não
+  contém** `http://localhost:8000` e usa caminhos relativos
+  (`/api/auth/login`); o build em modo development aponta pra
+  `localhost:8000`.
+- ✅ `nginx.conf.template` — `envsubst` substitui `${BACKEND_HOST}`/
+  `${BACKEND_PORT}` e preserva intactas as variáveis do próprio nginx
+  (`$uri`, `$host`, `$remote_addr`, `$scheme`,
+  `$proxy_add_x_forwarded_for`).
+- ✅ `npm ci` (usado pelo Dockerfile do frontend) — lockfile em sincronia.
+
+**Não testado — sem Docker neste ambiente de desenvolvimento:**
+
+- ❌ `docker build` das duas imagens.
+- ❌ O `ENTRYPOINT`/`CMD` do backend rodando de verdade num container.
+- ❌ A sintaxe do nginx sendo aceita pelo próprio nginx (`nginx -t`) —
+  só a substituição de variáveis foi verificada.
+- ❌ O proxy `/api/` resolvendo o hostname interno do EasyPanel.
+
+Validar isso é o primeiro passo de quem tiver Docker à mão:
+
+```bash
+cd backend  && docker build -t hunterpro-minotto-backend .
+cd frontend && docker build -t hunterpro-minotto-frontend .
+docker run --rm hunterpro-minotto-frontend nginx -t   # confere a sintaxe do .conf gerado
+```
+
+### Notas conhecidas (não bloqueiam o deploy)
+
+- **`.dockerignore`** foi adicionado nos dois projetos. Sem ele, o
+  `COPY . .` do backend levava pra dentro da imagem de produção os
+  ~312 MB de `.venv/` **e o `.env` com as chaves de desenvolvimento**.
+- O `Dockerfile` do backend instala `gcc`/`libpq-dev`, que não são
+  necessários: `requirements.txt` usa `psycopg2-binary` (wheel
+  pré-compilada). Removê-los encolheria a imagem, mas é mudança pra uma
+  sessão que possa testar o build — não foi feita às cegas aqui.
+- `requirements.txt` instala `pytest` e `fakeredis` também em produção
+  (já sinalizado como "não necessário em produção" no próprio arquivo).
+- O Celery 5.4 não define `broker_connection_retry_on_startup`; o worker
+  emite um aviso de deprecação no boot e mantém o retry do broker ligado.
+  Ruído no log, não falha.
+
+---
+
 ## Modelo de Lead Score (referência rápida)
 
 | Critério | Peso | Camada |

@@ -1,4 +1,29 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+/**
+ * Base das chamadas à API.
+ *
+ * Em PRODUÇÃO o padrão é string vazia, ou seja, URLs RELATIVAS
+ * (`/api/leads`). O nginx que serve o frontend faz proxy de `/api/` (e
+ * de `/health`) pro App Service do backend dentro da rede interna do
+ * EasyPanel -- ver frontend/nginx.conf.template. Como o navegador vê
+ * front e API na mesma origem, não há requisição cross-origin e o CORS
+ * deixa de ser um problema em produção.
+ *
+ * Em DESENVOLVIMENTO o padrão continua sendo http://localhost:8000,
+ * porque o dev server do Vite não tem proxy configurado e o uvicorn
+ * roda numa porta separada.
+ *
+ * O `import.meta.env.PROD` no meio existe pra que o comportamento certo
+ * seja o PADRÃO nos dois ambientes, sem depender de ninguém lembrar de
+ * definir a variável. Antes o fallback era localhost em qualquer caso:
+ * bastava `VITE_API_URL` não estar definida no build de produção pra
+ * app inteira tentar falar com a máquina de quem abriu o navegador.
+ *
+ * `VITE_API_URL` continua sobrescrevendo os dois casos -- necessário só
+ * se o backend for servido em outro domínio. Atenção: variável do Vite
+ * é assada no bundle em tempo de BUILD, não lida em runtime; defini-la
+ * no painel do EasyPanel depois do build não tem efeito nenhum.
+ */
+const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? "" : "http://localhost:8000");
 
 /** Um critério já pontuado pra um lead -- mesmo shape de
  * CriterionScoreDetail em app/scoring/compute_lead_score.py, serializado

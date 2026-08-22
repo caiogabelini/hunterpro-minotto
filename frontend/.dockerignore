@@ -1,0 +1,18 @@
+# Contexto de build do frontend.
+#
+# node_modules/ e dist/ locais NÃO devem entrar no contexto: a etapa de
+# build da imagem roda `npm ci` e `npm run build` do zero. Copiar os
+# locais só torna o build mais lento e, no caso de node_modules, pode
+# trazer binários compilados pra outra plataforma que quebram o build.
+node_modules/
+dist/
+
+# Segredos e configuração local
+.env
+.env.*
+
+# Metadados de repositório e ruído local
+.git/
+.gitignore
+*.log
+.DS_Store
