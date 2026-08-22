@@ -268,11 +268,110 @@ Two-stage design, mirrored in the Celery tasks:
 - `lookup_debt_from_redis` / `enrich_pgfn_divida_ativa` task — cheap
   per-lead Redis lookup against the index built above.
 
-`PGFN_COLUMNS`, `DEFAULT_ENCODING`, and `DEFAULT_DELIMITER` at the top of
-the file are best-effort guesses based on public documentation, not a
-verified schema — if a real downloaded CSV has different column names or
-encoding, adjust these constants rather than changing parsing logic
-elsewhere in the module.
+**Reads `.zip` directly, no extraction needed (2026-08-23)** — same
+change already made for the RFB files, driven by a concrete incident:
+extracting `Dados_abertos_Nao_Previdenciario.zip` (1.3 GB compressed,
+~9.0 GB uncompressed) filled the available disk. `iter_pgfn_records`
+goes through `arquivo_utils.iter_streams_csv` (see below).
+`find_pgfn_csv_files` matches `Dados_abertos*.zip` **by prefix**,
+case-insensitively (not the three literal names — a browser saving
+`Dados_abertos_FGTS (1).zip` must still be found), plus the pre-existing
+`*.csv` for already-extracted files.
+
+⚠️ **The PGFN zip has MANY members and all of them are read** — the
+opposite of the RFB zips. Confirmed against the real file on 2026-08-23:
+`arquivo_lai_SIDA_1_202606.csv` … `_6_`, each with its own header, each a
+different slice of the same base. Reading only the first would return
+~1/6 of the country's active debt with no signal anything was missing.
+Column validation runs per member so a broken slice is named in the
+error, not the 1.3 GB zip. A zip with no `.csv` member at all raises
+`ArquivoZipInvalidoError` listing what it found.
+
+⚠️ **Never leave the zip AND its extracted CSVs in the same folder** —
+both get read and inscriptions are counted twice. Unlike the RFB seed,
+deduping by CNPJ is impossible here: the same CNPJ legitimately appears
+in many inscriptions, so "duplicate row" and "more debt" are
+indistinguishable.
+
+`PGFN_COLUMNS`'s **names are confirmed** against the real file
+(2026-08-23) — all 9 exist, spelled exactly as configured (the real file
+has 13 columns; the 4 extra ones aren't used). Two **content**
+assumptions were wrong and were **fixed 2026-08-23**, after a full
+streaming scan of the real zip (45,553,971 rows, all 6 members, ~9 min):
+
+- **`_parse_valor` read every value 100x too large.** `VALOR_CONSOLIDADO`
+  is US-formatted (`3165.44`), not BR-formatted (`1.234,56`) as the
+  function assumed — it stripped the dots, so `3165.44` became
+  `316544.0`. Format confirmed over 2M rows: **100%** match
+  `<digits>.<digits>`, zero commas, zero thousands separators. A comma is
+  still accepted as a decimal separator in case PGFN changes the format
+  (its presence disambiguates); US-with-thousands-separator (`1,234.56`)
+  is explicitly **not** supported — it doesn't occur, and guessing
+  between the two formats is exactly how the bug happened. Affected
+  `Lead.divida_ativa_valor_total` (dossier display); the inscription
+  count that feeds the score and pre-selection never depended on it.
+- **`SITUACOES_QUITADAS` matched ZERO of the 45.5M rows** — a complete
+  no-op that had gone unnoticed. The reason is structural and is the
+  fact this module was missing: **PGFN only publishes active
+  inscriptions** in the open data. A settled/extinct inscription never
+  enters the file, and all **97** distinct `SITUACAO_INSCRICAO` values
+  measured **start with `"ATIVA"`**. Replaced by a positive prefix check
+  (`_situacao_conta_como_divida_ativa`): with 97 spellings and new
+  laws/programs appearing each quarter, enumerating what to accept is one
+  rule while enumerating what to exclude is a losing race — and the error
+  direction flips to conservative (a non-ATIVA row falls **out** of paid
+  pre-selection, never in). ⚠️ **The count on today's file is unchanged**
+  (100% of rows pass both filters); this is a correctness/honesty fix,
+  not a volume adjustment.
+
+⚠️ **Open business decision — `TIPO_SITUACAO_INSCRICAO`** (don't
+implement without Douglas). The scan surfaced a second column, 5 values,
+measured over the 28,312,053 pessoa-jurídica inscriptions: `Em cobrança`
+79.09% · `Benefício Fiscal` 20.52% · `Garantia` 0.30% · `Suspenso por
+decisão judicial` 0.10% · `Em negociação` 0.00%. **None** means "settled"
+— `Benefício Fiscal` is an in-force parcelamento/transação
+(`NEGOCIADA NO SISPAR`, `PARCELADA LEI 12996/14`): the company owes and
+is paying. That's why it still counts. But it's the only cut that would
+move real volume: ignoring it would drop **20.5%** of PJ inscriptions.
+The parser doesn't even extract that column today — that's where to start
+if the decision comes. Counting everything is correct for the criterion
+as written ("inscrições ativas").
+
+`DEFAULT_ENCODING` and `DEFAULT_DELIMITER` are still best-effort guesses
+— if a real file differs, adjust these constants rather than changing
+parsing logic elsewhere in the module.
+
+### Shared zip/CSV reading (`app/services/arquivo_utils.py`)
+
+Extracted 2026-08-23 from `receita_federal_bulk.py`'s `_abrir_csv`, when
+`pgfn.py` needed the same thing. Sharing (rather than duplicating) is
+about a guarantee, not style: if someone re-implements this by hand in a
+second module and reaches for `ZipFile.read()` instead of
+`ZipFile.open()`, the whole file lands in memory and nobody notices until
+production dies on a 2.7 GB CSV.
+
+**Two functions, not one with a flag**, because "more than one member"
+means opposite things in the two formats:
+
+- `abrir_csv_unico(path, encoding)` — **RFB format**, exactly one member
+  per zip. Anything else raises `ArquivoZipInvalidoError` (guessing which
+  member to use would process the wrong data invisibly).
+- `iter_streams_csv(path, encoding, sufixo_membro=".csv")` — **PGFN
+  format**, many members, all read. Yields `(rotulo, stream)` pairs so
+  error messages can name the member, not just the zip; each stream is
+  closed before the next opens, and interrupting the loop cleans up via
+  `GeneratorExit`. Raises `ArquivoZipInvalidoError` when no member
+  matches the suffix, rather than yielding zero rows silently.
+
+Both accept an already-extracted CSV unchanged (decided by the path's
+suffix). `ArquivoZipInvalidoError` moved here too and is **re-exported
+from `receita_federal_bulk`** — several callers and tests import it from
+there. `receita_federal_bulk._abrir_csv` survives as a thin wrapper
+(fixes that module's default encoding, swallows the unused `delimiter`
+param that keeps its `iter_*` signatures symmetric).
+
+Verified end to end against the real 1.3 GB PGFN zip: all 6 members
+traversed, 14.5 MB peak RSS.
 
 ### CNES data (`app/services/cnes.py`)
 
@@ -361,7 +460,9 @@ the primary field on the `gerar_semente_leads` output; `nome_fantasia` is
 the fallback, chosen by `nome_busca_google_places()` in `celery_app.py`.
 
 **Reads `.zip` directly, no extraction needed (2026-08-23).** All three
-`iter_*` functions go through `_abrir_csv(path)`, which branches on
+`iter_*` functions go through `_abrir_csv(path)`, now a thin wrapper over
+`arquivo_utils.abrir_csv_unico` (see "Shared zip/CSV reading" above —
+the logic moved there when `pgfn.py` needed it too), which branches on
 `path.suffix == ".zip"`: `zipfile.ZipFile` + `io.TextIOWrapper` for zips,
 plain `open()` otherwise. Both paths stream — peak memory measured at
 0.15 MB over 400k rows of a 53 MB CSV, not proportional to file size.

@@ -75,7 +75,6 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
 from __future__ import annotations
 
 import csv
-import io
 import logging
 import re
 import zipfile
@@ -84,18 +83,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator
 
+from app.services.arquivo_utils import ArquivoZipInvalidoError, abrir_csv_unico
+
 logger = logging.getLogger(__name__)
 
 
-class ArquivoZipInvalidoError(ValueError):
-    """
-    O .zip não tem exatamente um arquivo dentro.
-
-    Herda de ValueError pra continuar sendo pego por quem captura exceções
-    genéricas (ex.: `_rodar_etapa` no pipeline, o try/except de
-    `executar_busca_mensal`), mas com tipo próprio pra quem quiser tratar
-    especificamente.
-    """
+# `ArquivoZipInvalidoError` e a leitura em streaming de .zip nasceram aqui e
+# foram extraídas pra app/services/arquivo_utils.py em 23/08/2026, quando
+# app/services/pgfn.py passou a precisar da mesma coisa (ver a docstring
+# daquele módulo sobre por que os dois formatos de .zip têm funções
+# separadas). O re-export mantém os imports existentes funcionando -- vários
+# chamadores e testes importam `ArquivoZipInvalidoError` daqui (o import no
+# topo deste arquivo é o que mantém esse nome disponível).
 
 
 @contextmanager
@@ -105,46 +104,19 @@ def _abrir_csv(path: Path, encoding: str = None, delimiter: str = None):
     aceitando tanto o `.zip` baixado direto do site quanto o CSV já
     extraído. Decide pelo sufixo do arquivo.
 
-    Os dois caminhos devolvem um objeto de arquivo pronto pro
-    `csv.reader` e são igualmente STREAMING -- em nenhum dos dois o
-    conteúdo inteiro entra na memória. `zipfile.ZipFile.open()` devolve
-    um stream binário descomprimido sob demanda, e o `io.TextIOWrapper`
-    decodifica em blocos; medido em 400 mil linhas de um CSV de 53 MB, o
-    pico de memória ficou em 0,15 MB (não proporcional ao arquivo).
+    Fininho por cima de `arquivo_utils.abrir_csv_unico` -- todo o
+    comportamento (streaming nos dois caminhos, `ArquivoZipInvalidoError`
+    quando o .zip não tem exatamente um membro) mora lá agora. Continua
+    existindo aqui pra fixar o encoding padrão deste módulo e por causa do
+    `delimiter`:
 
-    Ler direto do .zip corta o pico de DISCO: hoje é preciso ter o .zip
-    e o CSV extraído ao mesmo tempo na pasta; lendo de dentro, só o .zip.
-
-    ⚠️ Um .zip com mais de um arquivo dentro levanta
-    `ArquivoZipInvalidoError` em vez de assumir o primeiro em silêncio.
-    Os arquivos da Receita têm exatamente um membro cada; um zip com
-    vários é sinal de que alguém juntou fatias manualmente, e adivinhar
-    qual usar processaria dados errados sem ninguém perceber. Zip vazio
-    dá o mesmo erro, pelo mesmo motivo.
-
-    `delimiter` é aceito e ignorado de propósito: mantém a assinatura
+    `delimiter` é aceito e ignorado de propósito -- mantém a assinatura
     simétrica à das funções `iter_*` que chamam este helper, pra que
     ninguém precise lembrar quais parâmetros repassar.
     """
-    encoding = encoding or DEFAULT_ENCODING
+    with abrir_csv_unico(path, encoding=encoding or DEFAULT_ENCODING) as f:
+        yield f
 
-    if path.suffix.lower() != ".zip":
-        with open(path, encoding=encoding, newline="") as f:
-            yield f
-        return
-
-    with zipfile.ZipFile(path) as arquivo_zip:
-        membros = [info for info in arquivo_zip.infolist() if not info.is_dir()]
-        if len(membros) != 1:
-            nomes = [info.filename for info in membros]
-            raise ArquivoZipInvalidoError(
-                f"{path.name} tem {len(membros)} arquivos dentro (esperado exatamente 1): {nomes}. "
-                "Os arquivos de dados abertos da Receita vêm com um único membro por .zip -- "
-                "extraia o que você quer usar e coloque o CSV direto na pasta."
-            )
-        with arquivo_zip.open(membros[0]) as bruto:
-            with io.TextIOWrapper(bruto, encoding=encoding, newline="") as f:
-                yield f
 
 # ---------------------------------------------------------------------------
 # Layout confirmado contra o PDF oficial da Receita Federal (ver docstring

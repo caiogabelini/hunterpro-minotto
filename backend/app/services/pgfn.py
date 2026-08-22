@@ -7,8 +7,10 @@ NÃO confundir com regularize.pgfn.gov.br (portal do contribuinte,
 exige certificado digital — não serve pra prospecção).
 
 O QUE ESTE MÓDULO FAZ:
-  - Lê o(s) arquivo(s) CSV baixado(s) manualmente/agendado (SIDA geral,
-    FGTS, Previdenciário — a PGFN publica em arquivos separados)
+  - Lê o(s) arquivo(s) baixado(s) manualmente/agendado (SIDA geral,
+    FGTS, Previdenciário — a PGFN publica em arquivos separados),
+    aceitando tanto o `.zip` direto do site quanto CSV já extraído
+    (ver `find_pgfn_csv_files` / `iter_pgfn_records`)
   - Filtra: só pessoa jurídica (CNPJ), só inscrições ainda ATIVAS
     (remove "extinta por pagamento" e afins)
   - Indexa por CNPJ, contando quantas inscrições ativas cada empresa tem
@@ -22,13 +24,41 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
   - Não busca contato nenhum — a base da PGFN não tem e-mail/telefone,
     só identificação (CNPJ, nome) e dados da dívida.
 
+⚠️ NÃO PRECISA DESCOMPACTAR (desde 23/08/2026):
+Os `.zip` da PGFN (`Dados_abertos_Nao_Previdenciario.zip`,
+`Dados_abertos_Previdenciario.zip`, `Dados_abertos_FGTS.zip`) são lidos
+direto, em streaming, sem extrair nada em disco. Isso não é preferência de
+estilo: o `Dados_abertos_Nao_Previdenciario.zip` de 202606 tem 1,3 GB
+comprimido e ~9,0 GB descomprimidos (seis CSVs, o maior com 2,7 GB) —
+extrair já estourou o disco disponível uma vez. Basta jogar o `.zip` em
+`settings.PGFN_DADOS_ABERTOS_DIR`. Quem já tem os CSVs extraídos continua
+funcionando igual; só não deixe os dois formatos do MESMO dado na pasta ao
+mesmo tempo (ver a ressalva em `find_pgfn_csv_files`).
+
 ⚠️ SOBRE OS NOMES DE COLUNA:
-Os nomes abaixo (`PGFN_COLUMNS`) são baseados na documentação pública
-mais confiável disponível (metodologia do projeto CruzaGrafos/Abraji,
-que usa a mesma base). Ao baixar o arquivo real, confira contra o
-"dicionário de campos" oficial da PGFN e ajuste `PGFN_COLUMNS` se os
-nomes vierem diferentes — é só trocar aqui, o resto do módulo não
-precisa mudar.
+Os nomes abaixo (`PGFN_COLUMNS`) eram, até 23/08/2026, um palpite baseado
+na documentação pública mais confiável disponível (metodologia do projeto
+CruzaGrafos/Abraji, que usa a mesma base). **Agora estão CONFIRMADOS**
+contra o cabeçalho real de `arquivo_lai_SIDA_1_202606.csv`, dentro do
+`Dados_abertos_Nao_Previdenciario.zip` baixado do site — os 9 nomes que
+este módulo usa existem, escritos exatamente assim. (O arquivo real tem 13
+colunas; as 4 que sobram — `TIPO_DEVEDOR`, `UF_DEVEDOR`,
+`UNIDADE_RESPONSAVEL`, `TIPO_SITUACAO_INSCRICAO` — não são usadas aqui.)
+
+⚠️ DUAS SUPOSIÇÕES SOBRE O **CONTEÚDO** ESTAVAM ERRADAS — as duas
+corrigidas em 23/08/2026, depois de varrer o arquivo real inteiro
+(45.553.971 linhas, os 6 membros do `.zip`, em streaming):
+
+  1. `VALOR_CONSOLIDADO` vem no formato AMERICANO (`3165.44`), não no
+     brasileiro (`1.234,56`) que `_parse_valor` assumia — todo valor saía
+     100x maior. Ver a docstring de `_parse_valor`.
+  2. `SITUACOES_QUITADAS` (a blacklist `"EXTINTA"` / `"CANCELADA"` / ...)
+     não casava com **nenhuma** das 45,5 milhões de linhas: a PGFN só
+     publica inscrição ATIVA nos dados abertos, e os 97 valores distintos
+     de `SITUACAO_INSCRICAO` começam todos com `"ATIVA"`. Substituída por
+     uma checagem positiva de prefixo — ver
+     `_situacao_conta_como_divida_ativa`, que também documenta a decisão
+     de negócio ainda em aberto sobre `TIPO_SITUACAO_INSCRICAO`.
 """
 from __future__ import annotations
 
@@ -36,7 +66,9 @@ import csv
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import IO, Iterator
+
+from app.services.arquivo_utils import iter_streams_csv
 
 # ---------------------------------------------------------------------------
 # Configuração — ajustar aqui se os nomes reais de coluna vierem diferentes
@@ -58,15 +90,66 @@ PGFN_COLUMNS = {
 DEFAULT_ENCODING = "latin-1"
 DEFAULT_DELIMITER = ";"
 
-# Situações que significam "não é mais uma dívida ativa de verdade" —
-# excluídas da contagem. Lista conservadora; revisar contra os valores
-# reais do arquivo (o campo costuma ter variações de grafia).
-SITUACOES_QUITADAS = {
-    "EXTINTA",
-    "EXTINTA POR PAGAMENTO",
-    "EXTINTA POR OUTROS MOTIVOS",
-    "CANCELADA",
-}
+# ---------------------------------------------------------------------------
+# O que conta como "inscrição ainda ativa"
+# ---------------------------------------------------------------------------
+# ⚠️ REESCRITO EM 23/08/2026 A PARTIR DO ARQUIVO REAL. Até então isto era uma
+# blacklist adivinhada -- `{"EXTINTA", "EXTINTA POR PAGAMENTO", "EXTINTA POR
+# OUTROS MOTIVOS", "CANCELADA"}` -- e a varredura completa do
+# `Dados_abertos_Nao_Previdenciario.zip` (202606, 45.553.971 linhas, os 6
+# membros) mostrou que os quatro valores aparecem **ZERO vezes**. O filtro
+# não excluía uma única linha: era um no-op que passava despercebido.
+#
+# O motivo é estrutural, e é a informação que faltava neste módulo: a PGFN
+# **só publica inscrições ativas** nos dados abertos. Inscrição extinta,
+# quitada ou cancelada simplesmente não entra no arquivo. Dos 97 valores
+# distintos de `SITUACAO_INSCRICAO` medidos, **os 97 começam com "ATIVA"**
+# ("ATIVA EM COBRANCA", "ATIVA AJUIZADA", "ATIVA A SER AJUIZADA", ...).
+#
+# Por isso o filtro virou uma checagem POSITIVA por prefixo em vez de uma
+# blacklist de valores: com 97 grafias (e leis/programas novos aparecendo a
+# cada trimestre), enumerar o que excluir é uma corrida perdida; enumerar o
+# que aceitar é uma regra só. O sentido do erro também importa -- se um dia
+# a PGFN passar a publicar linhas não-ATIVA, elas ficam de fora (menos
+# CNPJs na pré-seleção paga), nunca dentro.
+#
+# ⚠️ Isto NÃO muda a contagem no arquivo de hoje: 100% das linhas passam nos
+# dois filtros. A correção é de honestidade e de proteção futura, não um
+# ajuste de volume -- ver o bullet de `TIPO_SITUACAO_INSCRICAO` abaixo pro
+# número que mudaria de verdade.
+SITUACAO_ATIVA_PREFIXO = "ATIVA"
+
+# ⚠️ DECISÃO EM ABERTO, DE NEGÓCIO, NÃO TÉCNICA -- não implementar sem o
+# Douglas. O arquivo tem uma segunda coluna, `TIPO_SITUACAO_INSCRICAO`, com
+# só 5 valores, que classifica a situação (medido sobre as 28.312.053
+# inscrições de pessoa jurídica):
+#
+#     Em cobrança                      22.390.784   79,09%
+#     Benefício Fiscal                  5.808.595   20,52%
+#     Garantia                             84.835    0,30%
+#     Suspenso por decisão judicial        27.787    0,10%
+#     Em negociação                            52    0,00%
+#
+# NENHUM desses cinco significa "quitada" -- todos são dívida ativa em
+# algum estado. "Benefício Fiscal" é parcelamento/transação em curso (as
+# situações "NEGOCIADA NO SISPAR", "PARCELADA LEI 12996/14"): a empresa
+# deve e está pagando, não deixou de dever. Por isso ela continua contando.
+#
+# Mas é o único recorte que mexeria no volume de verdade: ignorar
+# "Benefício Fiscal" cortaria 20,5% das inscrições de PJ. Se o Douglas
+# entender que empresa já parcelada não é lead bom (ele não precisa do
+# serviço que a Minotto venderia), é aqui que se implementa -- lendo essa
+# coluna, que hoje o parser nem extrai. Enquanto ninguém decidir, contar
+# tudo é o comportamento correto pro critério como está escrito
+# ("inscrições ativas").
+def _situacao_conta_como_divida_ativa(situacao: str) -> bool:
+    """
+    True se a situação da inscrição indica dívida ativa em aberto.
+
+    `situacao` chega já normalizada por `_clean(...).upper()` em
+    `_iter_records_de_stream`.
+    """
+    return situacao.startswith(SITUACAO_ATIVA_PREFIXO)
 
 
 def _clean(value: str | None) -> str:
@@ -92,11 +175,39 @@ def normalize_cnpj(raw: str | None) -> str | None:
 
 
 def _parse_valor(raw: str | None) -> float:
-    """Converte valor no formato brasileiro ('1.234,56') para float.
-    Retorna 0.0 se vazio ou não-numérico."""
+    """
+    Converte VALOR_CONSOLIDADO para float. Retorna 0.0 se vazio ou
+    não-numérico.
+
+    ⚠️ O arquivo da PGFN usa formato AMERICANO: ponto como separador
+    decimal e NENHUM separador de milhar ("3165.44"). Confirmado em
+    23/08/2026 varrendo 2 milhões de linhas de
+    `arquivo_lai_SIDA_1_202606.csv` — 100% dos valores no formato
+    `<dígitos>.<dígitos>`, nenhuma vírgula, nenhum ponto de milhar.
+
+    ⚠️ **Bug corrigido em 23/08/2026:** até então esta função assumia o
+    formato brasileiro ('1.234,56') e removia TODOS os pontos antes de
+    converter. Com o arquivo real, "3165.44" virava 316544.0 — todo valor
+    100x maior. Afetava `PgfnDebtSummary.valor_total` →
+    `Lead.divida_ativa_valor_total` (exibição no dossiê); a contagem de
+    inscrições, que é o que alimenta o score e a pré-seleção, nunca
+    dependeu deste parsing.
+
+    A vírgula ainda é aceita como separador decimal (formato brasileiro),
+    caso a PGFN mude o formato de publicação: presença de vírgula é
+    desambiguação suficiente, já que o formato real não usa nenhuma. O
+    que NÃO é suportado é o americano COM separador de milhar
+    ("1,234.56") — esse seria lido como brasileiro. Não existe no arquivo
+    real (nenhum separador de milhar aparece), e adivinhar entre os dois
+    é justamente como o bug acima nasceu.
+    """
     if not raw:
         return 0.0
-    cleaned = _clean(raw).replace(".", "").replace(",", ".")
+    cleaned = _clean(raw)
+    if not cleaned:
+        return 0.0
+    if "," in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
     try:
         return float(cleaned)
     except ValueError:
@@ -132,42 +243,78 @@ class PgfnDebtSummary:
     algum_ajuizado: bool = False
 
 
-def iter_pgfn_records(csv_path: Path, encoding: str = DEFAULT_ENCODING, delimiter: str = DEFAULT_DELIMITER) -> Iterator[PgfnDebtRecord]:
+def _iter_records_de_stream(
+    stream: IO[str],
+    rotulo: str,
+    delimiter: str,
+) -> Iterator[PgfnDebtRecord]:
     """
-    Lê um arquivo CSV da PGFN e produz um PgfnDebtRecord por linha
-    válida (pessoa jurídica, CNPJ parseável).
+    Percorre UM CSV já aberto (arquivo extraído ou membro de dentro do
+    .zip) e produz um PgfnDebtRecord por linha válida.
 
-    Não carrega tudo em memória de uma vez — o arquivo trimestral é
-    grande (mesma lição já registrada no projeto SR: "arquivo Simples
-    tem milhões de linhas, não limitar a leitura").
+    `rotulo` só serve pra mensagem de erro: com o .zip da PGFN tendo seis
+    membros, dizer "faltou coluna X" apontando o .zip de 1,3 GB não ajuda
+    ninguém a achar qual parte veio quebrada.
     """
     cols = PGFN_COLUMNS
+    reader = csv.DictReader(stream, delimiter=delimiter)
 
-    with open(csv_path, encoding=encoding, newline="") as f:
-        reader = csv.DictReader(f, delimiter=delimiter)
+    missing = [c for c in cols.values() if c not in (reader.fieldnames or [])]
+    if missing:
+        raise ValueError(
+            f"Colunas esperadas não encontradas em {rotulo}: {missing}. "
+            f"Colunas presentes: {reader.fieldnames}. "
+            "Confira o dicionário de campos oficial da PGFN e ajuste PGFN_COLUMNS."
+        )
 
-        missing = [c for c in cols.values() if c not in (reader.fieldnames or [])]
-        if missing:
-            raise ValueError(
-                f"Colunas esperadas não encontradas em {csv_path.name}: {missing}. "
-                f"Colunas presentes: {reader.fieldnames}. "
-                "Confira o dicionário de campos oficial da PGFN e ajuste PGFN_COLUMNS."
-            )
+    for row in reader:
+        cnpj = normalize_cnpj(row.get(cols["cnpj"]))
+        if cnpj is None:
+            continue  # pessoa física ou CNPJ inválido — pula
 
-        for row in reader:
-            cnpj = normalize_cnpj(row.get(cols["cnpj"]))
-            if cnpj is None:
-                continue  # pessoa física ou CNPJ inválido — pula
+        yield PgfnDebtRecord(
+            cnpj=cnpj,
+            nome_devedor=_clean(row.get(cols["nome"])),
+            numero_inscricao=_clean(row.get(cols["numero_inscricao"])),
+            situacao=_clean(row.get(cols["situacao"])).upper(),
+            receita_principal=_clean(row.get(cols["receita_principal"])),
+            ajuizado=_clean(row.get(cols["indicador_ajuizado"])).upper() == "SIM",
+            valor_consolidado=_parse_valor(row.get(cols["valor_consolidado"])),
+        )
 
-            yield PgfnDebtRecord(
-                cnpj=cnpj,
-                nome_devedor=_clean(row.get(cols["nome"])),
-                numero_inscricao=_clean(row.get(cols["numero_inscricao"])),
-                situacao=_clean(row.get(cols["situacao"])).upper(),
-                receita_principal=_clean(row.get(cols["receita_principal"])),
-                ajuizado=_clean(row.get(cols["indicador_ajuizado"])).upper() == "SIM",
-                valor_consolidado=_parse_valor(row.get(cols["valor_consolidado"])),
-            )
+
+def iter_pgfn_records(csv_path: Path, encoding: str = DEFAULT_ENCODING, delimiter: str = DEFAULT_DELIMITER) -> Iterator[PgfnDebtRecord]:
+    """
+    Lê um arquivo da PGFN e produz um PgfnDebtRecord por linha válida
+    (pessoa jurídica, CNPJ parseável).
+
+    Aceita os DOIS formatos, decidindo pelo sufixo do arquivo:
+
+      - `.zip` baixado direto do site (`Dados_abertos_FGTS.zip` e afins) —
+        percorre TODOS os CSVs de dentro, um depois do outro, sem extrair
+        nada em disco;
+      - CSV já extraído (`arquivo_lai_SIDA_1_202606.csv`) — comportamento
+        de sempre, inalterado.
+
+    ⚠️ **Todos** os membros, não o primeiro. O .zip da PGFN vem fatiado
+    (`arquivo_lai_SIDA_1_202606.csv` .. `_6_`, confirmado no arquivo real
+    em 23/08/2026) e cada fatia é uma parte diferente da mesma base — ler
+    só a primeira devolveria ~1/6 da dívida ativa do país sem nenhum sinal
+    de que faltou coisa. É o oposto do .zip da Receita Federal, que tem
+    exatamente um membro e trata "vários" como erro (ver
+    `app/services/arquivo_utils.py`).
+
+    Cada membro tem o próprio cabeçalho, então a validação de colunas roda
+    por membro — um .zip com uma fatia fora do layout falha apontando o
+    nome da fatia, não o do .zip.
+
+    Não carrega tudo em memória de uma vez — nem o CSV extraído nem o
+    conteúdo do .zip. O arquivo trimestral é grande (o
+    `Dados_abertos_Nao_Previdenciario.zip` de 202606: 1,3 GB comprimido,
+    ~9,0 GB descomprimidos, ~2,7 GB só no maior membro).
+    """
+    for rotulo, stream in iter_streams_csv(Path(csv_path), encoding=encoding):
+        yield from _iter_records_de_stream(stream, rotulo, delimiter)
 
 
 def build_pgfn_index(csv_paths: list[Path], encoding: str = DEFAULT_ENCODING, delimiter: str = DEFAULT_DELIMITER) -> dict[str, PgfnDebtSummary]:
@@ -176,14 +323,15 @@ def build_pgfn_index(csv_paths: list[Path], encoding: str = DEFAULT_ENCODING, de
     arquivos CSV (a PGFN publica SIDA geral, FGTS e Previdenciário
     separados — passar todos os que forem relevantes).
 
-    Só conta inscrições cuja situação NÃO está em SITUACOES_QUITADAS.
+    Só conta inscrições que passam em `_situacao_conta_como_divida_ativa`
+    (ver o bloco de comentários daquela função).
     """
     index: dict[str, PgfnDebtSummary] = {}
 
     for path in csv_paths:
         for record in iter_pgfn_records(path, encoding=encoding, delimiter=delimiter):
-            if record.situacao in SITUACOES_QUITADAS:
-                continue  # já foi paga/extinta — não conta como dívida ativa
+            if not _situacao_conta_como_divida_ativa(record.situacao):
+                continue  # não é dívida ativa em aberto — não conta
 
             summary = index.get(record.cnpj)
             if summary is None:
@@ -208,10 +356,46 @@ def get_debt_summary(index: dict[str, PgfnDebtSummary], cnpj: str) -> PgfnDebtSu
     return index.get(normalized)
 
 
+# Prefixo dos .zip publicados pela PGFN em dadosabertos.pgfn.gov.br. Os três
+# arquivos de hoje (confirmados em 23/08/2026):
+#
+#   Dados_abertos_Nao_Previdenciario.zip   (SIDA geral)
+#   Dados_abertos_Previdenciario.zip
+#   Dados_abertos_FGTS.zip
+#
+# A comparação é por PREFIXO + sufixo `.zip`, não pelos três nomes exatos, de
+# propósito: a PGFN já mudou nome de arquivo antes, e é comum o navegador
+# salvar como `Dados_abertos_FGTS (1).zip` ou o download vir com o trimestre
+# no nome. Casar pelo prefixo aceita todas essas variantes; casar pelos três
+# literais devolveria "sem arquivos" — que, nesse fluxo, é indistinguível de
+# "a pasta está vazia".
+PGFN_ZIP_PREFIXO = "dados_abertos"
+
+
 def find_pgfn_csv_files(directory: str | Path) -> list[Path]:
     """
-    Localiza os CSVs da PGFN já baixados numa pasta (SIDA geral, FGTS,
-    Previdenciário — a PGFN publica separados).
+    Localiza os arquivos da PGFN já baixados numa pasta (SIDA geral, FGTS,
+    Previdenciário — a PGFN publica separados), nos DOIS formatos:
+
+      - `.zip` direto do site: `Dados_abertos_Nao_Previdenciario.zip`,
+        `Dados_abertos_Previdenciario.zip`, `Dados_abertos_FGTS.zip`
+        (ver `PGFN_ZIP_PREFIXO`) — **não precisa descompactar**;
+        `iter_pgfn_records` lê os CSVs de dentro em streaming.
+      - CSV já extraído: qualquer `*.csv` (ex.:
+        `arquivo_lai_SIDA_1_202606.csv`), pra quem já tinha descompactado.
+
+    Sem diferenciar maiúscula/minúscula, mesma decisão de
+    `receita_federal_bulk._localizar_arquivos_rfb` e pelo mesmo motivo: um
+    glob case-sensitive já ignorou os .zip da Receita em silêncio uma vez,
+    e o sintoma foi uma busca "concluída com sucesso" trazendo zero leads.
+
+    ⚠️ Se a pasta tiver os dois formatos do mesmo dado (o .zip E os CSVs
+    extraídos de dentro dele), os dois entram na lista e as inscrições
+    seriam contadas duas vezes. Diferente da semente da Receita, aqui NÃO
+    dá pra deduplicar por CNPJ depois: o mesmo CNPJ legitimamente aparece
+    em várias inscrições, então "linha repetida" e "dívida a mais" são
+    indistinguíveis. Depois de ler direto do .zip, apague os CSVs extraídos
+    (ou o .zip) — é o único jeito de garantir a contagem certa.
 
     O download em si (via navegador ou script agendado) fica fora do
     escopo deste módulo por enquanto — isso lê o que já estiver na
@@ -220,7 +404,17 @@ def find_pgfn_csv_files(directory: str | Path) -> list[Path]:
     dir_path = Path(directory)
     if not dir_path.exists():
         return []
-    return sorted(dir_path.glob("*.csv"))
+
+    encontrados: list[Path] = []
+    for caminho in dir_path.iterdir():
+        if not caminho.is_file():
+            continue
+        nome = caminho.name.lower()
+        eh_csv_extraido = nome.endswith(".csv")
+        eh_zip_da_pgfn = nome.startswith(PGFN_ZIP_PREFIXO) and nome.endswith(".zip")
+        if eh_csv_extraido or eh_zip_da_pgfn:
+            encontrados.append(caminho)
+    return sorted(encontrados)
 
 
 # ---------------------------------------------------------------------------

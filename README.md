@@ -65,11 +65,18 @@ interno do Docker.
 - ✅ Lookup de **Zona Franca/ALC** (`app/scoring/zona_franca.py`) — já
   funcional, sem dependência externa
 - ✅ **Parser dos Dados Abertos da PGFN** (`app/services/pgfn.py`) —
-  lê o CSV trimestral, filtra pessoa jurídica e inscrições realmente
-  ativas, indexa por CNPJ. Separado em duas etapas: `refresh_pgfn_index`
-  (pesado, roda quando o arquivo trimestral atualiza) e
-  `enrich_pgfn_divida_ativa` (consulta rápida via Redis, por lead).
-  Testado com CSV sintético + Redis real rodando de ponta a ponta.
+  lê o arquivo trimestral (`.zip` direto do site **ou** CSV já extraído,
+  ver "Arquivos da PGFN: `.zip` ou extraído"), filtra pessoa jurídica e
+  inscrições realmente ativas, indexa por CNPJ. Separado em duas etapas:
+  `refresh_pgfn_index` (pesado, roda quando o arquivo trimestral
+  atualiza) e `enrich_pgfn_divida_ativa` (consulta rápida via Redis, por
+  lead). Testado com CSV sintético + Redis real rodando de ponta a ponta,
+  e a leitura do `.zip` foi exercitada contra o arquivo real de 1,3 GB.
+  Nomes de coluna **e** conteúdo confirmados contra o arquivo real
+  (23/08/2026, varredura completa de 45.553.971 linhas) — as duas
+  divergências achadas nessa inspeção (valor 100x maior, filtro de
+  situação que não filtrava nada) foram corrigidas; ver item 24 em "O que
+  falta".
 - ✅ **Fórmula da dívida ativa PGFN confirmada e implementada**
   (`app/scoring/rules.py::pgfn_points`) — Douglas validou por WhatsApp
   em 19/08/2026 ("sim, era isso mesmo"). `enrich_pgfn_divida_ativa` já
@@ -1181,11 +1188,66 @@ Em ordem de prioridade combinada com o cliente:
       `Modal` novo, o modal de "Perdido" continua com a implementação
       ad-hoc mais antiga.
 
-**Nota operacional:** o download do CSV trimestral da PGFN em si (via
+24. ~~Leitura dos arquivos da PGFN direto do `.zip`~~ ✅ feito
+    (23/08/2026) — ver "Arquivos da PGFN: `.zip` ou extraído" abaixo. A
+    lógica compartilhada com a Receita Federal saiu de
+    `receita_federal_bulk.py` pra `app/services/arquivo_utils.py`
+    (`abrir_csv_unico` pro formato da Receita, um membro por zip;
+    `iter_streams_csv` pro da PGFN, vários). Pendências deixadas de
+    propósito:
+    - ~~`VALOR_CONSOLIDADO` lido 100x maior~~ ✅ **corrigido**
+      (23/08/2026). O campo vem no formato americano (`3165.44`), não no
+      brasileiro (`1.234,56`) que `_parse_valor` assumia; a função
+      removia os pontos e `3165.44` virava `316544.0`. Formato confirmado
+      varrendo 2 milhões de linhas: **100%** no padrão
+      `<dígitos>.<dígitos>`, sem nenhuma vírgula nem separador de milhar.
+      Afetava `Lead.divida_ativa_valor_total` (exibição no dossiê); a
+      contagem de inscrições, que alimenta score e pré-seleção, nunca
+      dependeu desse parsing. A vírgula segue aceita como decimal, caso a
+      PGFN mude o formato.
+    - ~~`SITUACOES_QUITADAS` conferido contra os valores reais~~ ✅
+      **corrigido** (23/08/2026) — e o resultado foi mais forte do que a
+      suspeita: a blacklist (`"EXTINTA"`, `"EXTINTA POR PAGAMENTO"`,
+      `"EXTINTA POR OUTROS MOTIVOS"`, `"CANCELADA"`) casava com **zero**
+      das 45.553.971 linhas. Era um no-op completo. Motivo estrutural: a
+      PGFN **só publica inscrição ativa** nos dados abertos — inscrição
+      quitada não entra no arquivo, e os **97** valores distintos de
+      `SITUACAO_INSCRICAO` medidos **começam todos com `"ATIVA"`**.
+      Substituída por uma checagem positiva de prefixo
+      (`_situacao_conta_como_divida_ativa`): com 97 grafias e programas
+      novos a cada trimestre, enumerar o que aceitar é uma regra só, e o
+      sentido do erro passa a ser conservador — linha não-ATIVA fica de
+      fora da pré-seleção paga, nunca dentro. **A contagem no arquivo de
+      hoje não mudou** (100% das linhas passam nos dois filtros), o que é
+      o esperado: a correção é de honestidade e proteção futura.
+    - ⚠️ **Decisão de negócio em aberto — `TIPO_SITUACAO_INSCRICAO`.** A
+      varredura revelou uma segunda coluna, com só 5 valores, medida
+      sobre as 28.312.053 inscrições de pessoa jurídica: `Em cobrança`
+      79,09% · `Benefício Fiscal` 20,52% · `Garantia` 0,30% · `Suspenso
+      por decisão judicial` 0,10% · `Em negociação` 0,00%. **Nenhum**
+      significa "quitada" — `Benefício Fiscal` é parcelamento/transação
+      em curso (`NEGOCIADA NO SISPAR`, `PARCELADA LEI 12996/14`): a
+      empresa deve e está pagando. Por isso continua contando. Mas é o
+      único recorte que mexeria no volume de verdade: ignorá-lo cortaria
+      **20,5%** das inscrições de PJ. Se o Douglas entender que empresa
+      já parcelada não é lead bom (não precisa do serviço que a Minotto
+      venderia), é aí que se implementa. Enquanto ninguém decidir, contar
+      tudo é o correto pro critério como está escrito ("inscrições
+      ativas") — não é palpite de parser.
+    - **Um `*.csv` não relacionado na pasta derruba o
+      `refresh_pgfn_index`** (com `ValueError: Colunas esperadas não
+      encontradas`). Comportamento pré-existente do glob `*.csv`, mantido
+      — falha alto, que é melhor do que indexar lixo em silêncio, mas
+      vale saber se `PGFN_DADOS_ABERTOS_DIR` apontar pra uma pasta
+      compartilhada.
+
+**Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar
-`refresh_pgfn_index`. Automação desse download fica para uma sessão
-futura, se valer a pena frente ao volume (atualiza só 1x por trimestre).
+`refresh_pgfn_index`. **Não é preciso descompactar** — ver "Arquivos da
+PGFN: `.zip` ou extraído" logo abaixo. Automação desse download fica para
+uma sessão futura, se valer a pena frente ao volume (atualiza só 1x por
+trimestre).
 Mesma lógica pros arquivos da Receita Federal
 (arquivos.receitafederal.gov.br/dados/cnpj/dados_abertos_cnpj/, atualização
 mensal, publicados juntos no mesmo lote) — baixar manualmente e colocar em
@@ -1193,6 +1255,50 @@ mensal, publicados juntos no mesmo lote) — baixar manualmente e colocar em
 **Não é preciso descompactar** — ver "Arquivos da Receita: .zip ou
 extraído" logo abaixo. Sem o(s) arquivo(s) EMPRESAS na pasta, a task ainda
 funciona (filtra e devolve os CNPJs), só que sem razão social.
+
+### Arquivos da PGFN: `.zip` ou extraído (as duas formas funcionam)
+
+Desde 23/08/2026 o parser da PGFN (`app/services/pgfn.py`) lê **direto de
+dentro do `.zip`**, em streaming, sem nunca escrever o CSV descompactado no
+disco. Basta jogar o arquivo baixado em `PGFN_DADOS_ABERTOS_DIR`:
+
+| Dado | `.zip` (direto do site) | CSV já extraído |
+|---|---|---|
+| SIDA geral | `Dados_abertos_Nao_Previdenciario.zip` | `arquivo_lai_SIDA_<n>_<AAAAMM>.csv` |
+| Previdenciário | `Dados_abertos_Previdenciario.zip` | idem (nomes internos do zip) |
+| FGTS | `Dados_abertos_FGTS.zip` | idem |
+
+O reconhecimento é por **prefixo** (`Dados_abertos*.zip`, sem diferenciar
+maiúscula/minúscula), não pelos três nomes literais — assim
+`Dados_abertos_FGTS (1).zip` (navegador salvando duplicata) ou um nome com
+o trimestre no fim continuam sendo achados. Qualquer `*.csv` na pasta
+também entra, pra quem já tinha descompactado antes.
+
+**Por que isso importa aqui mais do que na Receita:** o
+`Dados_abertos_Nao_Previdenciario.zip` de 202606 tem **1,3 GB comprimido e
+~9,0 GB descomprimidos** (seis CSVs, o maior com 2,7 GB). Descompactar
+**já estourou o disco disponível uma vez** — foi o motivo concreto desta
+mudança, não consistência de estilo. O pico de memória continua o mesmo
+dos dois jeitos (streaming; medido em 14,5 MB de RSS lendo o arquivo real
+de 1,3 GB).
+
+⚠️ **O `.zip` da PGFN tem VÁRIOS CSVs dentro — todos são lidos.** Confirmado
+no arquivo real (23/08/2026): `arquivo_lai_SIDA_1_202606.csv` até
+`arquivo_lai_SIDA_6_202606.csv`, cada um com cabeçalho próprio e uma fatia
+diferente da mesma base. É o **oposto** do `.zip` da Receita Federal, que
+tem exatamente um membro e trata "vários" como erro. Ler só o primeiro
+devolveria ~1/6 da dívida ativa do país sem nenhum sinal de que faltou
+coisa — exatamente a classe de armadilha silenciosa que a seção seguinte
+descreve. Um `.zip` sem nenhum `.csv` dentro levanta
+`ArquivoZipInvalidoError` listando os membros, em vez de devolver zero
+linhas em silêncio.
+
+⚠️ **Não deixe o `.zip` E os CSVs extraídos dele na mesma pasta.** Os dois
+seriam lidos e as inscrições contadas em dobro. Diferente da semente da
+Receita, aqui **não dá pra deduplicar por CNPJ**: o mesmo CNPJ
+legitimamente aparece em várias inscrições, então "linha repetida" e
+"dívida a mais" são indistinguíveis. Depois de passar a ler do `.zip`,
+apague os CSVs extraídos.
 
 ### Arquivos da Receita: `.zip` ou extraído (as duas formas funcionam)
 
