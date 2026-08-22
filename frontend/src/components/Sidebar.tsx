@@ -15,9 +15,10 @@ export function Sidebar() {
   const roleLabel = role ? (ROLE_LABELS[role] ?? role) : "Usuário";
   const ehAdmin = role === "admin";
 
+  // Mesma ordem em que os itens aparecem na nav abaixo.
+  const dashboardAtivo = location.pathname === "/dashboard";
   const kanbanAtivo = location.pathname === "/";
   const listaLeadsAtivo = location.pathname === "/leads";
-  const dashboardAtivo = location.pathname === "/dashboard";
   const buscaLeadsAtivo = location.pathname === "/busca-leads";
 
   return (
@@ -28,6 +29,11 @@ export function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
+        <Link to="/dashboard" className={`sidebar-nav-item ${dashboardAtivo ? "sidebar-nav-item-ativo" : ""}`}>
+          <BarChart3 size={18} />
+          <span>Dashboard</span>
+        </Link>
+
         <Link to="/" className={`sidebar-nav-item ${kanbanAtivo ? "sidebar-nav-item-ativo" : ""}`}>
           <LayoutGrid size={18} />
           <span>Kanban</span>
@@ -61,11 +67,6 @@ export function Sidebar() {
             <span>Busca de Leads</span>
           </Link>
         )}
-
-        <Link to="/dashboard" className={`sidebar-nav-item ${dashboardAtivo ? "sidebar-nav-item-ativo" : ""}`}>
-          <BarChart3 size={18} />
-          <span>Dashboard</span>
-        </Link>
       </nav>
 
       <div className="sidebar-footer">
