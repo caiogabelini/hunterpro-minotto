@@ -1289,6 +1289,164 @@ frontend, de propósito.
 
 ---
 
+## Pré-seleção de candidatos (controle de custo da busca)
+
+### O problema que isto resolve
+
+Até 22/08/2026, `executar_busca_mensal` chamava `process_lead_pipeline`
+para **todo CNPJ** que a semente encontrasse. Como a semente é o filtro
+nacional de CNAE 8630 (ordem de centenas de milhares de estabelecimentos),
+o custo de uma execução era proporcional ao **universo**, não ao plano
+contratado — e cada CNPJ dispara Google Places, Firecrawl, Anthropic,
+Hunter.io e ZeroBounce, todas cobradas por chamada.
+
+`settings.PLANO_LEADS_MES = 50` dava a impressão de haver um teto, mas
+era puramente cosmético: alimentava só o texto "X / 50 leads este mês" do
+dashboard, sem gatear nada.
+
+### O fluxo em duas fases
+
+`executar_busca_mensal` agora separa explicitamente o que é grátis do que
+custa dinheiro:
+
+| Fase | O quê | Escopo | Custo |
+|---|---|---|---|
+| **1a** | `gerar_semente_leads()` | universo (~centenas de milhares) | leitura de arquivo local |
+| **1b** | `_coletar_sinais_gratuitos()` | universo | MGET em lote no Redis + lookups locais |
+| **1c** | `selecionar_melhores_candidatos()` | universo → **top 60** | CPU, função pura |
+| **2** | `process_lead_pipeline()` | **só os 60** | 💸 Google Places, Firecrawl, Anthropic, Hunter.io, ZeroBounce |
+
+**A invariante a preservar** se alguém mexer neste fluxo: *nenhuma etapa
+paga roda antes do corte do top N*.
+
+### Os 3 sinais gratuitos
+
+São exatamente os disponíveis antes de qualquer chamada externa paga:
+
+| Critério | Peso | De onde vem | Custo |
+|---|---|---|---|
+| `divida_ativa_pgfn` | 20 | índice Redis de `refresh_pgfn_index` | lookup local |
+| `zona_franca_alc` | 20 | lista estática da Suframa (10 municípios) | zero I/O |
+| `unidade_cnpj_ativo` | 5 | situação cadastral, já no arquivo bulk | zero I/O |
+
+Máximo preliminar: **45 de 100**. Os outros 6 critérios (RQE, WhatsApp,
+e-mail, presença digital, decisor, rating Google) dependem justamente das
+etapas pagas — por definição não podem entrar aqui.
+
+Os pontos vêm das **mesmas funções** de `rules.py`/`compute_lead_score.py`
+que o score definitivo usa, não de uma escala paralela: um
+`score_preliminar` de 40 significa literalmente "já garantiu 40 dos 100
+pontos do score real".
+
+### A margem de segurança (60 para entregar 50)
+
+`LEADS_POR_BUSCA = 50` é o que o cliente contratou.
+`LEADS_MARGEM_PRE_SELECAO = 1.2` faz o pipeline rodar em
+`ceil(50 × 1.2) = 60` candidatos.
+
+Existe porque a pré-seleção enxerga só 3 sinais e não tem como prever
+quais candidatos vão render pouco no enriquecimento completo: CNPJ sem
+site, Google Places sem resultado, Firecrawl falhando, ou o próprio
+`process_lead_pipeline` estourando. Sem margem, uma execução com 10
+falhas entrega 40 leads em vez de 50.
+
+**20% é um chute inicial deliberado** — não existe histórico de taxa de
+falha do pipeline em produção para calibrar (nunca rodou de verdade).
+Depois da primeira execução real, comparar `total_leads_processados` com
+`total_cnpjs_selecionados` na tabela `buscas_leads` dá a taxa real e
+permite ajustar com dado em vez de palpite.
+
+### ⚠️ Efeito emergente: Zona Franca pode dominar o lote
+
+Os pesos foram fechados com o Douglas para **ranquear leads já
+encontrados**, não para **decidir quem é enriquecido**. Reaproveitá-los
+como porta de entrada tem uma consequência que ninguém aprovou
+explicitamente:
+
+Zona Franca vale 20 de um máximo preliminar de 45, e é **binário**. Um
+candidato em ALC sem dívida nenhuma (25 pontos) **empata com** um
+candidato com a dívida no teto da fórmula, 6+ inscrições (25 pontos), e
+**supera** qualquer dívida menor. Se existirem 60+ clínicas de CNAE 8630
+nos 10 municípios da lista, o lote tende a ser quase só delas — o que na
+prática restringe a busca àquelas cidades, exatamente o que o Douglas
+disse que **não** queria (*"é prioridade, não filtro exclusivo"*,
+`app/scoring/rules.py:66`).
+
+Isto **não foi "corrigido"**: mudar peso exige aval do cliente (regra do
+próprio `rules.py`). O que foi feito foi tornar o efeito **visível** —
+`executar_busca_mensal` registra a composição do lote (quantos de ALC,
+quantos com dívida ativa, faixa de score) no log e no retorno da task, e
+`test_zona_franca_supera_divida_ativa_no_teto` fixa o comportamento em
+teste. A primeira execução real mostra o problema em números.
+
+### Guardas que abortam antes de gastar
+
+Três situações marcam a busca como `"erro"` **sem chamar
+`process_lead_pipeline` nenhuma vez**:
+
+1. `gerar_semente_leads()` levantando exceção.
+2. **Índice PGFN nunca populado** (chave `pgfn:index_updated_at` ausente
+   no Redis). Sem ele, todo CNPJ devolve "sem dívida", os candidatos
+   empatam e a seleção vira "os 60 primeiros por ordem de CNPJ" — gastaria
+   dinheiro num conjunto praticamente aleatório, indistinguível de uma
+   busca legítima onde ninguém tem dívida. **Rode `refresh_pgfn_index`
+   antes da busca.**
+3. Falha na coleta dos sinais gratuitos (ex.: Redis fora do ar).
+
+Degradação **não** fatal, mas registrada em `busca.erros` para o admin
+ver: se a tabela de municípios (`*MUNICCSV*`) não estiver na pasta de
+dados abertos, Zona Franca não participa da pré-seleção e o ranking usa
+só PGFN.
+
+### Dependência nova: a tabela de municípios da Receita
+
+A semente traz `municipio` como **código interno da RFB**, mas a lista da
+Suframa é por **nome**. Para decidir Zona Franca de graça (sem uma chamada
+da BrasilAPI por CNPJ, que é justamente a etapa cara que a pré-seleção
+existe para evitar), é preciso o arquivo de domínio
+`F.K03200$Z.D<data>.MUNICCSV`, baixado na **mesma pasta** dos outros dois
+arquivos da Receita (`RECEITA_FEDERAL_DADOS_ABERTOS_DIR`).
+
+⚠️ O layout desse arquivo (2 colunas: código; descrição) **não foi
+confirmado contra o PDF oficial** — este ambiente não tem rede para abrir
+o PDF. Mesmo tratamento de `PGFN_COLUMNS`: se o arquivo real vier
+diferente, ajuste `MUNICIPIOS_COLUNAS` em
+`app/services/receita_federal_bulk.py`, não a lógica de parsing.
+
+### Cache de município do CNES
+
+A API do CNES não filtra por CNPJ no servidor, então cada lead baixava a
+lista inteira de estabelecimentos de saúde do município, paginando de 20
+em 20 até `MAX_PAGINAS = 500` — **até 500 requisições HTTP por lead**, sem
+reaproveitamento entre leads da mesma cidade.
+
+Agora `executar_busca_mensal` cria um `dict` por execução e o passa por
+`process_lead_pipeline(cache_cnes=...)` até `enrich_cnes`. Leads do mesmo
+município compartilham a paginação.
+
+**Onde o cache fica:** é um dict comum, criado dentro de
+`executar_busca_mensal` e passado por parâmetro — **não** um cache de
+módulo. O tempo de vida é deliberado: uma execução compartilha, execuções
+diferentes nunca reaproveitam. Um cache de módulo entregaria cadastro do
+CNES de um mês atrás na busca do mês seguinte, sem ninguém perceber.
+Chamada avulsa (`cache_municipios=None`) mantém o comportamento antigo.
+
+### `anos_mercado` é informativo, NÃO pontua no score
+
+Auditoria de 22/08/2026, confirmado com o cliente. `anos_mercado` é
+calculado por `enrich_receita_federal`, persistido em `Lead`, exibido no
+dossiê e enviado no contexto dos insights de IA — mas **não é um dos 9
+critérios de `SCORING_CRITERIA`** e **não move um ponto do score**.
+
+Também **não é filtro**: empresas novas entram normalmente na busca; não
+existe corte de 8+/15+ anos em lugar nenhum do código.
+
+Se um dia virar critério pontuado, será preciso **rebalancear os outros 8
+pesos** para a soma continuar exatamente 100 (`assert` em
+`app/scoring/rules.py:165`) — e isso exige aval do Douglas.
+
+---
+
 ## Deploy em Produção (EasyPanel)
 
 Domínio de produção: **https://minotto.4handsai.com.br**

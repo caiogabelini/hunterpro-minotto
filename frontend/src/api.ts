@@ -181,6 +181,11 @@ export interface BuscaLeadsRegistro {
   concluido_em?: string | null;
   status: string;
   total_cnpjs_encontrados?: number | null;
+  /** Quantos CNPJs passaram na pré-seleção e entraram no enriquecimento
+   * pago (top N por score preliminar). Fica entre `encontrados` (o
+   * universo) e `processados`. `null` em buscas anteriores a 22/08/2026,
+   * quando a pré-seleção não existia. */
+  total_cnpjs_selecionados?: number | null;
   total_leads_processados?: number | null;
   erros?: string[] | null;
 }

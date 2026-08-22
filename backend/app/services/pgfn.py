@@ -264,6 +264,69 @@ def save_index_to_redis(index: dict[str, PgfnDebtSummary], redis_client) -> int:
     return len(index)
 
 
+# Quantas chaves por MGET. O Redis não impõe limite prático, mas um MGET
+# de 300 mil chaves monta uma lista gigante de uma vez só na memória do
+# cliente E do servidor -- fatiar mantém o pico de memória previsível sem
+# perder quase nada de throughput.
+LOTE_LOOKUP_PADRAO = 5_000
+
+
+def lookup_debts_from_redis(
+    cnpjs: list[str],
+    redis_client,
+    tamanho_lote: int = LOTE_LOOKUP_PADRAO,
+) -> dict[str, PgfnDebtSummary]:
+    """
+    Versão em LOTE de `lookup_debt_from_redis` -- usada pela pré-seleção
+    de candidatos (app/scoring/pre_selecao.py), que precisa consultar o
+    universo inteiro da semente, não um lead por vez.
+
+    Existe por motivo de escala, não de estilo: a semente nacional de
+    CNAE 8630 tem ordem de centenas de milhares de CNPJs, e um `GET` por
+    CNPJ seria um round-trip de rede por item. Com `MGET` em lotes, o
+    mesmo trabalho vira algumas dezenas de round-trips.
+
+    Devolve um dict {cnpj_normalizado: PgfnDebtSummary} contendo APENAS
+    os CNPJs que estão de fato em dívida ativa. Ausência da chave = sem
+    dívida (ou índice ainda não populado) -- mesma semântica do `None` da
+    versão unitária, só que quem chama usa `.get(cnpj)` em vez de checar
+    o retorno.
+
+    CNPJs inválidos (que `normalize_cnpj` rejeita) são ignorados em
+    silêncio, e uma linha de índice corrompida (JSON inválido ou sem as
+    chaves esperadas) é pulada em vez de derrubar o lote inteiro -- a
+    pré-seleção roda sobre o universo todo e não deve morrer por causa de
+    uma entrada ruim.
+    """
+    normalizados: list[str] = []
+    for cnpj in cnpjs:
+        normalizado = normalize_cnpj(cnpj)
+        if normalizado is not None:
+            normalizados.append(normalizado)
+
+    resultado: dict[str, PgfnDebtSummary] = {}
+    for inicio in range(0, len(normalizados), tamanho_lote):
+        lote = normalizados[inicio : inicio + tamanho_lote]
+        if not lote:
+            continue
+        brutos = redis_client.mget([_redis_key(c) for c in lote])
+        for cnpj_normalizado, bruto in zip(lote, brutos):
+            if bruto is None:
+                continue
+            try:
+                data = json.loads(bruto)
+                resultado[cnpj_normalizado] = PgfnDebtSummary(
+                    cnpj=cnpj_normalizado,
+                    qtd_inscricoes_ativas=data["qtd_inscricoes_ativas"],
+                    valor_total=data["valor_total"],
+                    algum_ajuizado=data["algum_ajuizado"],
+                )
+            except (ValueError, TypeError, KeyError):
+                continue
+
+    return resultado
+
+
 def lookup_debt_from_redis(cnpj: str, redis_client) -> PgfnDebtSummary | None:
     """
     Consulta rápida por CNPJ — é isso que a task `enrich_pgfn_divida_ativa`

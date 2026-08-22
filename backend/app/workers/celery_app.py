@@ -82,6 +82,7 @@ app/services/site_scraping.py); `process_lead_pipeline` pula essa etapa
 também se a chave não estiver configurada ou se não houver `site_url`.
 """
 import logging
+import math
 
 from celery import Celery
 
@@ -157,6 +158,16 @@ def gerar_semente_leads(
                 "nome_fantasia": e.nome_fantasia,
                 "uf": e.uf,
                 "cnae_fiscal_principal": e.cnae_fiscal_principal,
+                # Os dois campos abaixo alimentam a PRÉ-SELEÇÃO
+                # (app/scoring/pre_selecao.py), não o pipeline de
+                # enriquecimento. `municipio_codigo_rfb` é o código
+                # INTERNO da Receita (não é IBGE -- ver o aviso no topo
+                # de receita_federal_bulk.py); só serve pra resolver o
+                # NOME do município contra a tabela de domínio MUNICCSV e
+                # daí decidir Zona Franca de graça, sem gastar uma
+                # chamada da BrasilAPI por CNPJ.
+                "municipio_codigo_rfb": e.municipio_codigo_rfb,
+                "situacao_cadastral": e.situacao_cadastral,
             }
             for e in estabelecimentos
         ],
@@ -339,7 +350,7 @@ def enrich_zona_franca(municipio: str, uf: str) -> bool:
 
 
 @celery_app.task(name="enrich_cnes")
-def enrich_cnes(cnpj: str, codigo_municipio: int) -> dict:
+def enrich_cnes(cnpj: str, codigo_municipio: int, cache_municipios: dict | None = None) -> dict:
     """
     Cruza o CNPJ do lead contra os estabelecimentos de saúde cadastrados
     no CNES para o município informado (código IBGE de 6 dígitos — precisa
@@ -351,11 +362,44 @@ def enrich_cnes(cnpj: str, codigo_municipio: int) -> dict:
     Isso reforça (não substitui) a inferência de RQE via IA feita em
     `enrich_site_firecrawl`; a decisão de como combinar os dois no score
     do critério `rqe_especialista` ainda não foi confirmada com o cliente.
+
+    `cache_municipios` — dict {codigo_municipio: [CnesEstabelecimento]}
+    -------------------------------------------------------------------
+    Como a API não filtra por CNPJ do lado do servidor, cada chamada baixa
+    a lista INTEIRA de estabelecimentos de saúde do município, paginando
+    de 20 em 20 até o teto de `MAX_PAGINAS` (500) — ou seja, até 500
+    requisições HTTP por lead. Sem cache, dois leads do mesmo município
+    refazem a paginação completa do zero; num lote com várias clínicas da
+    mesma capital, isso multiplica um trabalho já caro em tempo.
+
+    O cache é um dict COMUM, passado de fora (mesma convenção de injeção
+    de `client=None`/`db=None` no resto do projeto), e não um cache de
+    módulo. Isso é deliberado: quem cria o dict define o tempo de vida
+    dele. `executar_busca_mensal` cria um por execução, então os leads de
+    uma mesma busca compartilham o resultado e buscas diferentes nunca
+    reaproveitam dados de uma execução anterior (o cadastro do CNES muda
+    entre um mês e outro, e um cache de módulo entregaria dado velho sem
+    ninguém perceber). Chamada avulsa, sem o parâmetro, mantém o
+    comportamento antigo: sempre busca da API.
     """
     from app.services.cnes import fetch_estabelecimentos_por_municipio, find_estabelecimento_by_cnpj
     from app.services.pgfn import normalize_cnpj
 
-    estabelecimentos = fetch_estabelecimentos_por_municipio(codigo_municipio)
+    if cache_municipios is None:
+        estabelecimentos = fetch_estabelecimentos_por_municipio(codigo_municipio)
+    else:
+        # A chave é normalizada pra string: o código pode chegar como int
+        # (de enrich_receita_federal) ou str (de um chamador manual), e
+        # 355030 != "355030" num dict -- sem isso o cache erraria o alvo
+        # silenciosamente e voltaria a paginar tudo de novo.
+        chave = str(codigo_municipio)
+        if chave not in cache_municipios:
+            cache_municipios[chave] = fetch_estabelecimentos_por_municipio(codigo_municipio)
+            logger.info("CNES: município %s baixado e guardado no cache da execução.", chave)
+        else:
+            logger.info("CNES: município %s reaproveitado do cache -- paginação evitada.", chave)
+        estabelecimentos = cache_municipios[chave]
+
     encontrado = find_estabelecimento_by_cnpj(estabelecimentos, cnpj)
     normalized_cnpj = normalize_cnpj(cnpj) or cnpj
 
@@ -514,13 +558,20 @@ def compute_lead_score(lead_id: str, enriquecimentos: dict) -> dict:
 #
 #   enrich_pgfn_divida_ativa(cnpj)        [independente, só precisa do cnpj]
 #
-#   search_google_places                  [NÃO implementada -- ver ressalva
-#                                           abaixo; forneceria site_url e rating]
+#   search_google_places(estabelecimento)  [implementada em 20/08/2026 --
+#                                           busca pelo nome (razão social,
+#                                           com fallback pra nome_fantasia)
+#                                           + UF; ver app/services/
+#                                           google_places.py]
+#       ├─→ site                       -> site_url_efetivo (fonte AUTOMÁTICA
+#       │                                  de site_url, quando o chamador
+#       │                                  não passou uma explicitamente)
+#       └─→ rating, avaliacoes, telefone_google
 #
-#   enrich_site_firecrawl(site_url)       [precisa de site_url -- hoje SEM
-#                                           fonte automática no pipeline, já
-#                                           que search_google_places não está
-#                                           implementada; ver parâmetro site_url]
+#   enrich_site_firecrawl(site_url)       [precisa de site_url_efetivo (do
+#                                           Google Places acima, ou passado
+#                                           explicitamente) E de
+#                                           FIRECRAWL_API_KEY configurada]
 #       └─→ domínio (extraído da URL)   -> enrich_email(dominio, decisor_nome)
 #
 #   validate_whatsapp(telefone)           [precisa de telefone -- hoje SEM
@@ -541,13 +592,18 @@ def compute_lead_score(lead_id: str, enriquecimentos: dict) -> dict:
 #   compute_lead_score(lead_id, enriquecimentos)  [por último, sempre --
 #                                                   combina tudo que rodou]
 #
-# ⚠️ GAPS DE DADO QUE NÃO SÃO BUG DESTA TASK: `site_url` e `telefone` não
-# saem de NENHUMA etapa implementada do pipeline hoje (viriam de
-# search_google_places, que é NotImplementedError). Por isso
-# `process_lead_pipeline` aceita os dois como parâmetros opcionais — quem
-# já souber o site/telefone de outra fonte pode passar direto; sem eles,
-# as etapas que dependem (enrich_site_firecrawl, validate_whatsapp,
-# enrich_email) são puladas com aviso no log, não travam o pipeline.
+# ⚠️ GAP DE DADO QUE NÃO É BUG DESTA TASK: `telefone` não sai de NENHUMA
+# etapa implementada do pipeline. `search_google_places` devolve um
+# `telefone_google`, mas ele é persistido no Lead sem ser reaproveitado
+# como entrada de `validate_whatsapp` -- ligar os dois é uma mudança de
+# comportamento (passaria a gastar chamadas da Evolution API que hoje
+# nunca acontecem), não uma correção óbvia, então segue como está até
+# alguém pedir. Sem `telefone` explícito, `validate_whatsapp` é pulada
+# com aviso no log, não trava o pipeline.
+#
+# `site_url` NÃO é mais um gap: desde 20/08/2026 `search_google_places`
+# é a fonte automática dele (ver o grafo acima). O parâmetro opcional
+# continua existindo e tem precedência sobre o Places.
 
 
 def _rodar_etapa(nome_etapa: str, funcao) -> dict | bool | None:
@@ -700,6 +756,7 @@ def process_lead_pipeline(
     site_url: str | None = None,
     telefone: str | None = None,
     db=None,
+    cache_cnes: dict | None = None,
 ) -> dict:
     """
     Orquestra o pipeline de enriquecimento completo pra um CNPJ: dispara
@@ -715,11 +772,16 @@ def process_lead_pipeline(
     `razao_social` é opcional, mas ajuda a não criar o Lead com o CNPJ
     como razão social provisória se `enrich_receita_federal` falhar.
 
-    `site_url` e `telefone` também são opcionais e cobrem um gap real do
-    pipeline: nenhuma etapa implementada hoje produz esses dois dados
-    (viriam de `search_google_places`, que é `NotImplementedError`) — ver
-    o comentário de dependências acima. Sem eles, `enrich_site_firecrawl`,
-    `validate_whatsapp` e `enrich_email` são puladas com aviso no log.
+    `site_url` é opcional: desde 20/08/2026 `search_google_places` está
+    implementada e é a fonte automática dele (o `site` que o Places
+    devolve). Passar explicitamente ainda funciona e tem precedência.
+    `telefone` continua sem nenhuma fonte automática no pipeline — sem
+    ele, `validate_whatsapp` é pulada com aviso no log.
+
+    `cache_cnes` é um dict compartilhado entre várias chamadas desta task
+    dentro de uma MESMA execução de busca, pra que leads do mesmo
+    município não repitam a paginação inteira do CNES — ver a explicação
+    no docstring de `enrich_cnes`. `None` (padrão) desliga o cache.
 
     Cada etapa roda isolada via `_rodar_etapa` — uma falha (exceção) numa
     etapa não derruba as outras nem a persistência do que já funcionou;
@@ -765,7 +827,10 @@ def process_lead_pipeline(
     # Federal -- dependência explícita, não dá pra rodar antes da ETAPA 1.
     codigo_municipio_cnes = (receita_federal or {}).get("codigo_municipio_cnes")
     if codigo_municipio_cnes:
-        cnes = _rodar_etapa("enrich_cnes", lambda: enrich_cnes(cnpj, codigo_municipio_cnes))
+        cnes = _rodar_etapa(
+            "enrich_cnes",
+            lambda: enrich_cnes(cnpj, codigo_municipio_cnes, cache_municipios=cache_cnes),
+        )
         if cnes is not None:
             enriquecimentos["enrich_cnes"] = cnes
     else:
@@ -905,42 +970,175 @@ def process_lead_pipeline(
 # (app/api/deps.py::require_admin), por isso o painel existe fora do
 # fluxo normal de qualquer usuário "client".
 
-_CRITERIO_ERRO_TAXA_FALHA = 0.5  # >50% dos CNPJs falharam -> status "erro"
+_CRITERIO_ERRO_TAXA_FALHA = 0.5  # >50% dos CNPJs SELECIONADOS falharam -> status "erro"
+
+
+def _top_n_pre_selecao() -> int:
+    """
+    Quantos candidatos entram no enriquecimento pago:
+    `ceil(LEADS_POR_BUSCA * LEADS_MARGEM_PRE_SELECAO)` -> 60 no padrão
+    (50 leads contratados + 20% de margem). Ver o comentário das duas
+    variáveis em app/core/config.py pro racional da margem.
+    """
+    return math.ceil(settings.LEADS_POR_BUSCA * settings.LEADS_MARGEM_PRE_SELECAO)
+
+
+def _coletar_sinais_gratuitos(
+    estabelecimentos: list[dict],
+    redis_client=None,
+    municipios_por_codigo: dict[str, str] | None = None,
+) -> list[dict]:
+    """
+    Anexa a cada estabelecimento da semente os 3 sinais que dá pra obter
+    sem gastar nenhuma chamada de API paga, pra que
+    `selecionar_melhores_candidatos` possa ranquear o universo inteiro de
+    graça (ver app/scoring/pre_selecao.py).
+
+    Sinais anexados:
+      - `qtd_inscricoes_ativas` — um único MGET em lote no índice PGFN do
+        Redis (`lookup_debts_from_redis`), não um GET por CNPJ: o
+        universo tem ordem de centenas de milhares de itens e um
+        round-trip por item levaria dezenas de minutos só nisso.
+      - `zona_franca` — resolve o código RFB do município pro nome via
+        `municipios_por_codigo` e compara contra a lista da Suframa.
+      - `situacao_ativa` — comparação local do código de situação
+        cadastral que já veio no arquivo bulk.
+
+    É a metade "com I/O" da pré-seleção; a pontuação em si é pura e mora
+    em app/scoring/pre_selecao.py. Mesma divisão de
+    `process_lead_pipeline` (I/O) vs. `montar_score_lead` (puro).
+
+    `municipios_por_codigo` vazio/None faz `zona_franca` ser False pra
+    todo mundo — degradação consciente, sinalizada por quem chama (ver
+    `executar_busca_mensal`), não silenciosa.
+    """
+    import redis as redis_lib
+
+    from app.scoring.zona_franca import is_zona_franca
+    from app.services.pgfn import lookup_debts_from_redis
+    from app.services.receita_federal_bulk import SITUACAO_CADASTRAL_ATIVA
+
+    if redis_client is None:
+        redis_client = redis_lib.from_url(settings.REDIS_URL)
+
+    cnpjs = [e.get("cnpj") or "" for e in estabelecimentos]
+    dividas = lookup_debts_from_redis(cnpjs, redis_client)
+
+    municipios = municipios_por_codigo or {}
+    candidatos: list[dict] = []
+    for estabelecimento in estabelecimentos:
+        cnpj = estabelecimento.get("cnpj") or ""
+        divida = dividas.get(cnpj)
+
+        codigo_municipio = (estabelecimento.get("municipio_codigo_rfb") or "").strip()
+        nome_municipio = municipios.get(codigo_municipio)
+        uf = estabelecimento.get("uf") or ""
+        zona_franca = bool(nome_municipio) and is_zona_franca(nome_municipio, uf)
+
+        situacao = (estabelecimento.get("situacao_cadastral") or "").strip()
+
+        candidatos.append(
+            {
+                **estabelecimento,
+                "qtd_inscricoes_ativas": divida.qtd_inscricoes_ativas if divida else 0,
+                "zona_franca": zona_franca,
+                "situacao_ativa": situacao.zfill(2) == SITUACAO_CADASTRAL_ATIVA,
+            }
+        )
+
+    return candidatos
+
+
+def _carregar_municipios_rfb() -> dict[str, str]:
+    """
+    Índice {código RFB: nome do município}, lido da tabela de domínio
+    MUNICCSV baixada junto com os outros arquivos da Receita.
+
+    Devolve dict vazio se o arquivo não estiver na pasta -- não levanta.
+    Quem chama decide o que fazer com o vazio (ver
+    `executar_busca_mensal`, que registra a degradação em vez de
+    escondê-la).
+    """
+    from app.services.receita_federal_bulk import build_municipios_index, find_municipios_rfb_files
+
+    paths = find_municipios_rfb_files(settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR)
+    if not paths:
+        return {}
+    return build_municipios_index(paths)
+
+
+def _indice_pgfn_populado(redis_client) -> bool:
+    """
+    Confirma que `refresh_pgfn_index` já rodou alguma vez, checando a
+    chave de carimbo de data que ele grava (`pgfn:index_updated_at`).
+
+    Guarda de CUSTO, não de correção. Se o índice nunca foi populado,
+    todo CNPJ do universo devolve "sem dívida", os candidatos empatam em
+    5 pontos (ou 25, com Zona Franca) e a seleção dos 60 vira, na
+    prática, "os 60 primeiros por ordem de CNPJ" -- ou seja, gastaria
+    dinheiro de verdade num conjunto praticamente aleatório, sem nada na
+    tela indicando que o ranqueamento não aconteceu. É indistinguível,
+    olhando só o resultado, de uma busca legítima em que ninguém tem
+    dívida ativa.
+
+    Por isso `executar_busca_mensal` ABORTA quando isto devolve False,
+    em vez de degradar. Foi uma decisão desta sessão, não um pedido
+    explícito: dado que a premissa inteira da pré-seleção é ranquear por
+    PGFN, rodar sem o índice contradiz o motivo de ela existir.
+    """
+    from app.services.pgfn import REDIS_KEY_UPDATED_AT
+
+    return redis_client.get(REDIS_KEY_UPDATED_AT) is not None
 
 
 @celery_app.task(name="executar_busca_mensal")
 def executar_busca_mensal(busca_id: str, db=None) -> dict:
     """
-    Orquestra uma busca mensal completa: `gerar_semente_leads()` uma vez
-    (sem parâmetros -- usa os defaults de UF/região do próprio
-    `gerar_semente_leads`, ver docstring dela; refinar isso com filtros
-    configuráveis pelo admin é um passo natural futuro, não pedido nesta
-    sessão) para obter a lista de CNPJs, depois `process_lead_pipeline`
-    pra cada um.
+    Orquestra uma busca mensal completa, em DUAS fases separadas por
+    custo:
 
-    Cada chamada de `process_lead_pipeline` roda isolada -- uma exceção
-    (não capturada internamente por `_rodar_etapa`, ex.: falha na
-    persistência) é capturada aqui, registrada em `busca.erros` como uma
-    string `"{cnpj}: {mensagem}"`, e o loop CONTINUA pro próximo CNPJ.
-    Mesmo padrão de resiliência já usado dentro de `process_lead_pipeline`
-    (uma etapa que falha não derruba as outras) -- aqui, um CNPJ que
-    falha não derruba os outros.
+      FASE 1 -- de graça, sobre o universo inteiro:
+        `gerar_semente_leads()` traz todo CNPJ ativo de CNAE 8630 do país
+        (ordem de centenas de milhares). `_coletar_sinais_gratuitos`
+        anexa PGFN (MGET em lote no Redis), Zona Franca (lista estática)
+        e situação cadastral (já vem no arquivo). Nada disso custa
+        chamada de API paga.
 
-    `busca.status` vira `"erro"` só se mais de `_CRITERIO_ERRO_TAXA_FALHA`
-    (50%) dos CNPJs da semente falharam -- critério simples e explícito;
-    um punhado de falhas isoladas (ex.: um site fora do ar) ainda conta
-    como busca "concluída" com ressalvas visíveis em `erros`, não como
-    falha geral. Zero CNPJs encontrados (`gerar_semente_leads` sem
-    arquivo disponível, ou semente vazia depois do filtro) também conta
-    como "concluído" -- não há CNPJ nenhum que tenha "falhado".
+      FASE 2 -- pago, só nos selecionados:
+        `selecionar_melhores_candidatos` ranqueia por score preliminar e
+        corta nos `_top_n_pre_selecao()` melhores (60 no padrão).
+        `process_lead_pipeline` roda SÓ nesses -- é aqui que Google
+        Places, Firecrawl, Anthropic, Hunter.io e ZeroBounce são
+        acionados.
 
-    Se `gerar_semente_leads()` em si lançar uma exceção (fora do padrão
-    "sem_arquivos", que é um retorno normal, não uma exceção), a busca
-    inteira vira `"erro"` imediatamente, com a mensagem em `erros` -- sem
-    isso, `busca.status` ficaria travado em `"executando"` pra sempre e o
-    polling do frontend nunca terminaria.
+    ⚠️ Antes de 2026-08-22 não existia a fase 1: o loop chamava
+    `process_lead_pipeline` pra TODO CNPJ da semente. O custo era
+    proporcional ao universo, não ao plano contratado. Se alguém for
+    mexer neste fluxo, a invariante a preservar é: **nenhuma etapa paga
+    roda antes do corte do top N**.
+
+    Resiliência, em três níveis aninhados:
+      - `_rodar_etapa` (dentro de `process_lead_pipeline`) -- uma ETAPA
+        que falha não derruba as outras etapas daquele CNPJ.
+      - o loop aqui -- um CNPJ que falha inteiro não derruba os outros;
+        vira uma string em `busca.erros`.
+      - `busca.status` só vira "erro" se mais de
+        `_CRITERIO_ERRO_TAXA_FALHA` (50%) falharam. A taxa é calculada
+        sobre os SELECIONADOS, não sobre o universo -- senão 60
+        processados de 300 mil encontrados leria como 99,98% de falha.
+
+    Casos que abortam ANTES de gastar dinheiro (status "erro", nenhum
+    `process_lead_pipeline` chamado):
+      - `gerar_semente_leads()` levantando exceção;
+      - o índice PGFN nunca ter sido populado (ver
+        `_indice_pgfn_populado` pro racional);
+      - falha na coleta dos sinais gratuitos (ex.: Redis fora do ar).
+
+    Semente vazia ou "sem_arquivos" continua sendo "concluído" com zero
+    CNPJs -- não há CNPJ que tenha falhado, e não se gastou nada.
     """
     from app.models.busca_leads import BuscaLeads, StatusBusca
+    from app.scoring.pre_selecao import resumir_composicao, selecionar_melhores_candidatos
 
     db_session, owns_session = _get_db_session(db)
     try:
@@ -952,35 +1150,129 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         busca.status = StatusBusca.EXECUTANDO.value
         db_session.commit()
 
+        def _abortar(mensagem: str) -> dict:
+            """Marca a busca como erro sem ter gasto nada e devolve o resumo."""
+            logger.error("executar_busca_mensal (%s): %s", busca_id, mensagem)
+            busca.status = StatusBusca.ERRO.value
+            busca.erros = [mensagem]
+            busca.concluido_em = agora_utc()
+            db_session.commit()
+            return {"busca_id": busca_id, "status": busca.status, "erros": busca.erros}
+
+        # --- FASE 1a: universo ------------------------------------------------
         try:
             semente = gerar_semente_leads()
         except Exception as exc:
             logger.exception("executar_busca_mensal: gerar_semente_leads falhou pra busca %s.", busca_id)
-            busca.status = StatusBusca.ERRO.value
-            busca.erros = [f"gerar_semente_leads: {exc}"]
-            busca.concluido_em = agora_utc()
-            db_session.commit()
-            return {"busca_id": busca_id, "status": busca.status, "erros": busca.erros}
+            return _abortar(f"gerar_semente_leads: {exc}")
 
         estabelecimentos = semente.get("estabelecimentos") or []
         busca.total_cnpjs_encontrados = len(estabelecimentos)
         db_session.commit()
 
+        if not estabelecimentos:
+            busca.status = StatusBusca.CONCLUIDO.value
+            busca.total_cnpjs_selecionados = 0
+            busca.total_leads_processados = 0
+            busca.erros = []
+            busca.concluido_em = agora_utc()
+            db_session.commit()
+            logger.warning(
+                "executar_busca_mensal (%s): semente vazia (status=%s) -- nada a processar.",
+                busca_id,
+                semente.get("status"),
+            )
+            return {
+                "busca_id": busca_id,
+                "status": busca.status,
+                "total_cnpjs_encontrados": 0,
+                "total_cnpjs_selecionados": 0,
+                "total_leads_processados": 0,
+                "erros": [],
+            }
+
+        # --- FASE 1b: sinais gratuitos + pré-seleção --------------------------
+        import redis as redis_lib
+
+        try:
+            redis_client = redis_lib.from_url(settings.REDIS_URL)
+            if not _indice_pgfn_populado(redis_client):
+                return _abortar(
+                    "Índice da PGFN nunca foi populado (chave pgfn:index_updated_at ausente no Redis). "
+                    "Rode a task refresh_pgfn_index antes da busca -- sem ele a pré-seleção não consegue "
+                    "ranquear os candidatos e a busca gastaria API num conjunto praticamente aleatório."
+                )
+
+            municipios_por_codigo = _carregar_municipios_rfb()
+            candidatos = _coletar_sinais_gratuitos(
+                estabelecimentos,
+                redis_client=redis_client,
+                municipios_por_codigo=municipios_por_codigo,
+            )
+        except Exception as exc:
+            logger.exception("executar_busca_mensal: coleta de sinais gratuitos falhou pra busca %s.", busca_id)
+            return _abortar(f"pré-seleção (sinais gratuitos): {exc}")
+
+        avisos: list[str] = []
+        if not municipios_por_codigo:
+            # Degradação real, registrada onde o admin vê. Sem a tabela de
+            # municípios não dá pra saber quem está em Zona Franca antes de
+            # gastar, e o ranking passa a considerar só PGFN.
+            aviso = (
+                "Tabela de municípios da Receita (*MUNICCSV*) não encontrada em "
+                f"{settings.RECEITA_FEDERAL_DADOS_ABERTOS_DIR} -- o critério Zona Franca "
+                "NÃO participou da pré-seleção desta busca (ranking só por dívida ativa PGFN)."
+            )
+            logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso)
+            avisos.append(aviso)
+
+        top_n = _top_n_pre_selecao()
+        selecionados = selecionar_melhores_candidatos(candidatos, top_n)
+        busca.total_cnpjs_selecionados = len(selecionados)
+        db_session.commit()
+
+        composicao = resumir_composicao(selecionados)
+        logger.info(
+            "executar_busca_mensal (%s): %s candidatos no universo -> %s selecionados "
+            "(top %s). Composição: %s em Zona Franca, %s com dívida ativa, "
+            "score preliminar de %.1f a %.1f.",
+            busca_id,
+            len(candidatos),
+            len(selecionados),
+            top_n,
+            composicao["com_zona_franca"],
+            composicao["com_divida_ativa"],
+            composicao["score_preliminar_min"],
+            composicao["score_preliminar_max"],
+        )
+
+        # --- FASE 2: enriquecimento pago, só nos selecionados -----------------
+        # Cache de município do CNES compartilhado por TODA esta execução e
+        # por mais nenhuma: leads da mesma cidade não repetem a paginação
+        # (até 500 requisições por município), e a próxima busca começa com
+        # cache limpo, sem reaproveitar cadastro do CNES de um mês atrás.
+        # Ver o docstring de `enrich_cnes`.
+        cache_cnes: dict = {}
+
         erros: list[str] = []
         total_processados = 0
-        for estabelecimento in estabelecimentos:
-            cnpj = estabelecimento.get("cnpj")
+        for candidato in selecionados:
+            cnpj = candidato.get("cnpj")
             try:
-                process_lead_pipeline(cnpj, razao_social=estabelecimento.get("razao_social"))
+                process_lead_pipeline(
+                    cnpj,
+                    razao_social=candidato.get("razao_social"),
+                    cache_cnes=cache_cnes,
+                )
                 total_processados += 1
             except Exception as exc:
                 logger.exception("executar_busca_mensal: CNPJ %s falhou na busca %s.", cnpj, busca_id)
                 erros.append(f"{cnpj}: {exc}")
 
-        taxa_falha = len(erros) / len(estabelecimentos) if estabelecimentos else 0.0
+        taxa_falha = len(erros) / len(selecionados) if selecionados else 0.0
         busca.status = StatusBusca.ERRO.value if taxa_falha > _CRITERIO_ERRO_TAXA_FALHA else StatusBusca.CONCLUIDO.value
         busca.total_leads_processados = total_processados
-        busca.erros = erros
+        busca.erros = avisos + erros
         busca.concluido_em = agora_utc()
         db_session.commit()
 
@@ -988,8 +1280,11 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             "busca_id": busca_id,
             "status": busca.status,
             "total_cnpjs_encontrados": busca.total_cnpjs_encontrados,
+            "total_cnpjs_selecionados": busca.total_cnpjs_selecionados,
             "total_leads_processados": busca.total_leads_processados,
-            "erros": erros,
+            "composicao_selecao": composicao,
+            "municipios_cnes_baixados": len(cache_cnes),
+            "erros": busca.erros,
         }
     finally:
         if owns_session:

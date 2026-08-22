@@ -75,10 +75,13 @@ O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
 from __future__ import annotations
 
 import csv
+import logging
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Layout confirmado contra o PDF oficial da Receita Federal (ver docstring
@@ -367,3 +370,98 @@ def find_empresas_rfb_files(directory: str | Path) -> list[Path]:
     if not dir_path.exists():
         return []
     return sorted(dir_path.glob("*EMPRECSV*"))
+
+
+# ---------------------------------------------------------------------------
+# Tabela de domínio MUNICÍPIOS (código RFB -> nome)
+# ---------------------------------------------------------------------------
+#
+# ⚠️ LAYOUT NÃO CONFIRMADO CONTRA O PDF OFICIAL DA RECEITA — diferente de
+# ESTABELECIMENTOS_COLUNAS e EMPRESAS_COLUNAS, que foram conferidos linha
+# a linha contra `gov.br/receitafederal/dados/cnpj-metadados.pdf` em
+# 19/08/2026. Este ambiente não tem acesso de rede pra abrir o PDF, então
+# as 2 colunas abaixo são a expectativa documentada publicamente pras
+# tabelas de domínio da RFB (código; descrição), seguindo a MESMA
+# convenção dos outros dois arquivos do lote (sem cabeçalho, `;`, aspas,
+# latin-1). Mesmo tratamento que `PGFN_COLUMNS` em app/services/pgfn.py:
+# se o arquivo real vier diferente, ajuste ESTAS CONSTANTES, não a lógica
+# de parsing espalhada.
+#
+# O modo de falha é suave de propósito (ver `build_municipios_index`): se
+# o arquivo não existir ou o layout estiver errado, o índice sai vazio, a
+# Zona Franca não é resolvida pra ninguém e a pré-seleção passa a ranquear
+# só por PGFN. Degrada, não quebra — mas `executar_busca_mensal` registra
+# isso explicitamente no resultado da busca, pra não degradar em silêncio.
+MUNICIPIOS_COLUNAS = [
+    "codigo",
+    "descricao",
+]
+
+
+def iter_municipios(
+    csv_path: Path,
+    encoding: str = DEFAULT_ENCODING,
+    delimiter: str = DEFAULT_DELIMITER,
+) -> Iterator[dict[str, str]]:
+    """
+    Lê a tabela de domínio de municípios linha a linha — mesmo padrão de
+    `iter_estabelecimentos`/`iter_empresas`. Linhas com menos colunas que
+    o layout esperado são puladas.
+    """
+    with open(csv_path, encoding=encoding, newline="") as f:
+        reader = csv.reader(f, delimiter=delimiter, quotechar='"')
+        for row in reader:
+            if len(row) < len(MUNICIPIOS_COLUNAS):
+                continue
+            yield {coluna: _clean(valor) for coluna, valor in zip(MUNICIPIOS_COLUNAS, row)}
+
+
+def build_municipios_index(
+    csv_paths: list[Path],
+    encoding: str = DEFAULT_ENCODING,
+    delimiter: str = DEFAULT_DELIMITER,
+) -> dict[str, str]:
+    """
+    Monta o índice {código RFB do município: nome do município}.
+
+    Este é o elo que faltava pra Zona Franca entrar na PRÉ-seleção: o
+    arquivo ESTABELECIMENTOS traz `municipio` como código interno da
+    Receita (NÃO é código IBGE — ver o aviso no topo deste módulo), mas
+    `app/scoring/zona_franca.py` compara por NOME do município. Sem esta
+    tabela, o único jeito de saber o nome seria uma chamada por CNPJ à
+    BrasilAPI (`enrich_receita_federal`), que é justamente a etapa cara
+    que a pré-seleção existe pra evitar.
+
+    Carrega tudo na memória de propósito, ao contrário dos outros dois
+    parsers deste módulo: são ~5.570 municípios (algumas centenas de KB),
+    não os ~60 milhões de linhas de ESTABELECIMENTOS/EMPRESAS.
+
+    Nunca levanta exceção: um arquivo ilegível (ausente, encoding errado,
+    layout diferente) é pulado e o índice sai sem ele. Ver o aviso de
+    layout não confirmado acima.
+    """
+    indice: dict[str, str] = {}
+    for path in csv_paths:
+        try:
+            for linha in iter_municipios(path, encoding=encoding, delimiter=delimiter):
+                codigo = linha["codigo"].strip()
+                descricao = linha["descricao"].strip()
+                if codigo and descricao:
+                    indice[codigo] = descricao
+        except (OSError, UnicodeDecodeError, csv.Error):
+            logger.exception("Falha lendo a tabela de municípios da RFB em %s -- ignorando esse arquivo.", path)
+            continue
+    return indice
+
+
+def find_municipios_rfb_files(directory: str | Path) -> list[Path]:
+    """
+    Localiza a tabela de domínio de municípios já baixada — mesmo padrão
+    de `find_estabelecimentos_rfb_files`/`find_empresas_rfb_files`. A
+    Receita nomeia o arquivo como F.K03200$Z.D<data>.MUNICCSV ("MUNICCSV"
+    é a parte estável do nome).
+    """
+    dir_path = Path(directory)
+    if not dir_path.exists():
+        return []
+    return sorted(dir_path.glob("*MUNICCSV*"))

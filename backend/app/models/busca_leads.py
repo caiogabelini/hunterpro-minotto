@@ -38,6 +38,16 @@ class BuscaLeads(Base):
     # None até gerar_semente_leads terminar (a busca começa sem saber
     # quantos CNPJs vai encontrar).
     total_cnpjs_encontrados: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Quantos CNPJs sobreviveram à PRÉ-SELEÇÃO e de fato entraram no
+    # enriquecimento pago (top N por score preliminar -- ver
+    # app/scoring/pre_selecao.py). Fica entre `total_cnpjs_encontrados`
+    # (o universo, ordem de centenas de milhares) e
+    # `total_leads_processados` (quantos concluíram sem estourar).
+    # Sem esta coluna o painel mostraria "250.000 encontrados / 58
+    # processados", que se lê como 99,98% de falha em vez de "o corte
+    # funcionou". None em buscas anteriores a 22/08/2026, quando a
+    # pré-seleção não existia e todo CNPJ do universo era processado.
+    total_cnpjs_selecionados: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # None até a task terminar de processar todos os CNPJs.
     total_leads_processados: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Lista de strings "CNPJ: mensagem de erro" -- um erro por CNPJ que

@@ -218,7 +218,11 @@ export function BuscaLeadsPage() {
               <p className="busca-leads-progresso-texto">Buscando leads...</p>
               <p className="busca-leads-progresso-nota">
                 {buscaAtual.total_cnpjs_encontrados != null
-                  ? `${buscaAtual.total_cnpjs_encontrados} CNPJs encontrados — processando cada um agora.`
+                  ? `${buscaAtual.total_cnpjs_encontrados} CNPJs encontrados${
+                      buscaAtual.total_cnpjs_selecionados != null
+                        ? ` — ${buscaAtual.total_cnpjs_selecionados} selecionados, enriquecendo agora.`
+                        : " — pré-selecionando os melhores candidatos."
+                    }`
                   : "Levantando a lista de CNPJs a processar..."}{" "}
                 Sem indicador de progresso percentual disponível — esta tela atualiza sozinha quando a busca
                 terminar.
@@ -284,7 +288,9 @@ function ResumoBusca({ busca }: { busca: BuscaLeadsRegistro }) {
           {sucesso ? "Busca concluída" : "Busca concluída com muitos erros"}
         </p>
         <p className="busca-leads-resumo-texto">
-          {busca.total_cnpjs_encontrados ?? 0} CNPJs encontrados · {busca.total_leads_processados ?? 0} processados
+          {busca.total_cnpjs_encontrados ?? 0} CNPJs encontrados
+          {busca.total_cnpjs_selecionados != null && ` · ${busca.total_cnpjs_selecionados} selecionados`} ·{" "}
+          {busca.total_leads_processados ?? 0} processados
           com sucesso
           {totalErros > 0 && ` · ${totalErros} erro${totalErros === 1 ? "" : "s"}`}
         </p>
@@ -314,7 +320,9 @@ function ItemHistorico({ busca }: { busca: BuscaLeadsRegistro }) {
         <StatusBadge status={busca.status} />
       </div>
       <p className="busca-leads-historico-totais">
-        {busca.total_cnpjs_encontrados ?? "—"} CNPJs · {busca.total_leads_processados ?? "—"} processados
+        {busca.total_cnpjs_encontrados ?? "—"} CNPJs
+        {busca.total_cnpjs_selecionados != null && ` · ${busca.total_cnpjs_selecionados} selecionados`} ·{" "}
+        {busca.total_leads_processados ?? "—"} processados
         {totalErros > 0 && ` · ${totalErros} erro${totalErros === 1 ? "" : "s"}`}
       </p>
     </li>

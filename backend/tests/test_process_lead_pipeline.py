@@ -55,7 +55,7 @@ def _fake_zona_franca(municipio, uf):
     return False
 
 
-def _fake_cnes(cnpj, codigo_municipio):
+def _fake_cnes(cnpj, codigo_municipio, cache_municipios=None):
     assert codigo_municipio == 355030  # prova que veio de enrich_receita_federal, não de um valor fixo
     return {"cnpj": cnpj, "encontrado_cnes": True, "cnes_codigo": "9629866", "codigo_tipo_unidade": 22}
 
@@ -154,7 +154,7 @@ def test_ordem_respeita_dependencias(monkeypatch):
         chamadas.append("enrich_zona_franca")
         return _fake_zona_franca(municipio, uf)
 
-    def cnes_rastreado(cnpj, codigo_municipio):
+    def cnes_rastreado(cnpj, codigo_municipio, cache_municipios=None):
         chamadas.append("enrich_cnes")
         return _fake_cnes(cnpj, codigo_municipio)
 
@@ -274,7 +274,7 @@ def test_pipeline_completo_score_e_etapas(monkeypatch):
 
 
 def test_falha_em_uma_etapa_nao_derruba_as_outras(monkeypatch):
-    def cnes_com_falha(cnpj, codigo_municipio):
+    def cnes_com_falha(cnpj, codigo_municipio, cache_municipios=None):
         raise ConnectionError("CNES fora do ar")
 
     monkeypatch.setattr(celery_app, "enrich_receita_federal", _fake_receita_federal)

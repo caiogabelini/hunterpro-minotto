@@ -244,9 +244,14 @@ violation — overwritten for real once that stage works. Score fields are
 set in a second pass after `compute_lead_score` runs, using the real
 `lead.id` from the upsert (not the CNPJ) as `lead_id`.
 
-**What this doesn't do yet**: no task loops over `gerar_semente_leads`'s
-output calling `process_lead_pipeline` per CNPJ — that glue is still
-manual. No real Celery `chain`/`group` parallelism either; independent
+**⚠️ Superseded (22/08/2026)**: this paragraph said no task looped over
+`gerar_semente_leads`'s output. `executar_busca_mensal` (admin panel
+session) added that loop, and the 22/08 session put a **pre-selection
+gate** in front of it — `process_lead_pipeline` now runs only on the top
+~60 candidates ranked by free signals, never on the whole seed. See
+"Candidate pre-selection" below before touching that flow.
+
+**What this doesn't do yet**: No real Celery `chain`/`group` parallelism either; independent
 stages (PGFN vs. Receita Federal) just run sequentially in a fixed order
 for simplicity/testability, not concurrently.
 
@@ -3304,6 +3309,136 @@ accepted warnings, no new ones; no test run requested for this task —
 pure CSS/layout change, no pure-function logic touched; 18 frontend
 tests unchanged, 350 backend tests untouched since nothing backend
 changed).
+
+### Candidate pre-selection — cost gate before paid enrichment (2026-08-22)
+
+**Read this before touching `executar_busca_mensal`.** An audit on
+2026-08-22 confirmed it was calling `process_lead_pipeline` for **every**
+CNPJ in the seed — the national CNAE-8630 filter, hundreds of thousands
+of establishments — with no cap. Cost scaled with the universe, not with
+the 50-lead plan. `settings.PLANO_LEADS_MES` looked like a cap but only
+fed a dashboard label.
+
+**The invariant now**: *no paid stage runs before the top-N cut.*
+`executar_busca_mensal` is explicitly two-phase — phase 1 (seed →
+free signals → rank → cut) touches only local files and Redis; phase 2
+(`process_lead_pipeline`) is the only part that spends money, and it only
+ever sees the selected candidates.
+
+- **`app/scoring/pre_selecao.py`** (new, **pure — no I/O**):
+  `pontuar_candidato` (0–45), `selecionar_melhores_candidatos`, and
+  `resumir_composicao`. Lives in `app/scoring/` and not in
+  `receita_federal_bulk.py` deliberately: that module only knows how to
+  read RFB files, and putting scoring there would make it import
+  `app.scoring.*`, inverting the dependency direction. Same pure-vs-I/O
+  split already established between `montar_score_lead` and
+  `process_lead_pipeline`.
+- **Points come from the existing `rules.py`/`compute_lead_score.py`
+  functions**, not a parallel scale — a `score_preliminar` of 40 is
+  literally "already banked 40 of the real 100". One exception:
+  `unidade_cnpj_ativo` reads its weight straight from
+  `get_criterion(...)` rather than calling `unidade_cnpj_ativo_points`,
+  because that function expects BrasilAPI's `"ATIVA"` string while the
+  seed carries RFB's `"02"` code — two vocabularies for the same fact;
+  forging an `"ATIVA"` string would hide the translation.
+- **Deterministic tie-break by CNPJ** (`key=(-score, cnpj)`). This
+  matters more than it looks: most candidates tie at 5 points, so the
+  tie-break is what actually picks the batch. Sorting by score alone
+  would leave it to the physical row order of the RFB file, which changes
+  every month — two runs over the same universe could select different
+  sets with nothing in the code explaining why.
+- **`top_n <= 0` returns `[]`**, never "everything" — a zeroed config
+  must not silently become "process the universe".
+
+**⚠️ Emergent effect nobody signed off on.** The weights were closed with
+Douglas to *rank leads already found*, not to *decide who gets enriched*.
+Zona Franca is worth 20 of a 45 max and is binary, so an ALC candidate
+with zero debt (25) **ties** a candidate at the PGFN formula ceiling and
+**beats** any smaller debt. With 60+ CNAE-8630 clinics across the 10 ALC
+municipalities, the batch would be almost entirely ALC — effectively
+restricting the search to those cities, which is exactly what Douglas
+said he did *not* want (`rules.py:66`). **This was deliberately not
+"fixed"** — changing a weight needs client sign-off. Instead it was made
+*visible*: `resumir_composicao` reports the batch makeup in the log and
+the task result, and `test_zona_franca_supera_divida_ativa_no_teto` pins
+the behavior so any future weight change breaks a test instead of
+silently changing who gets selected.
+
+**Safety margin, `LEADS_POR_BUSCA=50` × `LEADS_MARGEM_PRE_SELECAO=1.2`
+→ 60.** The pre-selection sees only 3 signals and can't predict which
+candidates will yield little (no site, no Google Places hit, Firecrawl
+failing). 20% is an explicit guess — there's no production failure-rate
+history to calibrate against. After the first real run, comparing
+`total_leads_processados` to `total_cnpjs_selecionados` gives the real
+rate.
+
+**Aborts before spending anything** (status `"erro"`, zero pipeline
+calls): seed raising; **PGFN index never populated** (`pgfn:index_updated_at`
+missing — without it every CNPJ reads "no debt", candidates tie, and the
+batch becomes "first 60 by CNPJ", i.e. real money on a near-random set,
+indistinguishable from a legitimate no-debt run); or free-signal
+collection failing. Run `refresh_pgfn_index` before any search.
+Non-fatal degradation, recorded in `busca.erros`: missing `*MUNICCSV*`
+means Zona Franca sits out the ranking.
+
+**New RFB dependency — the municipality domain table.** The seed carries
+`municipio` as an **RFB-internal code**; the Suframa list is by **name**.
+Resolving one to the other for free (instead of a per-CNPJ BrasilAPI
+call, the very cost this gate exists to avoid) needs
+`F.K03200$Z.D<data>.MUNICCSV` in the same folder as the other two RFB
+files. ⚠️ Its 2-column layout is **not confirmed against the official
+PDF** (no network here) — same status as `PGFN_COLUMNS`: if the real file
+differs, fix `MUNICIPIOS_COLUNAS`, not the parsing logic. Fails soft to
+an empty index.
+
+**`lookup_debts_from_redis`** (`app/services/pgfn.py`) — batched `MGET`
+version of the per-CNPJ lookup, because phase 1 queries the whole
+universe and one round-trip per CNPJ would take tens of minutes. Returns
+only CNPJs that actually have debt; a corrupt index entry is skipped, not
+fatal.
+
+**`gerar_semente_leads` now also emits `municipio_codigo_rfb` and
+`situacao_cadastral`** — additive, existing consumers unaffected. These
+feed pre-selection only, never the enrichment pipeline.
+
+**CNES per-município cache.** The CNES API doesn't filter by CNPJ
+server-side, so each lead was paginating the município's entire
+establishment list — up to 500 HTTP requests per lead, with no reuse
+between leads in the same city. `executar_busca_mensal` now creates a
+plain `dict` and threads it through `process_lead_pipeline(cache_cnes=)`
+to `enrich_cnes(cache_municipios=)`. **Deliberately a passed-in dict, not
+a module-level cache**: one execution shares, different executions never
+do — a module cache would serve last month's CNES registry to this
+month's search with nobody noticing. Keys are `str()`-normalized because
+the código arrives as `int` from `enrich_receita_federal` and `str` from
+manual callers, and `355030 != "355030"` in a dict would miss silently.
+`cache_municipios=None` keeps the old always-fetch behavior.
+
+**`BuscaLeads.total_cnpjs_selecionados`** (10th migration, `b5e2c30a71f4`,
+validated against real Postgres 16) — sits between `total_cnpjs_encontrados`
+(the universe) and `total_leads_processados`. Without it the admin panel
+would read "250.000 encontrados / 58 processados", which looks like a
+99.98% failure rate rather than a working cut. `NULL` for pre-22/08 runs;
+no `server_default`, since `0` would lie about searches that really did
+process everything.
+
+**Failure-rate denominator changed**: `_CRITERIO_ERRO_TAXA_FALHA` (50%) is
+now computed over the **selected** batch, not the universe — otherwise 60
+processed out of 300k would always read as near-total failure.
+
+### `anos_mercado` is informational — NOT a scoring criterion (2026-08-22)
+
+Confirmed by audit against the code and with the client. `anos_mercado`
+is computed by `enrich_receita_federal`, persisted on `Lead`, shown in
+the dossier, and included in the AI insights context — but it is **not**
+one of the 9 `SCORING_CRITERIA` and contributes **zero** points.
+
+It is also **not a filter**: newer companies enter the search normally;
+no 8+/15+ year cut exists anywhere in the code.
+
+If it ever becomes a scored criterion, the other 8 weights must be
+rebalanced so the total stays exactly 100 (`assert` at
+`app/scoring/rules.py:165`) — which needs Douglas's sign-off.
 
 ### Migrations (`backend/alembic/`)
 

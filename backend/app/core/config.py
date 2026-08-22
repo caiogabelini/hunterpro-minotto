@@ -72,6 +72,30 @@ class Settings(BaseSettings):
     # --- CORS ---
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
+    # --- Pré-seleção de leads por busca ---
+    # Quantos leads a busca mensal deve efetivamente ENTREGAR. É o número
+    # que importa pro cliente e o mesmo que o dashboard mostra em
+    # "Consumo do Plano" (PLANO_LEADS_MES abaixo).
+    LEADS_POR_BUSCA: int = 50
+
+    # Margem de segurança: o pipeline completo roda em
+    # ceil(LEADS_POR_BUSCA * LEADS_MARGEM_PRE_SELECAO) candidatos, não em
+    # LEADS_POR_BUSCA. 1.2 -> 60 candidatos pra entregar 50.
+    #
+    # Existe porque a pré-seleção usa só 3 sinais gratuitos (PGFN, Zona
+    # Franca, CNPJ ativo) e não tem como saber, antes de gastar, quais
+    # candidatos vão render pouco no enriquecimento completo: CNPJ sem
+    # site, Google Places sem resultado, Firecrawl falhando, ou o próprio
+    # process_lead_pipeline estourando. Sem margem, uma execução com 10
+    # falhas entrega 40 leads em vez de 50.
+    #
+    # 20% é um chute inicial deliberado -- não há histórico de taxa de
+    # falha do pipeline em produção pra calibrar (nunca rodou de verdade).
+    # Depois da primeira execução real, comparar `total_leads_processados`
+    # com `total_cnpjs_selecionados` em `buscas_leads` dá a taxa real e
+    # permite ajustar este número com dado em vez de palpite.
+    LEADS_MARGEM_PRE_SELECAO: float = 1.2
+
     # --- Dashboard ---
     # Limite de leads/mês do plano contratado -- hoje um valor fixo (não
     # há ainda um conceito de "plano" por cliente/usuário), usado só pra
