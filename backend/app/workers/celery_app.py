@@ -86,6 +86,14 @@ import math
 
 from celery import Celery
 
+# ⚠️ Import de efeito colateral, obrigatório e no TOPO -- registra TODOS os
+# modelos em `Base.metadata` assim que o processo do worker sobe. Sem ele,
+# `executar_busca_mensal` quebra com NoReferencedTableError ao persistir
+# `BuscaLeads` (FK -> users), porque o worker não tem nenhum outro motivo
+# pra importar `app.models.user`. Ver a docstring de `app/models/__init__.py`
+# pro histórico do bug. NÃO trocar por um import dentro da função: o ponto é
+# justamente não depender de qual task roda primeiro.
+import app.models  # noqa: F401
 from app.core.config import settings
 from app.core.tempo import agora_utc
 

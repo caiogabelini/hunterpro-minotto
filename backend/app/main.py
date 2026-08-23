@@ -5,6 +5,11 @@ Entrypoint da API FastAPI.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Registra todos os modelos em `Base.metadata` (ver app/models/__init__.py).
+# Hoje as rotas já importam os quatro por acaso, o que mascarou o bug de
+# 23/08/2026 no worker -- explícito aqui pra que a API não dependa desse
+# acidente se alguma rota deixar de importar algum modelo.
+import app.models  # noqa: F401
 from app.api.routes import admin, auth, dashboard, health, leads
 from app.core.config import settings
 

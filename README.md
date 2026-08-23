@@ -1241,6 +1241,30 @@ Em ordem de prioridade combinada com o cliente:
       vale saber se `PGFN_DADOS_ABERTOS_DIR` apontar pra uma pasta
       compartilhada.
 
+25. ~~Worker Celery quebrava com `NoReferencedTableError` (FK
+    `buscas_leads.iniciado_por_id` -> `users`)~~ ✅ **corrigido**
+    (23/08/2026). Não era o banco (migrations aplicadas, tabelas
+    corretas) — era import: `app/models/__init__.py` estava vazio e o
+    `celery_app.py` importava modelos só dentro das funções, então o
+    worker registrava `buscas_leads` sem nunca registrar `users`, e
+    SQLAlchemy não conseguia resolver a FK no flush. **Dependia do ponto
+    de entrada**, o que escondeu o problema: o `alembic/env.py` já
+    importava os quatro modelos e o `uvicorn` importava tudo por acidente
+    (via `api/deps.py`), então só o worker falhava — e ele é justamente
+    quem roda a busca mensal, ou seja, quebraria a primeira execução real
+    em produção. Corrigido centralizando o registro em
+    `app/models/__init__.py`, importado no topo de `app/main.py`,
+    `app/workers/celery_app.py`, `alembic/env.py` e
+    `scripts/create_user.py`. ⚠️ **Modelo novo tem que ser adicionado
+    lá** — `tests/test_registro_de_modelos.py` falha se um arquivo de
+    `app/models/` ficar de fora. Os testes rodam em **subprocesso** de
+    propósito: dentro do pytest tudo já foi importado, e uma asserção
+    in-process passaria mesmo com o bug presente (foi exatamente assim
+    que o `TestClient` mascarou isso na API). Validado também com um
+    worker Celery de verdade contra o Postgres/Redis do projeto: o
+    traceback exato reaparece com a correção revertida e a task conclui
+    com `succeeded` com ela aplicada.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

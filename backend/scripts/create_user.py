@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
 
+import app.models  # noqa: F401, E402  (registra todos os modelos -- ver app/models/__init__.py)
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.models.user import User, UserRole  # noqa: E402

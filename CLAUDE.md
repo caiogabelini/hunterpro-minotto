@@ -3618,6 +3618,65 @@ If it ever becomes a scored criterion, the other 8 weights must be
 rebalanced so the total stays exactly 100 (`assert` at
 `app/scoring/rules.py:165`) — which needs Douglas's sign-off.
 
+### Model registration — `app/models/__init__.py` must import every model
+
+Fixed 2026-08-23 after a real failure running `executar_busca_mensal` in an
+actual Celery worker:
+
+    sqlalchemy.exc.NoReferencedTableError: Foreign key associated with
+    column 'buscas_leads.iniciado_por_id' could not find table 'users'
+
+**The database was fine and migrations were applied** — this was purely an
+import problem. SQLAlchemy resolves a `ForeignKey("users.id")` against
+whatever is in `Base.metadata` **in that process**. `app/models/__init__.py`
+was empty (0 bytes), and every model import in `celery_app.py` was
+function-local: `executar_busca_mensal` imported `app.models.busca_leads`
+and nothing else, so `users` was never registered and the FK couldn't
+resolve at flush time.
+
+**Why it went unnoticed for so long — it depends on the entry point:**
+
+| Entry point | Imports `User`? | Behavior |
+|---|---|---|
+| `alembic/env.py` | yes, imported all 4 explicitly | migrations always worked — the DB really was correct |
+| `uvicorn app.main:app` | yes, via `api/deps.py`, `routes/auth.py`, `routes/admin.py` | loaded everything **by accident**, never failed |
+| `celery -A app.workers.celery_app worker` | **no** | incomplete metadata → the crash above |
+
+**The fix**: `app/models/__init__.py` now imports all four models and is the
+single registration point; `app/main.py`, `app/workers/celery_app.py`,
+`alembic/env.py`, and `scripts/create_user.py` each import `app.models` at
+module top-level (`# noqa: F401`, side-effect import). ⚠️ **Add any new
+model there** — `tests/test_registro_de_modelos.py` fails if a file in
+`app/models/` isn't registered.
+
+Worth knowing: because importing `app.models.X` loads the parent package
+first, the populated `__init__` means even the old function-local
+`from app.models.busca_leads import ...` now registers everything. The
+explicit top-level imports stay anyway — defense in depth, and they make the
+dependency visible instead of resting on an import-semantics subtlety.
+
+**⚠️ The test for this MUST run in a subprocess.** `tests/test_registro_de_modelos.py`
+shells out to a fresh interpreter for every assertion, because the bug is
+about *which modules a process imported* — and inside pytest, conftest and
+~30 other test files have already imported `app.main`, `deps`, `User`,
+everything. An in-process assertion passes even with an empty `__init__.py`,
+exactly the way `TestClient` masked the problem on the API side. Verified by
+reverting the fix: 3 tests fail, including the `celery_app` entry-point one.
+(Note `test_entrypoint_resolve_as_foreign_keys[celery_app]` passes even when
+broken — with zero tables registered there's no FK to resolve. The
+"registers all models" assertion is the one that actually catches it.)
+
+**Validated against a real worker** (2026-08-23), not just in tests: a real
+`celery -A app.workers.celery_app worker` on the project's own Postgres +
+Redis, on an isolated queue, reproduced the exact traceback with the fix
+reverted and then ran `succeeded` with it restored (`BuscaLeads` created,
+committed, `JOIN` to `users` intact, FK enforced by Postgres). Run with
+`RECEITA_FEDERAL_DADOS_ABERTOS_DIR` pointed at an empty dir so the seed
+returns `sem_arquivos` and the task early-returns before the pre-selection
+gate — **exercises every `BuscaLeads` commit with zero paid API calls**.
+That's the safe way to smoke-test this task; never dispatch it against the
+real RFB folder just to check plumbing.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
