@@ -25,6 +25,9 @@ from app.services.email_enrichment import (
 )
 from app.services.site_scraping import extrair_whatsapp
 from app.workers import celery_app
+# Referência capturada NO IMPORT, antes da fixture autouse substituir o
+# atributo do módulo -- é a task de verdade, pra poder testá-la.
+from app.workers.celery_app import enrich_email as enrich_email_real
 
 DOMINIO = "clinicateste.com.br"
 
@@ -308,3 +311,159 @@ def test_domain_search_nao_manda_chave_na_query_string(monkeypatch):
     buscar_emails_do_dominio(DOMINIO, client=httpx.Client(transport=httpx.MockTransport(handler)))
     assert CHAVE not in capturado["url"]
     assert capturado["auth"] == f"Bearer {CHAVE}"
+
+
+# ---------------------------------------------------------------------------
+# 3 -- e-mails secundários (23/08/2026)
+# ---------------------------------------------------------------------------
+# O `domain-search` já devolve até HUNTER_DOMAIN_SEARCH_LIMIT endereços na
+# MESMA requisição, e o Hunter cobra por requisição, não por e-mail. Antes
+# só o melhor era aproveitado e o resto ia pro lixo -- dado de graça sendo
+# descartado.
+
+EMAILS_MULTIPLOS = [
+    {"value": "contato@x.com", "type": "generic", "confidence": 80},
+    {"value": "maria@x.com", "type": "personal", "confidence": 95},
+    {"value": "rh@x.com", "type": "generic", "confidence": 60},
+]
+
+
+def _fallback_ligado(monkeypatch, emails):
+    monkeypatch.setattr(email_enrichment.settings, "HUNTER_DOMAIN_SEARCH_FALLBACK", True)
+    monkeypatch.setattr(email_enrichment.settings, "HUNTER_API_KEY", "chave-ficticia")
+    monkeypatch.setattr(email_enrichment.settings, "ZEROBOUNCE_API_KEY", "chave-ficticia")
+    monkeypatch.setattr(email_enrichment, "validar_zerobounce",
+                        lambda email, client=None: email_enrichment.ZeroBounceResult(status="valid", aprovado=True))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "domain-search" in request.url.path:
+            return httpx.Response(200, json={"data": {"emails": emails}})
+        return httpx.Response(200, json=RESPOSTA_FINDER_VAZIA)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_secundarios_trazem_os_demais_emails_com_tipo_e_confidence(monkeypatch):
+    client = _fallback_ligado(monkeypatch, EMAILS_MULTIPLOS)
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+
+    assert r.email == "maria@x.com"  # personal, maior confidence
+    assert r.emails_secundarios == [
+        {"email": "contato@x.com", "tipo": "generic", "confidence": 80},
+        {"email": "rh@x.com", "tipo": "generic", "confidence": 60},
+    ]
+
+
+def test_principal_nunca_aparece_entre_os_secundarios(monkeypatch):
+    client = _fallback_ligado(monkeypatch, EMAILS_MULTIPLOS)
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.email not in [e["email"] for e in r.emails_secundarios]
+
+
+def test_email_duplicado_na_resposta_nao_vira_secundario(monkeypatch):
+    """Exclusão é por VALOR, não por posição -- payload com o mesmo
+    endereço repetido não pode ecoar o principal como "secundário"."""
+    client = _fallback_ligado(monkeypatch, [
+        {"value": "maria@x.com", "type": "personal", "confidence": 95},
+        {"value": "maria@x.com", "type": "personal", "confidence": 90},
+        {"value": "rh@x.com", "type": "generic", "confidence": 60},
+    ])
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.email == "maria@x.com"
+    assert [e["email"] for e in r.emails_secundarios] == ["rh@x.com"]
+
+
+def test_um_unico_email_deixa_secundarios_vazio(monkeypatch):
+    client = _fallback_ligado(monkeypatch, [{"value": "so@x.com", "type": "generic", "confidence": 50}])
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.email == "so@x.com"
+    assert r.emails_secundarios == []
+
+
+def test_nenhum_email_no_dominio_deixa_secundarios_vazio(monkeypatch):
+    client = _fallback_ligado(monkeypatch, [])
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.email is None
+    assert r.emails_secundarios == []
+
+
+def test_finder_bem_sucedido_deixa_secundarios_None_nao_lista_vazia(monkeypatch):
+    """`None` = "não perguntei ao domínio". A distinção de `[]` é o que
+    impede a persistência de apagar secundários de rodada anterior."""
+    monkeypatch.setattr(email_enrichment.settings, "HUNTER_DOMAIN_SEARCH_FALLBACK", True)
+    monkeypatch.setattr(email_enrichment.settings, "HUNTER_API_KEY", "chave-ficticia")
+    monkeypatch.setattr(email_enrichment, "validar_zerobounce",
+                        lambda email, client=None: email_enrichment.ZeroBounceResult(status="valid", aprovado=True))
+    client = httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"data": {"email": "achado@x.com", "score": 90}})))
+
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.email == "achado@x.com"
+    assert r.emails_secundarios is None
+
+
+def test_fallback_desligado_deixa_secundarios_None(monkeypatch):
+    monkeypatch.setattr(email_enrichment.settings, "HUNTER_DOMAIN_SEARCH_FALLBACK", False)
+    chamadas = []
+    client = _client_hunter(monkeypatch, EMAILS_MULTIPLOS, chamadas)
+    r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
+    assert r.emails_secundarios is None
+
+
+# --- persistência ---
+
+def test_secundarios_sao_persistidos_no_lead(db_session):
+    lead = celery_app._persistir_enriquecimento_lead(
+        db=db_session, cnpj="11222333000181", razao_social="X",
+        receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
+        google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
+        email={"email": "maria@x.com", "email_aprovado": True,
+               "emails_secundarios": [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]},
+    )
+    assert lead.email == "maria@x.com"
+    assert lead.emails_secundarios == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]
+
+
+def test_lista_vazia_persiste_como_none(db_session):
+    lead = celery_app._persistir_enriquecimento_lead(
+        db=db_session, cnpj="11222333000181", razao_social="X",
+        receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
+        google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
+        email={"email": "so@x.com", "email_aprovado": True, "emails_secundarios": []},
+    )
+    assert lead.emails_secundarios is None
+
+
+def test_rodada_sem_domain_search_nao_apaga_secundarios_anteriores(db_session):
+    """Cenário real: liga a flag, acha secundários, desliga a flag. A
+    rodada seguinte manda `None` e não pode limpar o que já havia."""
+    celery_app._persistir_enriquecimento_lead(
+        db=db_session, cnpj="11222333000181", razao_social="X",
+        receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
+        google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
+        email={"email": "maria@x.com", "email_aprovado": True,
+               "emails_secundarios": [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]},
+    )
+    db_session.commit()
+
+    lead = celery_app._persistir_enriquecimento_lead(
+        db=db_session, cnpj="11222333000181", razao_social="X",
+        receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
+        google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
+        email={"email": "maria@x.com", "email_aprovado": True, "emails_secundarios": None},
+    )
+    assert lead.emails_secundarios == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]
+
+
+def test_task_enrich_email_expoe_secundarios(monkeypatch):
+    monkeypatch.setattr(celery_app.settings, "HUNTER_API_KEY", "presente")
+    monkeypatch.setattr(celery_app.settings, "ZEROBOUNCE_API_KEY", "presente")
+    monkeypatch.setattr(
+        "app.services.email_enrichment.enriquecer_email",
+        lambda d, n: email_enrichment.EmailEnrichmentResult(
+            email="maria@x.com", hunter_score=95, mx_valido=True,
+            zerobounce_status="valid", aprovado=True,
+            emails_secundarios=[{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]),
+    )
+    resultado = enrich_email_real("x.com", "MARIA SILVA")
+    assert resultado["emails_secundarios"] == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]

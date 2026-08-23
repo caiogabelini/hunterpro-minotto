@@ -39,6 +39,7 @@ import {
 import { PriorityBadge } from "../components/PriorityBadge";
 import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
+import { getEmailsSecundarios, labelTipoEmail } from "../emailsSecundarios";
 import { getInsights } from "../insights";
 import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
@@ -430,6 +431,42 @@ function RqeResumoBadge({ confirmado, fonte }: { confirmado?: boolean | null; fo
 // (decisor_nome é um campo único no Lead) -- comporta mais contatos no
 // futuro sem mudar a estrutura, só o array de origem.
 
+// Lista dos e-mails que o `domain-search` do Hunter achou no domínio
+// além do escolhido como principal. Complemento opcional: quando não há
+// nenhum, não renderiza NADA (nem título, nem estado vazio) -- não é uma
+// informação que o vendedor esteja esperando encontrar, então um "nenhum
+// e-mail secundário" só ocuparia espaço.
+//
+// Só exibição por ora: sem botão de copiar, sem mailto. O principal já
+// tem esses recursos na aba Dados; estes aqui são pistas de contato, não
+// o canal escolhido.
+function OutrosEmails({ lead }: { lead: Lead }) {
+  const emails = getEmailsSecundarios(lead.emails_secundarios);
+  if (emails.length === 0) return null;
+
+  return (
+    <div className="dossier-outros-emails">
+      <h3 className="dossier-outros-emails-titulo">Outros e-mails encontrados</h3>
+      <ul className="dossier-outros-emails-lista">
+        {emails.map((item) => (
+          <li key={item.email} className="dossier-outros-emails-item">
+            <span className="dossier-outros-emails-endereco">{item.email}</span>
+            <span
+              className={
+                item.tipo === "personal"
+                  ? "dossier-email-tipo dossier-email-tipo-pessoal"
+                  : "dossier-email-tipo"
+              }
+            >
+              {labelTipoEmail(item.tipo)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function AbaContatos({ lead }: { lead: Lead }) {
   const numeroWhatsapp = formatarNumeroWhatsapp(lead.telefone);
   const temWhatsapp = !!lead.whatsapp_ativo && !!numeroWhatsapp;
@@ -441,6 +478,12 @@ function AbaContatos({ lead }: { lead: Lead }) {
       <section className="dossier-card">
         <SectionHeading icon={Users}>Contatos</SectionHeading>
         <p className="dossier-muted">Nenhum decisor identificado ainda pra este lead.</p>
+        {/* Renderizado TAMBÉM aqui de propósito: os e-mails secundários
+            são do DOMÍNIO, não do decisor. Um lead sem decisor
+            identificado mas com contato@clinica.com.br é justamente onde
+            eles mais valem -- escondê-los junto com o resto da aba seria
+            perder o único contato disponível. */}
+        <OutrosEmails lead={lead} />
       </section>
     );
   }
@@ -480,6 +523,7 @@ function AbaContatos({ lead }: { lead: Lead }) {
           </div>
         </li>
       </ul>
+      <OutrosEmails lead={lead} />
     </section>
   );
 }

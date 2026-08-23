@@ -86,6 +86,12 @@ export interface Lead {
   whatsapp_ativo?: boolean | null;
   email?: string | null;
   email_validado?: boolean | null;
+  // Demais e-mails que o fallback `domain-search` do Hunter trouxe na
+  // mesma resposta (ver CLAUDE.md). Só existe quando
+  // HUNTER_DOMAIN_SEARCH_FALLBACK estava ligada na busca -- desligada
+  // por padrão, então na maioria dos leads vem null. Lido via
+  // `getEmailsSecundarios` (defensivo), nunca direto.
+  emails_secundarios?: unknown;
   decisor_nome?: string | null;
   site?: string | null;
   instagram?: string | null;

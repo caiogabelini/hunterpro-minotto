@@ -1052,3 +1052,70 @@
   margin: 0;
   line-height: 1.5;
 }
+
+/* --- "Outros e-mails encontrados" (aba Contatos) -----------------------
+   Complemento opcional dentro do card de Contatos, não um card próprio:
+   é informação sobre o MESMO lead que o card já descreve, e um card
+   separado daria a ele o mesmo peso visual do decisor. Separado por
+   um divisor no topo, mesmo padrão de `.dossier-campo`.
+
+   Sem cor de destaque: são pistas de contato, não um sinal de
+   qualificação -- verde/dourado aqui competiriam com os badges que de
+   fato indicam qualidade do lead. */
+.dossier-outros-emails {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.dossier-outros-emails-titulo {
+  margin: 0 0 var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.dossier-outros-emails-lista {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dossier-outros-emails-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.dossier-outros-emails-endereco {
+  font-size: 13px;
+  color: var(--text-primary);
+  /* E-mail longo quebra em vez de estourar a largura do card. */
+  overflow-wrap: anywhere;
+}
+
+/* Badge de tipo. Cinza (neutro) pro genérico, navy pro pessoal -- o
+   pessoal chega a uma pessoa específica, então merece leve destaque,
+   mas ambos continuam discretos perto dos badges de prioridade/RQE. */
+.dossier-email-tipo {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--overlay-primary-weak);
+  color: var(--text-secondary);
+}
+
+.dossier-email-tipo-pessoal {
+  background: var(--overlay-primary-medium);
+  color: var(--color-primary);
+}

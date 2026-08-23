@@ -609,6 +609,7 @@ def enrich_email(dominio: str, decisor_nome: str | None) -> dict:
         "mx_valido": resultado.mx_valido,
         "zerobounce_status": resultado.zerobounce_status,
         "email_aprovado": resultado.aprovado,
+        "emails_secundarios": resultado.emails_secundarios,
     }
 
 
@@ -892,6 +893,17 @@ def _persistir_enriquecimento_lead(
     if email is not None:
         lead.email = email.get("email")
         lead.email_validado = email.get("email_aprovado")
+        # ⚠️ `None` e `[]` são tratados DIFERENTE de propósito (ver
+        # app/services/email_enrichment.py::HunterEmailResult):
+        #   None -> o domain-search não rodou (flag desligada, ou o
+        #           email-finder já tinha achado). NÃO mexe no que estava
+        #           gravado -- senão desligar a flag apagaria secundários
+        #           encontrados numa rodada anterior.
+        #   []   -> rodou e não havia outros. Grava NULL, porque a
+        #           resposta atual é a verdade.
+        secundarios = email.get("emails_secundarios")
+        if secundarios is not None:
+            lead.emails_secundarios = secundarios or None
 
     db.flush()
     return lead

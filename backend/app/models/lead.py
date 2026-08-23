@@ -58,6 +58,21 @@ class Lead(Base):
     whatsapp_ativo: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_validado: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Demais e-mails que o `domain-search` do Hunter trouxe na MESMA
+    # resposta que produziu `email` -- lista de
+    # {"email", "tipo": "personal"|"generic"|None, "confidence"}.
+    #
+    # Só é populado quando o fallback `domain-search` roda
+    # (settings.HUNTER_DOMAIN_SEARCH_FALLBACK, desligada por padrão) E
+    # a resposta traz mais de um endereço. Guardar o resto não custa
+    # crédito nenhum: o Hunter cobra por REQUISIÇÃO, não por e-mail
+    # devolvido, e a chamada já paga traz até 10.
+    #
+    # ⚠️ `NULL` = "o domain-search não rodou pra este lead"; lista vazia
+    # não é gravada (vira NULL). O e-mail escolhido como principal
+    # (`email`) NUNCA aparece aqui -- ver
+    # app/services/email_enrichment.py::buscar_emails_do_dominio.
+    emails_secundarios: Mapped[list | None] = mapped_column(JSON, nullable=True)
     decisor_nome: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # --- Presença digital ---

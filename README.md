@@ -1319,6 +1319,25 @@ Em ordem de prioridade combinada com o cliente:
     código está pronto e testado — é só ligar a flag no `.env` depois do
     upgrade.
 
+28. ~~E-mails secundários do domain-search expostos no dossiê~~ ✅
+    **feito** (23/08/2026) — `Lead.emails_secundarios` (JSON, nullable,
+    11ª migration `d3b8f41c62a7`, validada contra Postgres real) guarda
+    os demais e-mails que a MESMA resposta do `domain-search` já trouxe.
+    **Não gera nenhuma chamada nova**: o Hunter cobra por requisição, não
+    por e-mail devolvido, e a chamada já paga traz até 10 — antes o
+    código escolhia o melhor e jogava o resto fora. Exibidos na aba
+    "Contatos" do dossiê, só leitura, com badge de tipo
+    (pessoal/genérico). A seção some por completo quando não há nenhum.
+    Continua atrás de `HUNTER_DOMAIN_SEARCH_FALLBACK` (desligada por
+    padrão — ver item 27 e a conta de consumo): com a flag desligada, o
+    campo fica `NULL` em todos os leads.
+
+    Detalhe que importa se alguém mexer nisso: **`None` e `[]` são
+    tratados diferente** da API até o banco. `None` = "não perguntei ao
+    domínio" e NÃO mexe no que já estava gravado; `[]` = "perguntei e não
+    havia outros" e grava `NULL`. Sem essa distinção, desligar a flag
+    apagaria os secundários achados numa rodada anterior.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

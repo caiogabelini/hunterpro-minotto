@@ -3856,6 +3856,66 @@ plan. Same lesson as `test_process_lead_pipeline.py`'s Google Places net —
 tests that want a real path override it afterward (last write wins on the
 same `monkeypatch`).
 
+### Secondary emails from domain-search (`Lead.emails_secundarios`, 2026-08-23)
+
+`buscar_emails_do_dominio` picked the best address and threw the rest away.
+Nothing was saved by discarding them: **Hunter bills per REQUEST, not per
+email returned**, and the already-paid call carries up to
+`HUNTER_DOMAIN_SEARCH_LIMIT` (10). Now the extras land on
+`Lead.emails_secundarios` — `[{email, tipo, confidence}]`.
+
+⚠️ **`None` and `[]` mean different things, all the way from the HTTP layer
+to the DB — don't collapse them.** `HunterEmailResult.outros_emails`:
+`None` = "the domain wasn't asked" (fallback flag off, or the finder already
+had an answer); `[]` = "asked, nothing else there". `_persistir_enriquecimento_lead`
+only touches the column when the value is not `None`, so **turning the flag
+off doesn't erase secondaries found on an earlier run**. An empty list
+persists as `NULL` (no `[]` rows). A dedicated test pins this
+(`test_rodada_sem_domain_search_nao_apaga_secundarios_anteriores`).
+
+**The principal is excluded by email VALUE, not by index** — Hunter payloads
+have been seen repeating the same address, and positional exclusion would
+echo the principal back as a "secondary" identical to it.
+
+Still gated behind `HUNTER_DOMAIN_SEARCH_FALLBACK` (default `False`) — this
+feature adds no API calls of its own, it only stops wasting a response the
+fallback already paid for. With the flag off, `emails_secundarios` is `NULL`
+on every lead.
+
+**Migration** `d3b8f41c62a7_adiciona_emails_secundarios_em_leads.py`
+(11th, chains after `b5e2c30a71f4`). Nullable JSON, no `server_default` —
+`NULL` is already correct for "domain-search never ran here", which is 100%
+of existing rows since the fallback ships off. Validated against a real
+Postgres 16 (port 5436, short socket dir per the 107-byte lesson): all 11
+upgrade in chain order, `downgrade -1` reverts only this one (the closing-
+data/insights/motivo_perda columns survive), re-upgrade is clean, and the
+resulting column is `json`/nullable/no-default. Cluster stopped and deleted.
+
+**Frontend** — "Outros e-mails encontrados" in the **Contatos** tab.
+Display only (no copy button, no `mailto:`): the principal already has those
+in the Dados tab; these are contact leads, not the chosen channel. Renders
+**nothing at all** when the list is empty — no heading, no empty state; it's
+a bonus nobody is looking for, so an explicit "none" would just take space.
+
+Two judgment calls worth knowing:
+- **It also renders on the no-decisor branch** of `AbaContatos`. The
+  secondaries belong to the *domain*, not the decisor — a lead with no
+  identified decisor but a `contato@clinica.com.br` is exactly where they
+  matter most, and hiding them with the rest of the tab would drop the only
+  available contact.
+- **`getEmailsSecundarios` (`src/emailsSecundarios.ts`, 12 vitest cases)**
+  parses defensively, same precedent as `getScoreBreakdown`/`getInsights`
+  (`fetch().json()` is `any`; TypeScript guarantees nothing at runtime).
+  Higher stakes here: those two degrade to "empty" on a shape mismatch,
+  while a bare `.map()` over a non-array **crashes the whole dossier page**.
+  `labelTipoEmail` shows an unrecognized `tipo` verbatim instead of guessing
+  "genérico". `Lead.emails_secundarios` is typed `unknown` in `api.ts`
+  precisely so nothing can read it without going through the parser.
+
+Badge colors are deliberately muted (neutral gray for generic, navy for
+personal): these are contact hints, not qualification signals — green/gold
+would compete with the priority/RQE badges that do indicate lead quality.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -4004,6 +4064,16 @@ this one, re-upgrade is clean, and the resulting `leads.servicos_vendidos`
 (`double precision`) columns match `app/models/lead.py` exactly — all
 three nullable, no default. Cluster stopped and deleted immediately
 after.
+
+An **eleventh** migration was added 2026-08-23:
+`d3b8f41c62a7_adiciona_emails_secundarios_em_leads.py`
+(`down_revision="b5e2c30a71f4"`, adds `Lead.emails_secundarios` — see
+"Secondary emails from domain-search" above). One nullable JSON column, no
+`server_default`, same reasoning as `insights_ia`/`motivo_perda`. Same
+throwaway-cluster validation as the previous ten (port 5436): all eleven
+upgrade cleanly in chain order, `downgrade -1` reverts only this one,
+re-upgrade is clean, and the column matches the model (`json`, nullable, no
+default). Cluster stopped and deleted immediately after.
 
 ### Deployment note (EasyPanel)
 

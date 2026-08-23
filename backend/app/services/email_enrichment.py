@@ -96,6 +96,16 @@ HUNTER_DOMAIN_SEARCH_LIMIT = 10
 # `contato@clinica.com.br` é um contato utilizável, e nos domínios reais
 # de 23/08/2026 às vezes era o único disponível.
 _ORDEM_TIPO_EMAIL = {"personal": 0, "generic": 1}
+
+
+def _chave_ordenacao_email(item: dict) -> tuple[int, int]:
+    """Ordena um e-mail do `domain-search`: tipo primeiro, depois maior
+    `confidence`. Tipo desconhecido (se o Hunter criar um terceiro) vai
+    pro fim em vez de quebrar."""
+    return (
+        _ORDEM_TIPO_EMAIL.get((item.get("type") or "").lower(), 99),
+        -(item.get("confidence") or 0),
+    )
 DEFAULT_TIMEOUT = 15.0
 
 # Status que o ZeroBounce pode devolver: valid | invalid | catch-all |
@@ -112,6 +122,17 @@ class HunterEmailResult:
     email: str | None
     score: int | None
     encontrado: bool
+    # Demais e-mails que a MESMA resposta trouxe, já sem o escolhido como
+    # principal -- ver `buscar_emails_do_dominio`. Só o `domain-search`
+    # preenche isto; o `email-finder` responde sobre uma pessoa só e
+    # deixa `None`.
+    #
+    # ⚠️ `None` e `[]` significam coisas DIFERENTES aqui, e a distinção
+    # atravessa até a persistência: `None` = "não perguntei ao domínio"
+    # (fallback desligado ou o finder já tinha achado), `[]` = "perguntei
+    # e não havia mais nenhum". Sem isso, desligar a flag apagaria os
+    # secundários achados numa rodada anterior.
+    outros_emails: list[dict] | None = None
 
 
 @dataclass
@@ -131,6 +152,9 @@ class EmailEnrichmentResult:
     mx_valido: bool | None
     zerobounce_status: str | None
     aprovado: bool
+    # Ver `HunterEmailResult.outros_emails` -- mesma semântica de
+    # None-vs-lista-vazia.
+    emails_secundarios: list[dict] | None = None
 
 
 def _dividir_nome(nome: str | None) -> tuple[str | None, str | None]:
@@ -331,17 +355,39 @@ def buscar_emails_do_dominio(
         emails = ((resp.json().get("data") or {}).get("emails")) or []
         candidatos = [e for e in emails if e.get("value")]
         if not candidatos:
-            return HunterEmailResult(email=None, score=None, encontrado=False)
+            # `[]`, não `None`: a pergunta FOI feita, a resposta é que
+            # veio vazia. Ver a ressalva em `HunterEmailResult`.
+            return HunterEmailResult(email=None, score=None, encontrado=False, outros_emails=[])
 
-        melhor = min(
-            candidatos,
-            key=lambda e: (
-                _ORDEM_TIPO_EMAIL.get((e.get("type") or "").lower(), 99),
-                -(e.get("confidence") or 0),
-            ),
-        )
+        ordenados = sorted(candidatos, key=_chave_ordenacao_email)
+        melhor = ordenados[0]
+
+        # Os demais viram `emails_secundarios` no Lead. Não custa nada
+        # guardá-los: o crédito do Hunter é cobrado por REQUISIÇÃO, não
+        # por e-mail devolvido, então a resposta que já pagamos traz até
+        # `HUNTER_DOMAIN_SEARCH_LIMIT` endereços e descartar os outros
+        # jogava fora dado sem economizar nada.
+        #
+        # A exclusão do principal é por VALOR do e-mail, não por posição:
+        # se o Hunter repetir o mesmo endereço em duas entradas (já vimos
+        # payloads com duplicata), comparar por índice deixaria a cópia
+        # aparecer como "secundário" idêntico ao principal.
+        principal = melhor["value"]
+        secundarios = [
+            {
+                "email": e["value"],
+                "tipo": (e.get("type") or "").lower() or None,
+                "confidence": e.get("confidence"),
+            }
+            for e in ordenados
+            if e["value"] != principal
+        ]
+
         return HunterEmailResult(
-            email=melhor["value"], score=melhor.get("confidence"), encontrado=True
+            email=principal,
+            score=melhor.get("confidence"),
+            encontrado=True,
+            outros_emails=secundarios,
         )
     finally:
         if owns_client:
@@ -418,7 +464,8 @@ def enriquecer_email(
 
     if not hunter.encontrado:
         return EmailEnrichmentResult(
-            email=None, hunter_score=None, mx_valido=None, zerobounce_status=None, aprovado=False
+            email=None, hunter_score=None, mx_valido=None, zerobounce_status=None, aprovado=False,
+            emails_secundarios=hunter.outros_emails,
         )
 
     dominio_email = hunter.email.split("@")[-1]
@@ -430,6 +477,7 @@ def enriquecer_email(
             mx_valido=False,
             zerobounce_status=None,
             aprovado=False,
+            emails_secundarios=hunter.outros_emails,
         )
 
     zerobounce = validar_zerobounce(hunter.email, client=client)
@@ -440,4 +488,5 @@ def enriquecer_email(
         mx_valido=True,
         zerobounce_status=zerobounce.status,
         aprovado=zerobounce.aprovado,
+        emails_secundarios=hunter.outros_emails,
     )

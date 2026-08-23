@@ -20,6 +20,7 @@ class LeadRead(BaseModel):
     whatsapp_ativo: bool | None = None
     email: str | None = None
     email_validado: bool | None = None
+    emails_secundarios: list | None = None
     decisor_nome: str | None = None
     site: str | None = None
     instagram: str | None = None
