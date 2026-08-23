@@ -83,8 +83,12 @@ também se a chave não estiver configurada ou se não houver `site_url`.
 """
 import logging
 import math
+import time
+from datetime import datetime
+from pathlib import Path
 
 from celery import Celery
+from celery.signals import task_prerun, worker_ready
 
 # ⚠️ Import de efeito colateral, obrigatório e no TOPO -- registra TODOS os
 # modelos em `Base.metadata` assim que o processo do worker sobe. Sem ele,
@@ -105,6 +109,140 @@ celery_app = Celery(
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
 )
+
+
+# ---------------------------------------------------------------------------
+# Detecção de código desatualizado no worker
+# ---------------------------------------------------------------------------
+# ⚠️ ISTO EXISTE POR CAUSA DE TRÊS INVESTIGAÇÕES SEGUIDAS, todas em
+# 23/08/2026, todas com a MESMA causa raiz: o worker rodando código
+# anterior à correção porque ninguém o reiniciou.
+#
+#   1. NoReferencedTableError (FK buscas_leads -> users): o worker que
+#      pegou a task tinha o app/models/__init__.py vazio em memória.
+#   2. E-mail vazio nos 6 leads: horas gastas até descobrir que o
+#      processo era mais velho que a correção.
+#   3. site_scrape_sucesso NULL em 6 de 6 leads: a busca rodou 11 minutos
+#      ANTES de a correção sequer ser escrita.
+#
+# Python carrega módulo no import. Um processo iniciado às 10:22 não tem
+# como conter código escrito às 10:41, e nada no log dizia isso -- o
+# worker parecia saudável e as tasks "concluíam com sucesso" produzindo
+# dados errados. É a mesma família de armadilha silenciosa que este
+# projeto já documentou nos globs case-sensitive e no filtro da PGFN que
+# não filtrava nada.
+_INICIO_DO_PROCESSO = time.time()
+
+# Raiz do pacote da aplicação: .../backend/app (este arquivo é
+# .../backend/app/workers/celery_app.py).
+_RAIZ_APP = Path(__file__).resolve().parents[1]
+
+# Intervalo mínimo entre duas verificações. A checagem varre ~50 arquivos
+# com `stat()`, o que é barato, mas roda antes de CADA task -- numa busca
+# de 60 leads são centenas de tasks, e não há motivo pra reescanear o
+# disco a cada segundo. O código não muda sozinho no meio de um lote.
+_INTERVALO_CHECAGEM_CODIGO_SEGUNDOS = 60.0
+_ultima_checagem_de_codigo = 0.0
+
+
+def arquivos_modificados_apos_inicio(
+    inicio: float | None = None,
+    raiz: Path | None = None,
+) -> list[str]:
+    """
+    Lista os `.py` sob `raiz` cujo mtime é POSTERIOR a `inicio` — ou seja,
+    editados depois que este processo carregou o código.
+
+    Devolve caminhos relativos à raiz, ordenados, pra mensagem de log
+    estável. Ignora `__pycache__` (o .pyc é regerado e não diz nada sobre
+    o que está carregado NA MEMÓRIA deste processo).
+
+    Nunca levanta: um erro de I/O aqui (arquivo removido no meio da
+    varredura, permissão) não pode derrubar uma task. Um detector de
+    problema que vira problema é pior que não ter detector.
+    """
+    inicio = _INICIO_DO_PROCESSO if inicio is None else inicio
+    raiz = _RAIZ_APP if raiz is None else raiz
+
+    desatualizados: list[str] = []
+    try:
+        for caminho in raiz.rglob("*.py"):
+            if "__pycache__" in caminho.parts:
+                continue
+            try:
+                if caminho.stat().st_mtime > inicio:
+                    desatualizados.append(str(caminho.relative_to(raiz)))
+            except OSError:
+                continue
+    except OSError:  # pragma: no cover -- raiz sumiu, nada a fazer
+        return []
+
+    return sorted(desatualizados)
+
+
+def _avisar_se_codigo_desatualizado(forcar: bool = False) -> list[str]:
+    """
+    Emite um `logger.warning` bem visível se o código em disco for mais
+    novo que o carregado. Devolve a lista de arquivos (vazia = tudo em
+    dia), pra facilitar teste e uso programático.
+
+    ⚠️ **Por que a checagem também roda por task, e não só na subida.**
+    Na subida ela é quase sempre inócua: acabou de carregar, nada é mais
+    novo que o processo. O cenário real é o inverso -- o worker sobe, e
+    HORAS depois alguém edita o código e dispara uma busca sem
+    reiniciar. Só uma checagem no momento da task pega isso, e foi
+    exatamente esse o caso das três investigações citadas acima. A
+    checagem na subida fica assim mesmo, como âncora no log ("este
+    processo carregou o código às X").
+
+    `forcar=True` pula a limitação de intervalo -- usado na subida e nos
+    testes.
+    """
+    global _ultima_checagem_de_codigo
+
+    agora = time.time()
+    if not forcar and (agora - _ultima_checagem_de_codigo) < _INTERVALO_CHECAGEM_CODIGO_SEGUNDOS:
+        return []
+    _ultima_checagem_de_codigo = agora
+
+    desatualizados = arquivos_modificados_apos_inicio()
+    if not desatualizados:
+        return []
+
+    amostra = ", ".join(desatualizados[:8])
+    if len(desatualizados) > 8:
+        amostra += f" e mais {len(desatualizados) - 8}"
+    logger.warning(
+        "=" * 78
+        + "\n⚠️  WORKER COM CÓDIGO POSSIVELMENTE DESATUALIZADO ⚠️\n"
+        + f"{len(desatualizados)} arquivo(s) em app/ foram modificados DEPOIS que este processo "
+        f"iniciou ({datetime.fromtimestamp(_INICIO_DO_PROCESSO):%d/%m/%Y %H:%M:%S}): {amostra}.\n"
+        "O código rodando aqui é o que estava em disco na subida -- Python não recarrega "
+        "módulo sozinho. Tasks vão concluir 'com sucesso' usando a versão antiga.\n"
+        "REINICIE O WORKER antes de confiar no resultado desta execução.\n"
+        + "=" * 78
+    )
+    return desatualizados
+
+
+@worker_ready.connect
+def _checar_codigo_na_subida(**_kwargs) -> None:
+    """Âncora no log: registra quando este processo carregou o código.
+    Ver a ressalva em `_avisar_se_codigo_desatualizado` sobre por que a
+    checagem de verdade acontece por task."""
+    logger.info(
+        "Worker iniciado -- código carregado em %s. Arquivos editados depois disso "
+        "NÃO entram em vigor sem reiniciar o processo.",
+        f"{datetime.fromtimestamp(_INICIO_DO_PROCESSO):%d/%m/%Y %H:%M:%S}",
+    )
+    _avisar_se_codigo_desatualizado(forcar=True)
+
+
+@task_prerun.connect
+def _checar_codigo_antes_da_task(**_kwargs) -> None:
+    """Checagem que de fato pega o cenário real (ver docstring acima).
+    Limitada por `_INTERVALO_CHECAGEM_CODIGO_SEGUNDOS`."""
+    _avisar_se_codigo_desatualizado()
 
 celery_app.conf.update(
     task_serializer="json",
@@ -458,6 +596,36 @@ def enrich_cnes(cnpj: str, codigo_municipio: int, cache_municipios: dict | None 
 SITE_CONTENT_RESUMO_MAX_CARACTERES = 500
 
 
+def resultado_firecrawl_falho(site_url: str) -> dict:
+    """
+    Resultado de `enrich_site_firecrawl` quando o site NÃO foi lido.
+
+    Fonte única de propósito: este mesmo dict é devolvido em dois pontos
+    que precisam concordar exatamente --
+      1. dentro da task, quando o Firecrawl responde 200 com
+         `success: false` (site fora do ar, bloqueio a robôs);
+      2. em `process_lead_pipeline`, quando a task LEVANTOU exceção e
+         `_rodar_etapa` devolveu None (timeout, 500, rede caindo).
+
+    O que importa é `scrape_sucesso: False`, que vira
+    `Lead.site_scrape_sucesso = False`. Se os dois pontos montassem o
+    dict por conta própria, bastaria alguém acrescentar uma chave num
+    lugar pra que o outro caminho passasse a gravar um lead com forma
+    diferente -- e o sintoma seria, de novo, um campo silenciosamente
+    vazio.
+    """
+    return {
+        "site_url": site_url,
+        "scrape_sucesso": False,
+        "site_content_resumo": "",
+        "instagram": None,
+        "whatsapp_site": None,
+        "rqe_mencionado": False,
+        "rqe_numero": None,
+        "servicos": [],
+    }
+
+
 @celery_app.task(name="enrich_site_firecrawl")
 def enrich_site_firecrawl(site_url: str) -> dict:
     """
@@ -478,16 +646,7 @@ def enrich_site_firecrawl(site_url: str) -> dict:
 
     resultado_scrape = scrape_site(site_url)
     if not resultado_scrape.sucesso:
-        return {
-            "site_url": site_url,
-            "scrape_sucesso": False,
-            "site_content_resumo": "",
-            "instagram": None,
-            "whatsapp_site": None,
-            "rqe_mencionado": False,
-            "rqe_numero": None,
-            "servicos": [],
-        }
+        return resultado_firecrawl_falho(site_url)
 
     instagram = extrair_instagram(resultado_scrape.markdown)
     # Mesmo markdown, nenhuma chamada extra -- ver a ressalva em
@@ -1049,8 +1208,31 @@ def process_lead_pipeline(
         site_firecrawl = None
     else:
         site_firecrawl = _rodar_etapa("enrich_site_firecrawl", lambda: enrich_site_firecrawl(site_url_efetivo))
-        if site_firecrawl is not None:
-            enriquecimentos["enrich_site_firecrawl"] = site_firecrawl
+        if site_firecrawl is None:
+            # ⚠️ A etapa FOI tentada e levantou exceção -- `_rodar_etapa`
+            # engoliu e devolveu None. Sem este ramo, `site_firecrawl`
+            # seguiria None até a persistência, que pula o bloco inteiro
+            # e deixa `site_scrape_sucesso` como NULL. E NULL significa
+            # "nunca tentamos, o lead não tem site" -- exatamente a
+            # ambiguidade que a coluna existe pra eliminar.
+            #
+            # Falha de rede/timeout é o caso MAIS comum de scrape falho
+            # em produção, então este era o buraco maior, não o de borda:
+            # o retorno gracioso (`success: false`) já gravava False, e a
+            # exceção não.
+            #
+            # Convertido num resultado de falha explícito, idêntico ao
+            # que a própria task devolve nesse caso. Para o score não
+            # muda nada (`scrape_sucesso` falso e campos vazios já eram o
+            # que um None produzia); o que muda é o Lead passar a
+            # registrar que tentamos e não conseguimos.
+            logger.warning(
+                "enrich_site_firecrawl falhou por exceção pro CNPJ %s -- registrando "
+                "scrape_sucesso=False (tentado e não lido), não NULL.",
+                cnpj,
+            )
+            site_firecrawl = resultado_firecrawl_falho(site_url_efetivo)
+        enriquecimentos["enrich_site_firecrawl"] = site_firecrawl
 
     # ETAPA 7 -- WhatsApp: precisa de telefone.
     #

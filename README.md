@@ -1359,6 +1359,26 @@ Em ordem de prioridade combinada com o cliente:
     o lead foi processado e pontuado, só a presença digital ficou
     incompleta.
 
+30. ~~Scrape que falha por exceção + worker com código desatualizado~~ ✅
+    **feito** (23/08/2026).
+    - **Exceção no scrape agora grava `False`, não NULL.** `_rodar_etapa`
+      engole a exceção e devolve `None`, e a persistência pulava o bloco
+      inteiro — deixando `site_scrape_sucesso` NULL, que significa "nunca
+      tentamos, sem site". Era o buraco **maior**: o retorno gracioso do
+      Firecrawl já gravava `False`; falha de rede/timeout, que é o caso
+      mais comum em produção, não gravava nada.
+    - **Aviso automático de worker desatualizado.** Três investigações
+      seguidas neste dia tiveram a MESMA causa raiz: o worker rodando
+      código anterior à correção. Agora, antes de cada task (limitado a
+      1 verificação por minuto), o worker compara o mtime dos `.py` em
+      `app/` com o horário em que o processo subiu e emite um warning
+      bem visível terminando em **"REINICIE O WORKER"**.
+
+      ⚠️ A checagem roda **por task**, não só na subida — na subida ela
+      seria inócua (o código acabou de carregar). O cenário real é o
+      worker subir e, horas depois, alguém editar o código e disparar
+      uma busca sem reiniciar.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

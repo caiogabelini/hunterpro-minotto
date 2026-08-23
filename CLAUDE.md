@@ -3983,6 +3983,66 @@ component-testing setup (no jsdom, no React Testing Library; see the
 jsdom + RTL remains a separate, deliberate decision, not something to slip
 in as a side effect.
 
+### Stale-worker detection + scrape failure by exception (2026-08-23)
+
+**1. An exception in `enrich_site_firecrawl` left `site_scrape_sucesso`
+NULL.** `_rodar_etapa` swallows any exception and returns `None`, so
+`enriquecimentos["enrich_site_firecrawl"]` was never set, persistence
+received `site_firecrawl=None`, and the block writing the column was
+skipped entirely — leaving NULL, which means *"we never tried, the lead has
+no site"*. Exactly the ambiguity the column exists to remove.
+
+This was the **bigger** hole, not an edge case: the graceful path
+(Firecrawl 200 with `success: false`) already wrote `False`; the exception
+path — network timeout, 500, DNS — is the *more common* production failure,
+and it wrote nothing.
+
+Fix: when the step was attempted and came back `None`,
+`process_lead_pipeline` builds an explicit failure result via
+**`resultado_firecrawl_falho(site_url)`** — a single constructor shared with
+the task's own `success: false` branch, so the two paths can't drift (add a
+key in one place and the other would persist a differently-shaped lead, and
+the symptom would again be a silently empty field). Scoring is unaffected
+(`scrape_sucesso` false + empty fields is what `None` already produced);
+what changes is the Lead now recording *that we tried and failed*.
+
+**2. Stale-worker detection — the reason this exists is worth reading.**
+Three separate investigations on 2026-08-23 burned real time on the **same**
+root cause: the worker running code from before the fix, because nobody
+restarted the process.
+
+| # | Symptom | Actual cause |
+|---|---|---|
+| 1 | `NoReferencedTableError` (FK `buscas_leads` → `users`) | worker held the empty `app/models/__init__.py` in memory |
+| 2 | e-mail empty on all 6 leads | process older than the fix |
+| 3 | `site_scrape_sucesso` NULL on 6 of 6 | search ran **11 min before the fix was written** |
+
+Python loads modules at import. A process started 10:22 cannot contain code
+written 10:41 — and nothing in the log said so: the worker looked healthy
+and tasks "succeeded" while producing wrong data. Same family of silent trap
+as the case-sensitive globs and the PGFN filter that filtered nothing.
+
+`arquivos_modificados_apos_inicio()` lists `.py` files under `app/` whose
+mtime is later than `_INICIO_DO_PROCESSO` (captured at import).
+`__pycache__` is skipped — the `.pyc` is regenerated and says nothing about
+what's loaded *in memory*. It never raises: a detector that becomes the
+problem is worse than no detector.
+
+⚠️ **It hooks `task_prerun`, not only `worker_ready` — and that's the whole
+point.** At startup the check is almost always vacuous: the code just
+loaded, nothing is newer than the process. The real scenario is the
+opposite — the worker comes up, and *hours later* someone edits code and
+fires a search without restarting. Only a per-task check catches that, and
+that is exactly what happened in all three investigations. `worker_ready`
+still logs an anchor line ("this process loaded its code at X").
+
+Throttled to one scan per `_INTERVALO_CHECAGEM_CODIGO_SEGUNDOS` (60s): the
+check runs before *every* task, and a 60-lead search is hundreds of tasks —
+code doesn't change mid-batch. The warning names up to 8 files and ends with
+**"REINICIE O WORKER"**, the action rather than just the diagnosis.
+
+Verified by firing the real Celery signal, not only by calling the function.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
