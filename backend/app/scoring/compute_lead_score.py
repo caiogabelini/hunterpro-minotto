@@ -54,11 +54,10 @@ O QUE ESTE MÓDULO FAZ:
     confiabilidade) — pro dossiê do lead poder mostrar de onde vieram
     os pontos, não só o total.
 
+⚠️ `derivar_prioridade` (A/B/C) usa CORTES PROVISÓRIOS — ver a docstring
+da função. Não foram validados com o Douglas.
+
 O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
-  - Não calcula `prioridade` (A/B/C) — não foi pedido nesta sessão e não
-    há régua de corte confirmada com o cliente; ficaria pra uma sessão
-    futura, fácil de derivar de `score_total` quando o Douglas definir
-    os cortes.
   - Não busca os resultados de enriquecimento sozinho (não bate CNPJ
     nenhum, não lê o banco) — `montar_score_lead` é uma função pura,
     recebe os dados já prontos. Quem monta esse dict e persiste o
@@ -282,3 +281,58 @@ def montar_score_lead(enriquecimentos: dict) -> LeadScoreResult:
     ]
 
     return LeadScoreResult(score_total=sum(d.points for d in breakdown), breakdown=breakdown)
+
+
+# ---------------------------------------------------------------------------
+# Prioridade A/B/C
+# ---------------------------------------------------------------------------
+# 🔴 CORTES PROVISÓRIOS -- NÃO VALIDADOS COM O CLIENTE (Douglas).
+#
+# Definidos por decisão de produto (Caio) em 23/08/2026 pra fechar um gap
+# real: até então `Lead.prioridade` era LIDA em quatro lugares (filtro de
+# `GET /api/leads`, filtro da Lista de Leads, card "leads de alta
+# prioridade" do Dashboard, contexto dos insights de IA) e ESCRITA em
+# NENHUM. Os únicos leads com prioridade preenchida no banco eram dados de
+# teste inseridos à mão via SQL; os 6 leads da primeira busca real saíram
+# todos com `prioridade = None`, e o dossiê mostrava "Prioridade —" e
+# "Classificação —" mesmo com o score calculado e persistido.
+#
+# ⚠️ Os números abaixo são um PALPITE RAZOÁVEL, não uma régua de negócio.
+# Não existe histórico de conversão pra calibrá-los, e o Douglas nunca foi
+# perguntado. Antes de tratar isso como definitivo, confirmar com ele:
+#   - os cortes fazem sentido pro funil dele?
+#   - "C" deve mesmo ser o balde de tudo abaixo de 50, ou existe um piso
+#     abaixo do qual o lead nem deveria ser trabalhado?
+# Referência pra essa conversa: nos 6 leads reais de 23/08/2026 os scores
+# ficaram entre 40 e 50, ou seja, quase todos cairiam em "C" -- o que pode
+# estar certo (universo sem enriquecimento de contato ainda) ou indicar
+# que a régua está deslocada pra cima.
+PRIORIDADE_CORTE_A = 70.0
+PRIORIDADE_CORTE_B = 50.0
+
+
+def derivar_prioridade(score_total: float | None) -> str | None:
+    """
+    Converte `score_total` (0-100) na letra de prioridade A/B/C.
+
+    🔴 CORTES PROVISÓRIOS, NÃO VALIDADOS COM O CLIENTE -- ver o bloco de
+    comentários acima antes de usar isso como régua de negócio.
+
+        score >= 70  -> "A"
+        score >= 50  -> "B"
+        score <  50  -> "C"
+
+    Os limites são INCLUSIVOS na letra melhor: exatamente 70 é "A",
+    exatamente 50 é "B".
+
+    `None` entra e sai como `None` -- "score ainda não calculado" não é a
+    mesma coisa que "prioridade C", e gravar "C" num lead não pontuado o
+    faria aparecer nos filtros como se tivesse sido avaliado.
+    """
+    if score_total is None:
+        return None
+    if score_total >= PRIORIDADE_CORTE_A:
+        return "A"
+    if score_total >= PRIORIDADE_CORTE_B:
+        return "B"
+    return "C"

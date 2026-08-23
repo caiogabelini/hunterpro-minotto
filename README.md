@@ -1265,6 +1265,29 @@ Em ordem de prioridade combinada com o cliente:
     traceback exato reaparece com a correção revertida e a task conclui
     com `succeeded` com ela aplicada.
 
+26. ~~Correções da primeira busca real (telefone/WhatsApp, e-mail,
+    prioridade, vazamento de credencial)~~ ✅ **feito** (23/08/2026) —
+    ver o bullet dedicado no CLAUDE.md. Resumo: `telefone_google` era
+    calculado e descartado (e `validate_whatsapp` nunca rodava por falta
+    de telefone); `enrich_email`/`validate_whatsapp` não tinham guarda de
+    chave e falhavam em silêncio; a `api_key` ia na query string e
+    entraria no log; `_dividir_nome` quebrava nomes brasileiros; e
+    `Lead.prioridade` era lida em 4 lugares e escrita em nenhum.
+    Pendências deixadas de propósito:
+    - 🔴 **Os cortes de prioridade A≥70 / B≥50 / C<50 são PROVISÓRIOS e
+      NÃO foram validados com o Douglas.** Decisão de produto (Caio),
+      sem histórico de conversão pra calibrar. Nos 6 leads reais (scores
+      40–50) quase todos cairiam em "C" — pode estar certo ou indicar
+      régua deslocada. **Confirmar antes de tratar como definitivo.**
+    - ⚠️ **Passa a gastar Evolution API**, que nunca rodou até aqui: 1
+      chamada por lead com telefone. Hoje ainda pula, porque
+      `EVOLUTION_URL`/`EVOLUTION_KEY`/`EVOLUTION_INSTANCE` estão vazias
+      no `.env` — mas com a guarda nova isso aparece explícito no motivo
+      da etapa pulada, em vez de falhar calado.
+    - **ZeroBounce continua com a chave na query string** — a API não
+      documenta alternativa e não dá pra sondar daqui (Cloudflare 403). A
+      redação de `app/core/segredos.py` é a única proteção nesse caminho.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

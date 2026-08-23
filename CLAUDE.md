@@ -3677,6 +3677,105 @@ gate — **exercises every `BuscaLeads` commit with zero paid API calls**.
 That's the safe way to smoke-test this task; never dispatch it against the
 real RFB folder just to check plumbing.
 
+### Fixes from the first real search (2026-08-23)
+
+Six real leads came back with `telefone`, `whatsapp_ativo`, `email` **and**
+`prioridade` all null. Four distinct root causes, all fixed; guards live in
+`tests/test_correcoes_pos_primeira_busca.py` (42 cases).
+
+**1. `telefone_google` was computed and thrown away.** `search_google_places`
+always returned it, but nothing read it — the only assignment to
+`Lead.telefone` in the whole file was in the `whatsapp` block, which only
+runs when a phone already exists. Circular: the phone would only be stored
+by the step that needs a phone to run. Now `_persistir_enriquecimento_lead`
+persists `google_places["telefone_google"]` (with `or lead.telefone`, so a
+round without a phone never blanks a previous one), and
+`process_lead_pipeline` computes `telefone_efetivo = telefone or
+google_places_resultado["telefone_google"]` — same precedence pattern
+`site_url_efetivo` already used. An explicit caller-supplied phone still
+wins. ⚠️ **This turns on Evolution API calls that never ran before** — one
+per lead that has a phone.
+
+**2. Config guards for `enrich_email` and `validate_whatsapp`.** Only
+Firecrawl had one. `enrich_email` ran with an empty key, took a 401, and
+`_rodar_etapa` swallowed it — the panel couldn't tell "not configured" from
+"no email found". That's exactly what happened, 6 times, silently. Both
+tasks now return `{"etapa_pulada": "<NOME> não configurada(s)"}` instead of
+calling out. **The guards live inside the tasks, not in
+`process_lead_pipeline`** — deliberately: the tasks are callable on their
+own, and a test that monkeypatches the whole task shouldn't depend on what
+the test runner's `.env` happens to hold. `enrich_email` requires *both*
+Hunter and ZeroBounce keys: without ZeroBounce, `email_aprovado` is always
+False and the `email_validado` criterion can never score, so paying Hunter
+would buy a useless signal.
+
+**3. 🔴 Credential leak into logs — fixed.** The `api_key` went in the
+**query string**, so `httpx`'s error message (`Client error '401' for url
+'...?api_key=<KEY>'`) reached `logger.exception` in `_rodar_etapa`. With a
+key configured, the first 401/timeout would have written it in plaintext to
+the worker log. Three layers of fix:
+  - **Hunter.io moved to `Authorization: Bearer`.** ✅ Verified against the
+    live API with a valid key: 401 without credentials, 200 with the header
+    only. (Probing this *without* a valid key is useless — Hunter returns
+    `"No user found for the API key supplied"` identically for query,
+    Bearer, X-API-KEY, and no credential at all.)
+  - **ZeroBounce keeps the key in the query** — its API documents no
+    alternative, and it can't be probed from here (`api.zerobounce.net`
+    returns a Cloudflare 403 to this environment). Redaction is its only
+    protection.
+  - **`app/core/segredos.py`** (new): `redigir_segredos(texto)`, used in
+    `email_enrichment`'s `_executar_http` (wraps every HTTP error into
+    `ErroHttpSeguro` with a redacted message) and in `_rodar_etapa`, the
+    single point where every step failure becomes a log line. Two
+    independent strategies — by parameter name (`?api_key=`, `&token=`…)
+    and by literal value of any `Settings` field ending in
+    `_KEY`/`_TOKEN`/`_SECRET`/…. ⚠️ Empty strings are never used for
+    value-matching: `texto.replace("", ...)` would insert the marker between
+    every character.
+    ⚠️ `_rodar_etapa` now uses `logger.error(...)` **without** the
+    traceback: httpx repeats the URL across several frames and there's no
+    way to sanitize an already-formatted traceback. Step name + redacted
+    message still localize the problem.
+  - **Audit result**: `email_enrichment` was the *only* module putting
+    credentials in a URL. Google Places (`X-Goog-Api-Key`), Firecrawl
+    (`Authorization: Bearer`), Anthropic (`x-api-key`) and Evolution
+    (`apikey`) already used headers.
+
+**4. `_dividir_nome` mangled Brazilian names.** `split(maxsplit=1)` made
+everything after the first name the surname: `"ALBA REGINA RIBEIRO DE
+SOUZA"` → `last_name="REGINA RIBEIRO DE SOUZA"`. Hunter wants a surname.
+Now the **last** token wins (`→ "SOUZA"`), skipping trailing particles
+(`DE`, `DA`, `DOS`, …, see `PARTICULAS_DE_SOBRENOME`); a compound surname
+is *not* reassembled — that's what Hunter expects, and rebuilding one is
+guesswork with no proven gain.
+
+**5. 🔴 `Lead.prioridade` was read in 4 places and written in NONE.** Filters
+on `GET /api/leads` and the Lista de Leads screen, the Dashboard's
+"high-priority leads" card, and the AI insights context all read it; nothing
+ever set it. The only rows with a value were hand-seeded test data from
+2026-08-20. `derivar_prioridade(score_total)` now lives in
+`app/scoring/compute_lead_score.py` and is persisted in
+`process_lead_pipeline`'s **second pass** (alongside `score_total`/
+`score_detalhes`) — it can't go in `_persistir_enriquecimento_lead`, which
+runs before the score exists.
+
+⚠️ **THE A/B/C THRESHOLDS ARE PROVISIONAL AND UNVALIDATED — `A ≥ 70`,
+`B ≥ 50`, `C < 50`.** Product decision (Caio), **never taken to Douglas**.
+There's no conversion history to calibrate against. Before treating them as
+final, ask him: do the cuts fit his funnel, and should "C" really be
+everything under 50 or is there a floor below which a lead isn't worth
+working? Data point for that conversation: the 6 real leads scored 40–50, so
+nearly all would land in "C" — which may be correct (no contact enrichment
+yet) or may mean the ruler sits too high. `None` score stays `None`, never
+"C" — "not scored yet" isn't "low priority", and writing "C" would make an
+unscored lead show up in filters as if it had been evaluated.
+
+**Correction to the previous session's diagnosis**: it reported
+`EVOLUTION_API_KEY` as present. That field doesn't exist — it's
+`EVOLUTION_KEY`, and all three Evolution settings (`URL`, `KEY`,
+`INSTANCE`) are empty. The "present" reading was a `getattr` fallback
+placeholder being printed, not a real value.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

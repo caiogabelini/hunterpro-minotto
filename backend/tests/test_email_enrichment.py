@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.services.email_enrichment import (
+    ErroHttpSeguro,
     ZEROBOUNCE_STATUS_APROVADOS,
     buscar_email_hunter,
     enriquecer_email,
@@ -91,12 +92,20 @@ def test_buscar_email_hunter_nome_de_uma_palavra_so_manda_first_name():
     buscar_email_hunter(DOMINIO, "Ciclana", client=client)
 
 
-def test_buscar_email_hunter_erro_http_propaga_excecao():
+def test_buscar_email_hunter_erro_http_vira_erro_seguro():
+    """Contrato MUDADO em 23/08/2026: erro HTTP deixa de propagar como
+    `httpx.HTTPStatusError` e vira `ErroHttpSeguro`, com a mensagem já
+    passada por `redigir_segredos`.
+
+    O motivo é a mensagem do httpx conter a URL completa da chamada, que
+    `_rodar_etapa` loga -- ver app/core/segredos.py. Continua sendo uma
+    exceção (o comportamento de "erro sobe" não mudou), só que de um tipo
+    que garante não carregar credencial."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ErroHttpSeguro):
         buscar_email_hunter(DOMINIO, client=client)
 
 
@@ -153,12 +162,16 @@ def test_zerobounce_status_aprovados_sao_exatamente_valid_e_catch_all():
     assert ZEROBOUNCE_STATUS_APROVADOS == {"valid", "catch-all"}
 
 
-def test_validar_zerobounce_erro_http_propaga_excecao():
+def test_validar_zerobounce_erro_http_vira_erro_seguro():
+    """Mesma mudança de contrato do Hunter -- ver o teste equivalente
+    acima. Aqui importa ainda mais: a chave do ZeroBounce continua indo
+    na query string (a API não documenta alternativa), então a redação da
+    mensagem é a ÚNICA proteção."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ErroHttpSeguro):
         validar_zerobounce(EMAIL_ENCONTRADO, client=client)
 
 

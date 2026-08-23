@@ -95,6 +95,7 @@ from celery import Celery
 # justamente não depender de qual task roda primeiro.
 import app.models  # noqa: F401
 from app.core.config import settings
+from app.core.segredos import redigir_segredos
 from app.core.tempo import agora_utc
 
 logger = logging.getLogger(__name__)
@@ -511,6 +512,36 @@ def validate_whatsapp(telefone: str) -> dict:
     """
     from app.services.whatsapp import check_whatsapp
 
+    # ⚠️ Guarda de configuração -- mesmo padrão de `enrich_email` e do
+    # FIRECRAWL_API_KEY. Fica DENTRO da task (não no
+    # `process_lead_pipeline`) por dois motivos: a task é chamável
+    # sozinha, e assim um teste que substitui `validate_whatsapp` inteira
+    # não fica dependendo do que está configurado no ambiente de quem
+    # roda a suíte.
+    #
+    # Sem isso, `httpx.Client(base_url="")` (app/services/whatsapp.py)
+    # falharia em toda chamada, e `_rodar_etapa` engoliria o erro: o
+    # painel não distinguiria "Evolution não configurada" de "esse número
+    # não tem WhatsApp".
+    faltando = [
+        nome
+        for nome, valor in (
+            ("EVOLUTION_URL", settings.EVOLUTION_URL),
+            ("EVOLUTION_KEY", settings.EVOLUTION_KEY),
+            ("EVOLUTION_INSTANCE", settings.EVOLUTION_INSTANCE),
+        )
+        if not valor
+    ]
+    if faltando:
+        motivo = f"{' e '.join(faltando)} não configurada(s)"
+        logger.warning("Pulando validate_whatsapp pro telefone informado: %s", motivo)
+        return {
+            "telefone_original": telefone,
+            "numero_formatado": None,
+            "whatsapp_ativo": None,
+            "etapa_pulada": motivo,
+        }
+
     resultado = check_whatsapp(telefone)
 
     return {
@@ -531,6 +562,36 @@ def enrich_email(dominio: str, decisor_nome: str | None) -> dict:
     "aprovado" se o ZeroBounce devolver status "valid" ou "catch-all".
     """
     from app.services.email_enrichment import enriquecer_email
+
+    # ⚠️ Guarda de configuração -- mesmo padrão do FIRECRAWL_API_KEY em
+    # process_lead_pipeline. Sem isso a chamada sai com a chave vazia e o
+    # Hunter devolve 401 "No user found for the API key supplied", que
+    # `_rodar_etapa` engole: a etapa vira None e o painel não distingue
+    # "não configurado" de "não achou e-mail". Foi exatamente o que
+    # aconteceu nos 6 leads da primeira busca real (23/08/2026) -- 6
+    # falhas silenciosas, zero pistas.
+    #
+    # As duas chaves são exigidas juntas de propósito: sem ZeroBounce o
+    # Hunter até acharia um e-mail, mas `email_aprovado` ficaria sempre
+    # False e o critério `email_validado` do score nunca pontuaria --
+    # gastaria consulta paga no Hunter pra produzir um sinal inútil.
+    faltando = [
+        nome
+        for nome, valor in (
+            ("HUNTER_API_KEY", settings.HUNTER_API_KEY),
+            ("ZEROBOUNCE_API_KEY", settings.ZEROBOUNCE_API_KEY),
+        )
+        if not valor
+    ]
+    if faltando:
+        motivo = f"{' e '.join(faltando)} não configurada(s)"
+        logger.warning("Pulando enrich_email pro domínio %s: %s", dominio, motivo)
+        return {
+            "dominio": dominio,
+            "email": None,
+            "email_aprovado": False,
+            "etapa_pulada": motivo,
+        }
 
     resultado = enriquecer_email(dominio, decisor_nome)
 
@@ -657,8 +718,23 @@ def _rodar_etapa(nome_etapa: str, funcao) -> dict | bool | None:
     """
     try:
         return funcao()
-    except Exception:
-        logger.exception("Etapa %s falhou -- seguindo o resto do pipeline sem esse sinal.", nome_etapa)
+    except Exception as exc:
+        # ⚠️ `redigir_segredos` é obrigatório aqui, não zelo extra: este é
+        # o ponto por onde TODA falha de etapa vira log, e a mensagem de
+        # uma exceção do httpx carrega a URL completa da chamada -- com
+        # api_key na query string, quando a API só aceita assim (ex.:
+        # ZeroBounce). Ver app/core/segredos.py pro histórico.
+        #
+        # `logger.error(..., exc_info=False)` em vez de `logger.exception`:
+        # o traceback do httpx repete a URL em vários frames, e não há
+        # como sanitizar um traceback já formatado sem reescrevê-lo. Perde
+        # o traceback, ganha a garantia -- o nome da etapa e a mensagem
+        # já localizam o problema.
+        logger.error(
+            "Etapa %s falhou -- seguindo o resto do pipeline sem esse sinal. Erro: %s",
+            nome_etapa,
+            redigir_segredos(exc),
+        )
         return None
 
 
@@ -765,6 +841,18 @@ def _persistir_enriquecimento_lead(
     if google_places is not None:
         lead.google_rating = google_places.get("rating")
         lead.google_avaliacoes = google_places.get("avaliacoes")
+        # ⚠️ Corrigido em 23/08/2026. `search_google_places` sempre
+        # devolveu `telefone_google`, mas NADA lia esse valor -- a única
+        # atribuição a `lead.telefone` no arquivo inteiro era a do bloco
+        # `whatsapp` abaixo, que por sua vez só roda se já houver
+        # telefone. Circular: o telefone só seria gravado pela etapa que
+        # precisa dele pra rodar. Resultado nos 6 leads da primeira busca
+        # real: `telefone` e `whatsapp_ativo` nulos em todos.
+        #
+        # `or lead.telefone` preserva o que já estava lá quando o Google
+        # não devolve telefone nesta rodada -- mesma regra de "etapa que
+        # não rodou não apaga dado de rodada anterior" do resto da função.
+        lead.telefone = google_places.get("telefone_google") or lead.telefone
 
     if site_url is not None:
         # Independente de site_firecrawl ter rodado -- site_url pode ter
@@ -778,7 +866,13 @@ def _persistir_enriquecimento_lead(
         lead.servicos = ", ".join(servicos) if servicos else None
 
     if whatsapp is not None:
-        lead.telefone = whatsapp.get("numero_formatado") or whatsapp.get("telefone_original")
+        # Roda DEPOIS do bloco do Google Places de propósito: quando a
+        # validação aconteceu, o número normalizado pela Evolution
+        # (`numero_formatado`, com código do país) é melhor que o formato
+        # cru do Google -- ver app/services/whatsapp.py.
+        lead.telefone = (
+            whatsapp.get("numero_formatado") or whatsapp.get("telefone_original") or lead.telefone
+        )
         lead.whatsapp_ativo = whatsapp.get("whatsapp_ativo")
 
     if email is not None:
@@ -888,6 +982,7 @@ def process_lead_pipeline(
     # parte do gap que antes só dava pra contornar passando o parâmetro
     # na mão.
     site_url_efetivo = site_url
+    google_places_resultado = None
     estabelecimento_busca = {
         "cnpj": cnpj,
         "razao_social": razao_social or (receita_federal or {}).get("razao_social"),
@@ -926,13 +1021,24 @@ def process_lead_pipeline(
         if site_firecrawl is not None:
             enriquecimentos["enrich_site_firecrawl"] = site_firecrawl
 
-    # ETAPA 7 -- WhatsApp: precisa de telefone (ver ressalva acima).
-    if not telefone:
-        motivo = "sem telefone (nenhuma etapa do pipeline hoje devolve telefone; passe explicitamente se já for conhecido)"
+    # ETAPA 7 -- WhatsApp: precisa de telefone.
+    #
+    # ⚠️ Corrigido em 23/08/2026. O telefone agora sai do Google Places
+    # (ETAPA 5, que roda antes -- `telefone_google`), exatamente como
+    # `site_url_efetivo` já fazia com o `site`. Antes disso NENHUMA etapa
+    # fornecia telefone, então esta aqui era sempre pulada e
+    # `Lead.telefone`/`Lead.whatsapp_ativo` ficavam nulos em 100% dos
+    # leads -- confirmado nos 6 da primeira busca real.
+    #
+    # Um `telefone` explícito do chamador continua vencendo o do Google,
+    # mesma precedência de `site_url`.
+    telefone_efetivo = telefone or (google_places_resultado or {}).get("telefone_google")
+    if not telefone_efetivo:
+        motivo = "sem telefone (Google Places não devolveu telefone e nenhum foi passado explicitamente)"
         logger.warning("Pulando validate_whatsapp pro CNPJ %s: %s", cnpj, motivo)
         etapas_puladas["validate_whatsapp"] = motivo
     else:
-        whatsapp = _rodar_etapa("validate_whatsapp", lambda: validate_whatsapp(telefone))
+        whatsapp = _rodar_etapa("validate_whatsapp", lambda: validate_whatsapp(telefone_efetivo))
         if whatsapp is not None:
             enriquecimentos["validate_whatsapp"] = whatsapp
 
@@ -971,10 +1077,19 @@ def process_lead_pipeline(
 
         # ETAPA 10 -- score final, já com o lead_id real (o Lead pode ter
         # acabado de ser criado na etapa anterior)
+        from app.scoring.compute_lead_score import derivar_prioridade
+
         resultado_score = compute_lead_score(lead.id, enriquecimentos)
 
         lead.score_total = resultado_score["score_total"]
         lead.score_detalhes = {"breakdown": resultado_score["breakdown"]}
+        # 🔴 CORTES PROVISÓRIOS, NÃO VALIDADOS COM O DOUGLAS -- ver
+        # app/scoring/compute_lead_score.py::derivar_prioridade.
+        # Fica aqui, e não dentro de `_persistir_enriquecimento_lead`,
+        # porque a prioridade deriva do `score_total`, que só existe
+        # depois de `compute_lead_score` rodar -- é a mesma segunda
+        # passada que já grava score_total/score_detalhes.
+        lead.prioridade = derivar_prioridade(resultado_score["score_total"])
         db_session.commit()
         db_session.refresh(lead)
 
@@ -984,6 +1099,7 @@ def process_lead_pipeline(
             "etapas_executadas": list(enriquecimentos.keys()),
             "etapas_puladas": etapas_puladas,
             "score_total": resultado_score["score_total"],
+            "prioridade": lead.prioridade,
             "breakdown": resultado_score["breakdown"],
         }
     finally:
