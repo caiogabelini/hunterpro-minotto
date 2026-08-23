@@ -1400,6 +1400,28 @@ Em ordem de prioridade combinada com o cliente:
     (o índice inteiro continua sendo montado em RAM antes da primeira
     gravação), mas não foi preciso: já cabe com folga.
 
+32. ~~E-mail falso `eladiosouza@instagram.com` em produção~~ ✅ **feito**
+    (23/08/2026). **Não era regex nosso** — não existe nenhuma extração
+    de e-mail por regex neste projeto. O Google Places devolveu a página
+    do Instagram da clínica como `websiteUri`, isso virou o domínio
+    consultado, e o Hunter **gerou** um endereço plausível a partir do
+    padrão do domínio (`source_type: "generated"`, score 84 — reproduzido
+    na investigação). A falha é nossa na fronteira: fizemos a pergunta
+    errada.
+
+    O **score nunca foi afetado** (o ZeroBounce devolveu `invalid`, então
+    `email_validado` ficou False e não pontuou). O estrago era no
+    dossiê: `Lead.email` é gravado independente da aprovação, então o
+    endereço falso aparecia como contato acionável.
+
+    Corrigido com uma lista de domínios de plataforma (redes sociais,
+    mensageria, agregadores de link tipo Linktree, diretórios de saúde),
+    checada **antes da chamada paga** — evita o bug e economiza crédito
+    do Hunter. Casa subdomínio (`m.facebook.com`) sem falso positivo
+    (`instagram.com.br` continua passando). **Provedor de e-mail
+    gratuito NÃO é bloqueado** de propósito: clínica pequena usando
+    Gmail como contato real é comum aqui.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

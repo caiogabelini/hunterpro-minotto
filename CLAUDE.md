@@ -4104,6 +4104,70 @@ code doesn't change mid-batch. The warning names up to 8 files and ends with
 
 Verified by firing the real Celery signal, not only by calling the function.
 
+### `eladiosouza@instagram.com` — platform domains rejected (2026-08-23)
+
+Production returned a lead with `email = "eladiosouza@instagram.com"`.
+
+**It was not a regex of ours.** A sweep confirmed this project contains
+**zero** email-extraction regexes — nothing here parses an address out of
+text. The chain was:
+
+1. Google Places returned the clinic's **Instagram page** as `websiteUri`
+   (common for a small practice that only has Instagram);
+2. that became `site_url_efetivo` with no filter of any kind;
+3. `_extrair_dominio` returned `"instagram.com"` — working correctly;
+4. Hunter, asked about that domain plus the sócio's name, **generated** the
+   address from the domain's pattern: `source_type: "generated"`, score 84,
+   `accept_all: true`. Reproduced byte-for-byte during the investigation.
+
+So the bug is **ours, at the boundary**: we asked the wrong question. Hunter
+answered correctly for *"what would ELADIO SOUZA's address at instagram.com
+be"*. This is the same `email-finder` generation behavior already documented
+for `eliane@equilibryum.com.br` — useful on a real corporate domain, garbage
+on a platform domain.
+
+**Severity — the score was never corrupted.** ZeroBounce returned `invalid`
+for the fake address, so `email_aprovado` stayed False and the
+`email_validado` criterion scored 0. The damage was in the dossier:
+`Lead.email` is persisted regardless of approval, so the address surfaced to
+the rep as an actionable contact (chip in the Contatos tab, `mailto:` button
+in Mensagens).
+
+**Fix** — `DOMINIOS_SEM_EMAIL_CORPORATIVO` + `dominio_pode_ter_email_corporativo`
+in `email_enrichment.py`, applied at three points:
+- **`enrich_email` (task) — the primary guard, before any API call.** Placed
+  *ahead* of the API-key guard on purpose: no point checking credentials for
+  a lookup that shouldn't happen. Skips with an `etapa_pulada` reason and
+  **saves a Hunter credit** on every such lead.
+- **`enriquecer_email`** — discards an email whose domain is blocked
+  (defense in depth: direct callers, or an address returned on a different
+  domain than the one queried).
+- **`buscar_emails_do_dominio`** — filters `emails_secundarios` too; a
+  platform address there would reach the dossier the same way.
+
+Matching is by **whole domain or `.domain` suffix**, so `m.facebook.com` and
+`business.instagram.com` are caught while `instagram.com.br` and
+`meuinstagram.com.br` (different registrable domains, possibly real
+businesses) pass. Never substring matching.
+
+⚠️ **Free email providers are deliberately NOT blocked** (gmail.com,
+hotmail.com, outlook.com, uol.com.br). Tempting, but wrong: a small
+Brazilian clinic using Gmail as its real contact is common, and blocking it
+would discard legitimate leads. The line is *platform* domains — places
+where nobody has an inbox — not free mail.
+
+⚠️ **Test-fixture trap this created.** Seven pre-existing tests in
+`test_whatsapp_site_e_fallback_email.py` used `@x.com` as a throwaway
+example domain. `x.com` is Twitter's real domain and went into the blocklist
+— the tests broke because the filter *worked*. Placeholders are now
+`@clinicateste.com.br`; when inventing a test domain, don't pick one that
+exists as a real platform.
+
+**Not done, worth knowing**: nothing stops `enrich_site_firecrawl` from
+scraping that same Instagram URL, and nothing stops `Lead.site` from being
+an Instagram link. Both are separate decisions (an Instagram page *is* a
+real digital-presence signal), just not an email domain.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

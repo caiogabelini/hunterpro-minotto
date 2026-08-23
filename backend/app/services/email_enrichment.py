@@ -116,6 +116,93 @@ ZEROBOUNCE_STATUS_APROVADOS = {"valid", "catch-all"}
 # `_dividir_nome`. Comparadas em minúsculo.
 PARTICULAS_DE_SOBRENOME = {"de", "da", "do", "das", "dos", "e", "del", "di", "la", "van", "von"}
 
+# ---------------------------------------------------------------------------
+# Domínios que NUNCA são domínio de e-mail corporativo
+# ---------------------------------------------------------------------------
+# ⚠️ BUG REAL DE PRODUÇÃO (23/08/2026): um lead veio com
+# `email = "eladiosouza@instagram.com"`.
+#
+# Não foi regex nosso -- não existe nenhuma extração de e-mail por regex
+# neste projeto. A cadeia foi:
+#   1. o Google Places devolveu a página do INSTAGRAM da clínica como
+#      `websiteUri` (comum: consultório pequeno que só tem Instagram);
+#   2. isso virou `site_url_efetivo` sem nenhum filtro;
+#   3. `_extrair_dominio` fez o trabalho dele e devolveu "instagram.com";
+#   4. o Hunter foi consultado com esse domínio + o nome do sócio e
+#      **GEROU** o endereço a partir do padrão `{nome}{sobrenome}@dominio`
+#      (`source_type: "generated"`, score 84 -- reproduzido na
+#      investigação). O Hunter não "achou" nada: ele inventou um endereço
+#      plausível, que é o que esse endpoint faz quando conhece o padrão
+#      do domínio.
+#
+# Ou seja: a falha é nossa, na fronteira -- fizemos a pergunta errada. O
+# Hunter respondeu certo pra pergunta "qual seria o e-mail de ELADIO
+# SOUZA em instagram.com".
+#
+# O ZeroBounce salvou o SCORE (devolveu "invalid", então `email_aprovado`
+# ficou False e o critério `email_validado` não pontuou), mas NÃO salvou o
+# dossiê: `Lead.email` é persistido independente da aprovação, então o
+# endereço falso aparece pro vendedor como contato acionável (chip na aba
+# Contatos, botão `mailto:` na aba Mensagens).
+#
+# ⚠️ NÃO inclua provedores de e-mail gratuito aqui (gmail.com,
+# hotmail.com, outlook.com, uol.com.br...). É tentador, mas errado: no
+# Brasil é comum a clínica pequena usar Gmail como contato REAL, e
+# bloquear isso descartaria lead legítimo. A linha aqui é específica --
+# domínios de PLATAFORMA, onde ninguém tem caixa de entrada.
+DOMINIOS_SEM_EMAIL_CORPORATIVO = frozenset({
+    # Redes sociais
+    "instagram.com",
+    "facebook.com",
+    "fb.com",
+    "twitter.com",
+    "x.com",
+    "linkedin.com",
+    "tiktok.com",
+    "youtube.com",
+    "pinterest.com",
+    "threads.net",
+    # Mensageria
+    "whatsapp.com",
+    "wa.me",
+    "t.me",
+    "telegram.me",
+    # Agregadores de link -- o Google Places devolve MUITO isso como
+    # `websiteUri` de clínica pequena, pelo mesmo motivo do Instagram.
+    "linktr.ee",
+    "linktree.com",
+    "bio.link",
+    "beacons.ai",
+    # Marketplaces/diretórios de saúde: são perfis, não sites da clínica.
+    "doctoralia.com.br",
+    "boaconsulta.com",
+})
+
+
+def dominio_pode_ter_email_corporativo(dominio: str | None) -> bool:
+    """
+    False para domínios de plataforma (rede social, mensageria,
+    agregador de link) -- ver `DOMINIOS_SEM_EMAIL_CORPORATIVO`.
+
+    Casa também SUBDOMÍNIO (`pt-br.facebook.com`, `m.instagram.com`):
+    compara o domínio inteiro e qualquer sufixo `.dominio-bloqueado`.
+    Sem isso, `business.instagram.com` passaria batido.
+
+    Domínio vazio/None é False -- não dá pra buscar e-mail sem domínio, e
+    quem chama já trata isso como "pular a etapa".
+    """
+    if not dominio:
+        return False
+
+    normalizado = dominio.strip().lower().rstrip(".")
+    if not normalizado:
+        return False
+
+    for bloqueado in DOMINIOS_SEM_EMAIL_CORPORATIVO:
+        if normalizado == bloqueado or normalizado.endswith(f".{bloqueado}"):
+            return False
+    return True
+
 
 @dataclass
 class HunterEmailResult:
@@ -381,6 +468,9 @@ def buscar_emails_do_dominio(
             }
             for e in ordenados
             if e["value"] != principal
+            # Mesmo filtro do principal: um secundário de plataforma
+            # também apareceria no dossiê como contato acionável.
+            and dominio_pode_ter_email_corporativo(e["value"].split("@")[-1])
         ]
 
         return HunterEmailResult(
@@ -469,6 +559,18 @@ def enriquecer_email(
         )
 
     dominio_email = hunter.email.split("@")[-1]
+
+    # Defesa em profundidade. A guarda principal está em `enrich_email`
+    # (app/workers/celery_app.py), que nem chega a consultar o Hunter com
+    # um domínio de plataforma -- economiza crédito além de evitar o bug.
+    # Esta aqui cobre dois casos que aquela não cobre: quem chamar este
+    # serviço direto (script pontual), e um endereço vindo num domínio
+    # diferente do consultado.
+    if not dominio_pode_ter_email_corporativo(dominio_email):
+        return EmailEnrichmentResult(
+            email=None, hunter_score=None, mx_valido=None, zerobounce_status=None, aprovado=False,
+            emails_secundarios=hunter.outros_emails,
+        )
     mx_valido = validar_mx(dominio_email, resolver=resolver)
     if not mx_valido:
         return EmailEnrichmentResult(

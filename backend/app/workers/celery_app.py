@@ -727,7 +727,34 @@ def enrich_email(dominio: str, decisor_nome: str | None) -> dict:
     validado em produção no projeto SR Contábil). Só considera o e-mail
     "aprovado" se o ZeroBounce devolver status "valid" ou "catch-all".
     """
-    from app.services.email_enrichment import enriquecer_email
+    from app.services.email_enrichment import (
+        dominio_pode_ter_email_corporativo,
+        enriquecer_email,
+    )
+
+    # ⚠️ Guarda de DOMÍNIO -- vem ANTES da guarda de chave de propósito:
+    # nem faz sentido checar credencial pra uma consulta que não deveria
+    # acontecer. Evita o bug real de 23/08/2026
+    # (`eladiosouza@instagram.com`) e ainda economiza crédito do Hunter.
+    #
+    # O Google Places devolve a página do Instagram (ou um Linktree) como
+    # `websiteUri` de clínica pequena com frequência; o domínio extraído
+    # dali é legítimo como domínio, mas ninguém tem caixa de entrada nele.
+    # Perguntar ao Hunter "qual o e-mail do FULANO em instagram.com" faz o
+    # endpoint GERAR um endereço plausível e falso. Ver
+    # DOMINIOS_SEM_EMAIL_CORPORATIVO em app/services/email_enrichment.py.
+    if not dominio_pode_ter_email_corporativo(dominio):
+        motivo = (
+            f"domínio '{dominio}' é de plataforma (rede social/agregador de link), "
+            "não tem e-mail corporativo -- consultar o Hunter aqui geraria um endereço falso"
+        )
+        logger.warning("Pulando enrich_email pro domínio %s: %s", dominio, motivo)
+        return {
+            "dominio": dominio,
+            "email": None,
+            "email_aprovado": False,
+            "etapa_pulada": motivo,
+        }
 
     # ⚠️ Guarda de configuração -- mesmo padrão do FIRECRAWL_API_KEY em
     # process_lead_pipeline. Sem isso a chamada sai com a chave vazia e o

@@ -31,6 +31,14 @@ from app.workers.celery_app import enrich_email as enrich_email_real
 
 DOMINIO = "clinicateste.com.br"
 
+# ⚠️ Os e-mails de exemplo aqui usam @clinicateste.com.br, não @x.com.
+# Parece detalhe, mas quebrou de verdade: `x.com` é o domínio do Twitter
+# e entrou em DOMINIOS_SEM_EMAIL_CORPORATIVO na correção de 23/08/2026
+# (bug do `eladiosouza@instagram.com`). Com o placeholder antigo, sete
+# testes deste arquivo passaram a falhar -- o filtro estava funcionando,
+# o domínio-exemplo é que era mal escolhido. Ao inventar domínio de
+# teste, use um que não exista de verdade como plataforma.
+
 
 @pytest.fixture(autouse=True)
 def _protege_contra_chamadas_reais(monkeypatch):
@@ -211,7 +219,7 @@ def test_fallback_nao_e_chamado_com_a_flag_desligada(monkeypatch):
     """Default de produção hoje -- o plano Free não comporta o dobro."""
     monkeypatch.setattr(email_enrichment.settings, "HUNTER_DOMAIN_SEARCH_FALLBACK", False)
     chamadas = []
-    client = _client_hunter(monkeypatch, [{"value": "contato@x.com", "type": "generic", "confidence": 90}], chamadas)
+    client = _client_hunter(monkeypatch, [{"value": "contato@clinicateste.com.br", "type": "generic", "confidence": 90}], chamadas)
 
     resultado = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
 
@@ -224,13 +232,13 @@ def test_fallback_e_chamado_com_a_flag_ligada_e_finder_vazio(monkeypatch):
     monkeypatch.setattr(email_enrichment.settings, "HUNTER_DOMAIN_SEARCH_FALLBACK", True)
     monkeypatch.setattr(email_enrichment.settings, "ZEROBOUNCE_API_KEY", "chave-ficticia")
     chamadas = []
-    client = _client_hunter(monkeypatch, [{"value": "contato@x.com", "type": "generic", "confidence": 90}], chamadas)
+    client = _client_hunter(monkeypatch, [{"value": "contato@clinicateste.com.br", "type": "generic", "confidence": 90}], chamadas)
     monkeypatch.setattr(email_enrichment, "validar_zerobounce",
                         lambda email, client=None: email_enrichment.ZeroBounceResult(status="valid", aprovado=True))
 
     resultado = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
 
-    assert resultado.email == "contato@x.com"
+    assert resultado.email == "contato@clinicateste.com.br"
     assert any("domain-search" in c for c in chamadas)
 
 
@@ -242,7 +250,7 @@ def test_fallback_nao_e_chamado_quando_o_finder_ja_achou(monkeypatch):
 
     def handler(request: httpx.Request) -> httpx.Response:
         chamadas.append(request.url.path)
-        return httpx.Response(200, json={"data": {"email": "maria@x.com", "score": 95}})
+        return httpx.Response(200, json={"data": {"email": "maria@clinicateste.com.br", "score": 95}})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(email_enrichment, "validar_zerobounce",
@@ -250,7 +258,7 @@ def test_fallback_nao_e_chamado_quando_o_finder_ja_achou(monkeypatch):
 
     resultado = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
 
-    assert resultado.email == "maria@x.com"
+    assert resultado.email == "maria@clinicateste.com.br"
     assert not any("domain-search" in c for c in chamadas)
 
 
@@ -258,20 +266,20 @@ def test_fallback_nao_e_chamado_quando_o_finder_ja_achou(monkeypatch):
 
 @pytest.mark.parametrize("emails,esperado", [
     # personal ganha de generic mesmo com confidence MENOR
-    ([{"value": "generico@x.com", "type": "generic", "confidence": 99},
-      {"value": "pessoa@x.com", "type": "personal", "confidence": 40}], "pessoa@x.com"),
+    ([{"value": "generico@clinicateste.com.br", "type": "generic", "confidence": 99},
+      {"value": "pessoa@clinicateste.com.br", "type": "personal", "confidence": 40}], "pessoa@clinicateste.com.br"),
     # dentro de personal, maior confidence
-    ([{"value": "baixa@x.com", "type": "personal", "confidence": 50},
-      {"value": "alta@x.com", "type": "personal", "confidence": 95}], "alta@x.com"),
+    ([{"value": "baixa@clinicateste.com.br", "type": "personal", "confidence": 50},
+      {"value": "alta@clinicateste.com.br", "type": "personal", "confidence": 95}], "alta@clinicateste.com.br"),
     # só genéricos -> maior confidence entre eles (genérico ainda serve)
-    ([{"value": "rh@x.com", "type": "generic", "confidence": 60},
-      {"value": "contato@x.com", "type": "generic", "confidence": 88}], "contato@x.com"),
+    ([{"value": "rh@clinicateste.com.br", "type": "generic", "confidence": 60},
+      {"value": "contato@clinicateste.com.br", "type": "generic", "confidence": 88}], "contato@clinicateste.com.br"),
     # tipo desconhecido vai pro fim em vez de quebrar
-    ([{"value": "estranho@x.com", "type": "novo_tipo", "confidence": 99},
-      {"value": "contato@x.com", "type": "generic", "confidence": 10}], "contato@x.com"),
+    ([{"value": "estranho@clinicateste.com.br", "type": "novo_tipo", "confidence": 99},
+      {"value": "contato@clinicateste.com.br", "type": "generic", "confidence": 10}], "contato@clinicateste.com.br"),
     # confidence ausente não quebra a ordenação
-    ([{"value": "sem_conf@x.com", "type": "personal"},
-      {"value": "com_conf@x.com", "type": "personal", "confidence": 70}], "com_conf@x.com"),
+    ([{"value": "sem_conf@clinicateste.com.br", "type": "personal"},
+      {"value": "com_conf@clinicateste.com.br", "type": "personal", "confidence": 70}], "com_conf@clinicateste.com.br"),
 ])
 def test_ordenacao_do_domain_search(monkeypatch, emails, esperado):
     monkeypatch.setattr(email_enrichment.settings, "HUNTER_API_KEY", "chave-ficticia")
@@ -293,8 +301,8 @@ def test_domain_search_ignora_entrada_sem_value(monkeypatch):
     client = httpx.Client(transport=httpx.MockTransport(
         lambda r: httpx.Response(200, json={"data": {"emails": [
             {"type": "personal", "confidence": 99},
-            {"value": "ok@x.com", "type": "generic", "confidence": 10}]}})))
-    assert buscar_emails_do_dominio(DOMINIO, client=client).email == "ok@x.com"
+            {"value": "ok@clinicateste.com.br", "type": "generic", "confidence": 10}]}})))
+    assert buscar_emails_do_dominio(DOMINIO, client=client).email == "ok@clinicateste.com.br"
 
 
 def test_domain_search_nao_manda_chave_na_query_string(monkeypatch):
@@ -322,9 +330,9 @@ def test_domain_search_nao_manda_chave_na_query_string(monkeypatch):
 # descartado.
 
 EMAILS_MULTIPLOS = [
-    {"value": "contato@x.com", "type": "generic", "confidence": 80},
-    {"value": "maria@x.com", "type": "personal", "confidence": 95},
-    {"value": "rh@x.com", "type": "generic", "confidence": 60},
+    {"value": "contato@clinicateste.com.br", "type": "generic", "confidence": 80},
+    {"value": "maria@clinicateste.com.br", "type": "personal", "confidence": 95},
+    {"value": "rh@clinicateste.com.br", "type": "generic", "confidence": 60},
 ]
 
 
@@ -347,10 +355,10 @@ def test_secundarios_trazem_os_demais_emails_com_tipo_e_confidence(monkeypatch):
     client = _fallback_ligado(monkeypatch, EMAILS_MULTIPLOS)
     r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
 
-    assert r.email == "maria@x.com"  # personal, maior confidence
+    assert r.email == "maria@clinicateste.com.br"  # personal, maior confidence
     assert r.emails_secundarios == [
-        {"email": "contato@x.com", "tipo": "generic", "confidence": 80},
-        {"email": "rh@x.com", "tipo": "generic", "confidence": 60},
+        {"email": "contato@clinicateste.com.br", "tipo": "generic", "confidence": 80},
+        {"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60},
     ]
 
 
@@ -364,19 +372,19 @@ def test_email_duplicado_na_resposta_nao_vira_secundario(monkeypatch):
     """Exclusão é por VALOR, não por posição -- payload com o mesmo
     endereço repetido não pode ecoar o principal como "secundário"."""
     client = _fallback_ligado(monkeypatch, [
-        {"value": "maria@x.com", "type": "personal", "confidence": 95},
-        {"value": "maria@x.com", "type": "personal", "confidence": 90},
-        {"value": "rh@x.com", "type": "generic", "confidence": 60},
+        {"value": "maria@clinicateste.com.br", "type": "personal", "confidence": 95},
+        {"value": "maria@clinicateste.com.br", "type": "personal", "confidence": 90},
+        {"value": "rh@clinicateste.com.br", "type": "generic", "confidence": 60},
     ])
     r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
-    assert r.email == "maria@x.com"
-    assert [e["email"] for e in r.emails_secundarios] == ["rh@x.com"]
+    assert r.email == "maria@clinicateste.com.br"
+    assert [e["email"] for e in r.emails_secundarios] == ["rh@clinicateste.com.br"]
 
 
 def test_um_unico_email_deixa_secundarios_vazio(monkeypatch):
-    client = _fallback_ligado(monkeypatch, [{"value": "so@x.com", "type": "generic", "confidence": 50}])
+    client = _fallback_ligado(monkeypatch, [{"value": "so@clinicateste.com.br", "type": "generic", "confidence": 50}])
     r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
-    assert r.email == "so@x.com"
+    assert r.email == "so@clinicateste.com.br"
     assert r.emails_secundarios == []
 
 
@@ -395,10 +403,10 @@ def test_finder_bem_sucedido_deixa_secundarios_None_nao_lista_vazia(monkeypatch)
     monkeypatch.setattr(email_enrichment, "validar_zerobounce",
                         lambda email, client=None: email_enrichment.ZeroBounceResult(status="valid", aprovado=True))
     client = httpx.Client(transport=httpx.MockTransport(
-        lambda r: httpx.Response(200, json={"data": {"email": "achado@x.com", "score": 90}})))
+        lambda r: httpx.Response(200, json={"data": {"email": "achado@clinicateste.com.br", "score": 90}})))
 
     r = enriquecer_email(DOMINIO, "MARIA SILVA", client=client, resolver=_resolver_com_mx)
-    assert r.email == "achado@x.com"
+    assert r.email == "achado@clinicateste.com.br"
     assert r.emails_secundarios is None
 
 
@@ -417,11 +425,11 @@ def test_secundarios_sao_persistidos_no_lead(db_session):
         db=db_session, cnpj="11222333000181", razao_social="X",
         receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
         google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
-        email={"email": "maria@x.com", "email_aprovado": True,
-               "emails_secundarios": [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]},
+        email={"email": "maria@clinicateste.com.br", "email_aprovado": True,
+               "emails_secundarios": [{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]},
     )
-    assert lead.email == "maria@x.com"
-    assert lead.emails_secundarios == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]
+    assert lead.email == "maria@clinicateste.com.br"
+    assert lead.emails_secundarios == [{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]
 
 
 def test_lista_vazia_persiste_como_none(db_session):
@@ -429,7 +437,7 @@ def test_lista_vazia_persiste_como_none(db_session):
         db=db_session, cnpj="11222333000181", razao_social="X",
         receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
         google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
-        email={"email": "so@x.com", "email_aprovado": True, "emails_secundarios": []},
+        email={"email": "so@clinicateste.com.br", "email_aprovado": True, "emails_secundarios": []},
     )
     assert lead.emails_secundarios is None
 
@@ -441,8 +449,8 @@ def test_rodada_sem_domain_search_nao_apaga_secundarios_anteriores(db_session):
         db=db_session, cnpj="11222333000181", razao_social="X",
         receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
         google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
-        email={"email": "maria@x.com", "email_aprovado": True,
-               "emails_secundarios": [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]},
+        email={"email": "maria@clinicateste.com.br", "email_aprovado": True,
+               "emails_secundarios": [{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]},
     )
     db_session.commit()
 
@@ -450,9 +458,9 @@ def test_rodada_sem_domain_search_nao_apaga_secundarios_anteriores(db_session):
         db=db_session, cnpj="11222333000181", razao_social="X",
         receita_federal=None, pgfn=None, zona_franca=None, cnes=None,
         google_places=None, site_firecrawl=None, site_url=None, whatsapp=None,
-        email={"email": "maria@x.com", "email_aprovado": True, "emails_secundarios": None},
+        email={"email": "maria@clinicateste.com.br", "email_aprovado": True, "emails_secundarios": None},
     )
-    assert lead.emails_secundarios == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]
+    assert lead.emails_secundarios == [{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]
 
 
 def test_task_enrich_email_expoe_secundarios(monkeypatch):
@@ -461,9 +469,9 @@ def test_task_enrich_email_expoe_secundarios(monkeypatch):
     monkeypatch.setattr(
         "app.services.email_enrichment.enriquecer_email",
         lambda d, n: email_enrichment.EmailEnrichmentResult(
-            email="maria@x.com", hunter_score=95, mx_valido=True,
+            email="maria@clinicateste.com.br", hunter_score=95, mx_valido=True,
             zerobounce_status="valid", aprovado=True,
-            emails_secundarios=[{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]),
+            emails_secundarios=[{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]),
     )
-    resultado = enrich_email_real("x.com", "MARIA SILVA")
-    assert resultado["emails_secundarios"] == [{"email": "rh@x.com", "tipo": "generic", "confidence": 60}]
+    resultado = enrich_email_real("clinicateste.com.br", "MARIA SILVA")
+    assert resultado["emails_secundarios"] == [{"email": "rh@clinicateste.com.br", "tipo": "generic", "confidence": 60}]
