@@ -131,7 +131,10 @@ def test_sem_telefone_em_lugar_nenhum_pula_com_motivo_claro(monkeypatch, db_sess
     monkeypatch.setattr(celery_app, "search_google_places", lambda ests: [{**ests[0], "telefone_google": None}])
 
     resultado = celery_app.process_lead_pipeline(CNPJ, razao_social="X", db=db_session)
-    assert "Google Places não devolveu telefone" in resultado["etapas_puladas"]["validate_whatsapp"]
+    # Mensagem ampliada em 23/08/2026 quando o site raspado virou uma
+    # terceira fonte de telefone (ver test_whatsapp_site_e_fallback_email.py).
+    motivo = resultado["etapas_puladas"]["validate_whatsapp"]
+    assert "site raspado" in motivo and "Google Places" in motivo
 
 
 # ---------------------------------------------------------------------------

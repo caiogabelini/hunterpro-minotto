@@ -14,6 +14,15 @@ Contábil — implementado aqui seguindo exatamente esse formato:
     (email vem null em "data" quando o Hunter não encontra nada — não é
     erro HTTP, é resposta 200 válida)
 
+  Hunter.io Domain Search (FALLBACK, desligado por padrão):
+    GET https://api.hunter.io/v2/domain-search
+    Parâmetros: domain, limit
+    Credencial: mesmo header Bearer
+    Resposta: {"data": {"emails": [{"value", "type", "confidence", ...}]}}
+    `type` é "personal" (pessoa) ou "generic" (contato@, rh@...).
+    ⚠️ Só é chamado se `settings.HUNTER_DOMAIN_SEARCH_FALLBACK` for True
+    — ver a conta de consumo em app/core/config.py.
+
   ZeroBounce Validate:
     GET https://api.zerobounce.net/v2/validate
     Parâmetros: email, api_key (na query — ver ressalva de segurança)
@@ -73,7 +82,20 @@ from app.core.config import settings
 from app.core.segredos import redigir_segredos
 
 HUNTER_EMAIL_FINDER_URL = "https://api.hunter.io/v2/email-finder"
+HUNTER_DOMAIN_SEARCH_URL = "https://api.hunter.io/v2/domain-search"
 ZEROBOUNCE_VALIDATE_URL = "https://api.zerobounce.net/v2/validate"
+
+# Quantos e-mails pedir ao domain-search. 10 é folgado pro que interessa
+# (o melhor candidato) sem inflar a resposta -- o `limit` não muda o custo
+# em créditos, que é por REQUISIÇÃO, não por e-mail devolvido.
+HUNTER_DOMAIN_SEARCH_LIMIT = 10
+
+# "personal" (joao@clinica.com) antes de "generic" (contato@clinica.com).
+# Um e-mail pessoal chega a alguém específico; o genérico cai numa caixa
+# compartilhada. Mas o genérico ainda VALE -- pra prospecção,
+# `contato@clinica.com.br` é um contato utilizável, e nos domínios reais
+# de 23/08/2026 às vezes era o único disponível.
+_ORDEM_TIPO_EMAIL = {"personal": 0, "generic": 1}
 DEFAULT_TIMEOUT = 15.0
 
 # Status que o ZeroBounce pode devolver: valid | invalid | catch-all |
@@ -256,6 +278,76 @@ def buscar_email_hunter(
             client.close()
 
 
+def buscar_emails_do_dominio(
+    dominio: str,
+    client: httpx.Client | None = None,
+) -> HunterEmailResult:
+    """
+    FALLBACK do `email-finder`: pergunta ao Hunter quais e-mails ele
+    conhece do DOMÍNIO, sem amarrar a uma pessoa específica.
+
+    ⚠️ Quem decide se isto roda é `enriquecer_email`, conferindo
+    `settings.HUNTER_DOMAIN_SEARCH_FALLBACK`. Esta função não checa a
+    flag -- ela é a implementação, não a política. Chamar direto é
+    legítimo (ex.: um script pontual), mas dentro do pipeline é sempre a
+    flag que manda.
+
+    POR QUE ISTO EXISTE (23/08/2026): o `email-finder` só responde "qual
+    é o e-mail DESTA PESSOA" -- no pipeline, o sócio administrador vindo
+    do QSA da Receita. Na primeira busca real ele falhou em 4 de 5
+    domínios, mas o `domain-search` mostrou que 3 desses 5 TINHAM e-mail
+    catalogado (`contato@`, `rh@`, `fono@`...). Não era falha de
+    parsing: era a pergunta errada. Pra prospecção, o e-mail institucional
+    da clínica serve.
+
+    ORDENAÇÃO: "personal" antes de "generic", e dentro de cada tipo o
+    maior `confidence` primeiro. Um tipo desconhecido (se o Hunter criar
+    um terceiro) vai pro fim da fila em vez de quebrar -- `_ORDEM_TIPO_EMAIL`
+    é consultado com `.get(tipo, 99)`.
+
+    Devolve o mesmo `HunterEmailResult` do `email-finder`, com
+    `score = confidence`, pra que quem chama não precise distinguir a
+    origem do e-mail.
+    """
+    client, owns_client = _get_client(client)
+
+    headers = (
+        {"Authorization": f"Bearer {settings.HUNTER_API_KEY}"}
+        if settings.HUNTER_API_KEY
+        else {}
+    )
+
+    try:
+        resp = _executar_http(
+            "Hunter.io domain-search",
+            lambda: client.get(
+                HUNTER_DOMAIN_SEARCH_URL,
+                params={"domain": dominio, "limit": HUNTER_DOMAIN_SEARCH_LIMIT},
+                headers=headers,
+            ),
+        )
+        _executar_http("Hunter.io domain-search", resp.raise_for_status)
+
+        emails = ((resp.json().get("data") or {}).get("emails")) or []
+        candidatos = [e for e in emails if e.get("value")]
+        if not candidatos:
+            return HunterEmailResult(email=None, score=None, encontrado=False)
+
+        melhor = min(
+            candidatos,
+            key=lambda e: (
+                _ORDEM_TIPO_EMAIL.get((e.get("type") or "").lower(), 99),
+                -(e.get("confidence") or 0),
+            ),
+        )
+        return HunterEmailResult(
+            email=melhor["value"], score=melhor.get("confidence"), encontrado=True
+        )
+    finally:
+        if owns_client:
+            client.close()
+
+
 def validar_mx(dominio: str, resolver=dns.resolver.resolve) -> bool:
     """
     Confirma que o domínio tem registro MX válido — passo barato antes
@@ -309,8 +401,21 @@ def enriquecer_email(
     Encadeia Hunter.io -> MX -> ZeroBounce. Para cedo (sem bater no
     ZeroBounce, que é uma consulta paga) se o Hunter.io não achar e-mail
     ou se o MX do domínio não for válido.
+
+    Se `settings.HUNTER_DOMAIN_SEARCH_FALLBACK` estiver ligada e o
+    `email-finder` não achar nada, tenta o `domain-search` antes de
+    desistir (ver `buscar_emails_do_dominio`). Desligada por padrão --
+    dobra o consumo de créditos do Hunter.
     """
     hunter = buscar_email_hunter(dominio, nome_decisor, client=client)
+
+    # FALLBACK -- só quando o finder não achou E a flag está ligada.
+    # A ordem das duas condições importa pro custo: `not encontrado`
+    # primeiro garante que a chamada extra nunca acontece num domínio que
+    # já resolveu. Ver a conta de consumo em app/core/config.py.
+    if not hunter.encontrado and settings.HUNTER_DOMAIN_SEARCH_FALLBACK:
+        hunter = buscar_emails_do_dominio(dominio, client=client)
+
     if not hunter.encontrado:
         return EmailEnrichmentResult(
             email=None, hunter_score=None, mx_valido=None, zerobounce_status=None, aprovado=False

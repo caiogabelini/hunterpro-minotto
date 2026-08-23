@@ -30,6 +30,23 @@ class Settings(BaseSettings):
     # --- APIs de enriquecimento (mesmo stack validado no projeto SR Contábil) ---
     GOOGLE_API_KEY: str = ""
     HUNTER_API_KEY: str = ""
+    # 🔴 DESLIGADO POR PADRÃO -- LIGAR SÓ DEPOIS DE FAZER UPGRADE DO PLANO.
+    #
+    # Quando `True`, `enriquecer_email` cai pro endpoint `domain-search`
+    # do Hunter se o `email-finder` não achar o e-mail do decisor (ver
+    # app/services/email_enrichment.py::buscar_emails_do_dominio).
+    #
+    # ⚠️ CONTA DE CONSUMO -- é por isso que o default é False:
+    #   plano Hunter atual = Free, 50 buscas/mês
+    #   cota do produto    = 50 leads/mês (settings.PLANO_LEADS_MES)
+    #   sem fallback       = até 1 chamada por lead  -> até  50/mês (no limite exato)
+    #   com fallback       = até 2 chamadas por lead -> até 100/mês (2x o limite)
+    #
+    # Ou seja, mesmo DESLIGADO o plano Free já está no limite exato. Na
+    # amostra real de 23/08/2026 o `email-finder` falhou em 4 de 5
+    # domínios, então o consumo com fallback ficaria perto do teto de 2x,
+    # não perto de 1x.
+    HUNTER_DOMAIN_SEARCH_FALLBACK: bool = False
     ZEROBOUNCE_API_KEY: str = ""
     SERP_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""

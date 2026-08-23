@@ -1288,6 +1288,37 @@ Em ordem de prioridade combinada com o cliente:
       documenta alternativa e não dá pra sondar daqui (Cloudflare 403). A
       redação de `app/core/segredos.py` é a única proteção nesse caminho.
 
+27. ~~WhatsApp do site + fallback de e-mail por domínio~~ ✅ **feito**
+    (23/08/2026) — ver o bullet dedicado no CLAUDE.md. **Nenhum dos dois
+    era bug de parsing**: os schemas da Evolution e do Hunter batiam com
+    a resposta real. Eram problemas de FONTE e de PERGUNTA.
+    - **WhatsApp**: os 6 telefones vinham do Google Places, que devolve a
+      central telefônica — todos FIXOS (8 dígitos locais começando com 2
+      ou 3; celular tem 9 começando com 9). `exists: false` estava
+      certo. Agora `extrair_whatsapp` pega o número que a clínica
+      divulga no próprio site (`wa.me/…`, `api.whatsapp.com/send?phone=…`)
+      do markdown que o Firecrawl **já raspa** — sem nenhuma chamada
+      adicional. Prioridade: parâmetro explícito > site > Google Places.
+    - **E-mail**: o `email-finder` só responde "qual o e-mail DESTA
+      PESSOA" (o sócio do QSA). Falhou em 4 de 5 domínios reais, mas o
+      `domain-search` mostrou que 3 desses 5 tinham e-mail catalogado.
+
+    🔴 **AÇÃO NECESSÁRIA ANTES DE LIGAR O FALLBACK — upgrade do plano
+    Hunter.io.** `HUNTER_DOMAIN_SEARCH_FALLBACK` está `False` por padrão
+    e deve continuar assim até o plano subir:
+
+    | | chamadas/lead | por mês (50 leads) |
+    |---|---|---|
+    | plano atual (Free) | — | **50 buscas/mês** |
+    | fallback DESLIGADO | até 1 | até 50 — *no limite exato* |
+    | fallback LIGADO | até 2 | **até 100 — o dobro do limite** |
+
+    Mesmo desligado o plano Free já está no limite exato. E a amostra
+    real puxa pro pior caso: o `email-finder` falhou em 4 de 5 domínios,
+    então o consumo com fallback ficaria perto de 2x, não de 1x. O
+    código está pronto e testado — é só ligar a flag no `.env` depois do
+    upgrade.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

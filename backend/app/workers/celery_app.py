@@ -464,8 +464,9 @@ def enrich_site_firecrawl(site_url: str) -> dict:
     Varre o site do lead via Firecrawl (ver app/services/site_scraping.py)
     e infere, via IA (Claude Haiku, ver app/services/ai_enrichment.py),
     menção a RQE e serviços/especialidades oferecidos. Também extrai o
-    link do Instagram por regex direto do markdown — não precisa de IA
-    pra isso.
+    link do Instagram e o número de WhatsApp divulgado no site
+    (`whatsapp_site`) por regex direto do markdown — não precisa de IA
+    pra isso, e não custa nenhuma chamada além do scrape que já roda.
 
     `site_content_resumo` é só um recorte do markdown (primeiros
     `SITE_CONTENT_RESUMO_MAX_CARACTERES` caracteres) pra referência —
@@ -473,7 +474,7 @@ def enrich_site_firecrawl(site_url: str) -> dict:
     montar o prompt da IA.
     """
     from app.services.ai_enrichment import inferir_dados_site
-    from app.services.site_scraping import extrair_instagram, scrape_site
+    from app.services.site_scraping import extrair_instagram, extrair_whatsapp, scrape_site
 
     resultado_scrape = scrape_site(site_url)
     if not resultado_scrape.sucesso:
@@ -482,12 +483,17 @@ def enrich_site_firecrawl(site_url: str) -> dict:
             "scrape_sucesso": False,
             "site_content_resumo": "",
             "instagram": None,
+            "whatsapp_site": None,
             "rqe_mencionado": False,
             "rqe_numero": None,
             "servicos": [],
         }
 
     instagram = extrair_instagram(resultado_scrape.markdown)
+    # Mesmo markdown, nenhuma chamada extra -- ver a ressalva em
+    # app/services/site_scraping.py sobre por que o telefone do Google
+    # Places quase nunca tem WhatsApp (é a central, fixa).
+    whatsapp_site = extrair_whatsapp(resultado_scrape.markdown)
     inferencia = inferir_dados_site(resultado_scrape.markdown)
 
     return {
@@ -495,6 +501,7 @@ def enrich_site_firecrawl(site_url: str) -> dict:
         "scrape_sucesso": True,
         "site_content_resumo": resultado_scrape.markdown[:SITE_CONTENT_RESUMO_MAX_CARACTERES],
         "instagram": instagram,
+        "whatsapp_site": whatsapp_site,
         "rqe_mencionado": inferencia.rqe_mencionado,
         "rqe_numero": inferencia.rqe_numero,
         "servicos": inferencia.servicos,
@@ -862,6 +869,13 @@ def _persistir_enriquecimento_lead(
 
     if site_firecrawl is not None:
         lead.instagram = site_firecrawl.get("instagram")
+        # Roda DEPOIS do bloco do Google Places de propósito: o número
+        # divulgado no site vence o da central telefônica, mesma
+        # prioridade aplicada em `process_lead_pipeline`. Importa
+        # sobretudo quando `validate_whatsapp` é pulada (Evolution não
+        # configurada) -- sem isso o Lead ficaria com o fixo mesmo
+        # havendo um WhatsApp no site.
+        lead.telefone = site_firecrawl.get("whatsapp_site") or lead.telefone
         servicos = site_firecrawl.get("servicos") or []
         lead.servicos = ", ".join(servicos) if servicos else None
 
@@ -1032,9 +1046,43 @@ def process_lead_pipeline(
     #
     # Um `telefone` explícito do chamador continua vencendo o do Google,
     # mesma precedência de `site_url`.
-    telefone_efetivo = telefone or (google_places_resultado or {}).get("telefone_google")
+    # ⚠️ ORDEM DE PRIORIDADE (mudou em 23/08/2026, ver abaixo):
+    #   1. `telefone` explícito do chamador -- quem sabe, sabe.
+    #   2. `whatsapp_site` -- o número que a clínica divulga NO PRÓPRIO
+    #      SITE pra ser chamada no WhatsApp. É o único dos três que já
+    #      vem com evidência de ser um canal de WhatsApp.
+    #   3. `telefone_google` -- último recurso.
+    #
+    # O Google Places vem por último de propósito, apesar de ser a fonte
+    # com maior cobertura: ele devolve o telefone principal publicado, que
+    # em clínica/hospital é a CENTRAL. Na primeira busca real os 6 leads
+    # vieram com número fixo (8 dígitos locais começando com 2 ou 3) e a
+    # Evolution respondeu `exists: false` nos 6 -- corretamente. Ver
+    # app/services/site_scraping.py::extrair_whatsapp.
+    #
+    # `telefone_origem` acompanha a escolha só pra rastreabilidade (log e
+    # retorno da task); não é persistido -- `Lead` guarda o número, e de
+    # onde ele veio é diagnóstico de execução, não atributo do lead.
+    whatsapp_site = (site_firecrawl or {}).get("whatsapp_site")
+    telefone_google = (google_places_resultado or {}).get("telefone_google")
+    telefone_efetivo, telefone_origem = next(
+        (
+            (numero, origem)
+            for numero, origem in (
+                (telefone, "parametro_explicito"),
+                (whatsapp_site, "site_firecrawl"),
+                (telefone_google, "google_places"),
+            )
+            if numero
+        ),
+        (None, None),
+    )
+    if telefone_efetivo:
+        logger.info(
+            "CNPJ %s: telefone pra validate_whatsapp veio de %s.", cnpj, telefone_origem
+        )
     if not telefone_efetivo:
-        motivo = "sem telefone (Google Places não devolveu telefone e nenhum foi passado explicitamente)"
+        motivo = "sem telefone (nem no site raspado, nem no Google Places, nem passado explicitamente)"
         logger.warning("Pulando validate_whatsapp pro CNPJ %s: %s", cnpj, motivo)
         etapas_puladas["validate_whatsapp"] = motivo
     else:
@@ -1100,6 +1148,7 @@ def process_lead_pipeline(
             "etapas_puladas": etapas_puladas,
             "score_total": resultado_score["score_total"],
             "prioridade": lead.prioridade,
+            "telefone_origem": telefone_origem,
             "breakdown": resultado_score["breakdown"],
         }
     finally:

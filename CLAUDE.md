@@ -3776,6 +3776,86 @@ unscored lead show up in filters as if it had been evaluated.
 `INSTANCE`) are empty. The "present" reading was a `getattr` fallback
 placeholder being printed, not a real value.
 
+### WhatsApp from the site + Hunter domain-search fallback (2026-08-23)
+
+Second round of fixes from the first real search. **Neither problem was a
+parsing bug** — the investigation confirmed both schemas match the real
+responses. Both were wrong-source / wrong-question problems.
+
+**1. WhatsApp — the phone source, not the code.** Raw Evolution response
+matches `check_whatsapp` exactly (`[{"jid": ..., "exists": false, "number":
+...}]`), and a control query against the instance's own number returns
+`exists: true`, proving API + instance + parsing all work. The real cause:
+all 6 phones came from Google Places, which returns the establishment's
+**main published line** — for a clinic or hospital that's the switchboard.
+All six were landlines (8-digit local numbers starting with 2 or 3);
+Brazilian mobiles have 9 digits starting with 9. `exists: false` was the
+correct answer.
+
+Fix: `extrair_whatsapp` (`app/services/site_scraping.py`) pulls the number
+the clinic actually advertises for WhatsApp out of the **markdown Firecrawl
+already scrapes** — `wa.me/…`, `api.whatsapp.com/send?phone=…`,
+`web.whatsapp.com/send?phone=…`. **Zero additional API calls**, same
+reasoning that kept `extrair_instagram` from becoming its own step. It
+returns the number already normalized by
+`whatsapp.formatar_numero_whatsapp` (local import, avoids a cycle and keeps
+one owner for the country-code heuristic — re-implementing it here is the
+silent-transcription risk this project already documented when mirroring
+that function in the frontend). A `wa.me` group-invite link
+(`wa.me/<alphanumeric>`) doesn't match: the pattern requires a digit right
+after the slash. An implausible number is discarded and the scan continues
+to the next link rather than returning junk.
+
+**Priority order in `process_lead_pipeline`** (and mirrored in
+`_persistir_enriquecimento_lead`, whose `site_firecrawl` block runs after
+the `google_places` one so the site number wins even when
+`validate_whatsapp` is skipped):
+1. explicit `telefone` param — the caller knows best;
+2. `whatsapp_site` — the only source with evidence it's a WhatsApp channel;
+3. `telefone_google` — last resort, despite the best coverage.
+
+`telefone_origem` rides along in the log and the task's return value.
+**Deliberately not a DB column**: `whatsapp_ativo` already answers the
+actionable question ("can I reach them there?"), so where the number came
+from is execution diagnostics, not a lead attribute — not worth a migration.
+
+**2. E-mail — the endpoint, not the schema.** `email-finder` only answers
+"what is *this person's* email" (the QSA sócio). Against the 5 real domains
+it found 1; `domain-search` showed 3 of those 5 do have catalogued emails
+(`contato@`, `rh@`, `fono@`…). For prospecting, a clinic's institutional
+address is perfectly usable.
+
+`buscar_emails_do_dominio` implements the fallback; `enriquecer_email` calls
+it only when the finder found nothing **and** the flag is on (that order
+matters for cost — the extra call never fires on a domain that already
+resolved). Ranking: `personal` before `generic`, then highest `confidence`;
+an unknown `type` sorts last instead of raising (`.get(tipo, 99)`). Same
+Bearer header as the finder, so no credential reaches a URL.
+
+🔴 **`HUNTER_DOMAIN_SEARCH_FALLBACK` defaults to `False` — do NOT enable it
+before upgrading the Hunter plan.** The arithmetic, also in
+`app/core/config.py`:
+
+| | calls/lead | monthly at 50 leads |
+|---|---|---|
+| current plan (Free) | — | **50 searches/month** |
+| fallback OFF | up to 1 | up to 50 — *exactly at the ceiling* |
+| fallback ON | up to 2 | **up to 100 — 2× the ceiling** |
+
+Even switched off the Free plan sits exactly at its limit. And the real
+sample skews toward the worst case: the finder missed 4 of 5 domains, so
+consumption with the fallback would land near 2×, not near 1×. The code is
+implemented and tested; it stays dark until someone upgrades the plan and
+flips the flag in `.env`.
+
+⚠️ `tests/test_whatsapp_site_e_fallback_email.py` has an **autouse fixture**
+that blocks every external step with a loud `AssertionError`. Not
+theoretical: while writing this file a test that forgot to mock
+`enrich_email` made a real Hunter call and burned a credit from the Free
+plan. Same lesson as `test_process_lead_pipeline.py`'s Google Places net —
+tests that want a real path override it afterward (last write wins on the
+same `monkeypatch`).
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

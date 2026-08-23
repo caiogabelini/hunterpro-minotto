@@ -50,6 +50,25 @@ O QUE ESTE MÓDULO FAZ:
     simples. Ignora paths reservados do Instagram (p, reel, reels,
     stories, explore, accounts, share), que são rotas do site, não
     perfis de usuário.
+  - `extrair_whatsapp` acha o número de WhatsApp divulgado no site
+    (links `wa.me/...` e `api.whatsapp.com/send?phone=...`), pela mesma
+    lógica de regex. Adicionado em 23/08/2026 pra resolver um problema
+    concreto de dado — ver a ressalva abaixo.
+
+⚠️ POR QUE `extrair_whatsapp` EXISTE (23/08/2026):
+Na primeira busca real, os 6 leads voltaram com "WhatsApp não confirmado".
+Não era bug: o schema da Evolution batia, a instância respondia, e o
+`exists: false` era a resposta correta — porque os 6 telefones vinham do
+Google Places, que devolve o telefone principal publicado, e em
+clínica/hospital isso é a **central telefônica**. Todos os 6 eram números
+FIXOS (8 dígitos locais começando com 2 ou 3); celular brasileiro tem 9
+dígitos começando com 9. Fixo raramente tem WhatsApp.
+
+O número que a clínica realmente atende no WhatsApp costuma estar no
+próprio site, num botão flutuante ou no rodapé. Como o scrape do
+Firecrawl JÁ acontece pra inferir RQE/serviços, extrair isso do mesmo
+markdown **não custa nenhuma chamada adicional** — mesma economia que já
+justificou o `extrair_instagram` não virar uma etapa própria.
 
 O QUE ESTE MÓDULO **NÃO** FAZ (de propósito):
   - Não interpreta o conteúdo do site (serviços oferecidos, menção a
@@ -73,6 +92,20 @@ DEFAULT_TIMEOUT = 30.0  # scraping pode demorar mais que uma consulta de API com
 INSTAGRAM_PATHS_RESERVADOS = {"p", "reel", "reels", "stories", "explore", "accounts", "share"}
 
 INSTAGRAM_REGEX = re.compile(r"instagram\.com/([A-Za-z0-9_.]{2,30})", re.IGNORECASE)
+
+# Os dois formatos de link de WhatsApp que aparecem em site brasileiro --
+# ver `extrair_whatsapp`. Ambos toleram separadores no meio dos dígitos
+# (`wa.me/55 11 99999-9999` acontece, ainda que fora do padrão) porque a
+# limpeza fica com `formatar_numero_whatsapp`.
+#
+# ⚠️ `wa.me` também serve pra links de convite de grupo
+# (`wa.me/<letras e números>`), por isso o padrão exige DÍGITO logo após
+# a barra -- um código de convite alfanumérico não casa.
+WHATSAPP_REGEXES = (
+    re.compile(r"wa\.me/(\+?[\d][\d\s().-]{9,19})", re.IGNORECASE),
+    re.compile(r"api\.whatsapp\.com/send\?[^\s\"'<>]*?phone=(\+?[\d][\d\s().-]{9,19})", re.IGNORECASE),
+    re.compile(r"web\.whatsapp\.com/send\?[^\s\"'<>]*?phone=(\+?[\d][\d\s().-]{9,19})", re.IGNORECASE),
+)
 
 
 @dataclass
@@ -130,5 +163,40 @@ def extrair_instagram(texto: str) -> str | None:
         candidato = match.group(1).rstrip(".")
         if candidato.lower() not in INSTAGRAM_PATHS_RESERVADOS:
             return candidato
+
+    return None
+
+
+def extrair_whatsapp(texto: str) -> str | None:
+    """
+    Acha o primeiro número de WhatsApp divulgado no texto/HTML do site,
+    nos formatos `wa.me/NUMERO`, `api.whatsapp.com/send?phone=NUMERO` e
+    `web.whatsapp.com/send?phone=NUMERO`.
+
+    Devolve o número JÁ NORMALIZADO por
+    `app.services.whatsapp.formatar_numero_whatsapp` (só dígitos, com
+    código do país) -- ou seja, no mesmo formato que a Evolution API
+    espera. Um link com número implausível (curto demais, código de
+    convite de grupo, telefone estrangeiro fora do padrão de 12-13
+    dígitos) é DESCARTADO e a busca continua nos links seguintes, em vez
+    de devolver lixo pra etapa de validação.
+
+    `None` quando não há nenhum link utilizável -- mesmo contrato de
+    `extrair_instagram`, e o chamador (`enrich_site_firecrawl`) não
+    precisa tratar caso especial.
+
+    Import local de `formatar_numero_whatsapp` de propósito: evita ciclo
+    entre `site_scraping` e `whatsapp`, e mantém a normalização com uma
+    dona só -- reimplementar a heurística de código do país aqui seria
+    exatamente o risco de transcrição silenciosa que este projeto já
+    documentou ao espelhar essa função no frontend.
+    """
+    from app.services.whatsapp import formatar_numero_whatsapp
+
+    for regex in WHATSAPP_REGEXES:
+        for match in regex.finditer(texto or ""):
+            numero = formatar_numero_whatsapp(match.group(1))
+            if numero:
+                return numero
 
     return None
