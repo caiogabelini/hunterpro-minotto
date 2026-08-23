@@ -94,7 +94,7 @@ def sem_tabela_de_municipios(monkeypatch, tmp_path):
 # Prefixos das mensagens que são AVISO de degradação, não erro de CNPJ.
 # `busca.erros` carrega os dois; os testes de caminho feliz só se importam
 # com os erros de verdade.
-_PREFIXOS_DE_AVISO = ("Tabela de municípios", "Volume suspeito")
+_PREFIXOS_DE_AVISO = ("Tabela de municípios", "Volume suspeito", "Site não pôde ser lido")
 
 
 def _erros_de_cnpj(busca) -> list[str]:
@@ -753,3 +753,69 @@ def test_busca_com_universo_normal_nao_registra_aviso_de_volume(monkeypatch, red
 
     db_session.refresh(busca)
     assert not any("Volume suspeito" in e for e in (busca.erros or []))
+
+
+# --- aviso de site não lido (23/08/2026) --------------------------------
+# Um lead cujo site o Firecrawl não conseguiu ler fica com instagram,
+# serviços e WhatsApp-do-site vazios -- exatamente como um lead cujo site
+# foi lido e não publica nada disso. O aviso existe pra que o admin
+# consiga distinguir os dois no painel, sem abrir dossiê por dossiê.
+
+def test_aviso_de_scrape_falho_aparece_em_busca_erros(monkeypatch, redis_fake):
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(3))
+    # 1 de 3 com o site ilegível.
+    resultados = {0: False, 1: True, 2: True}
+    contador = iter(sorted(resultados))
+    monkeypatch.setattr(
+        celery_app, "process_lead_pipeline",
+        lambda cnpj, razao_social=None, cache_cnes=None: {
+            "cnpj": cnpj, "site_scrape_sucesso": resultados[next(contador)]
+        },
+    )
+
+    resultado = celery_app.executar_busca_mensal(busca.id, db=db_session)
+    db_session.refresh(busca)
+
+    aviso = [e for e in busca.erros if e.startswith("Site não pôde ser lido")]
+    assert len(aviso) == 1, "o aviso é agregado -- uma linha, não uma por lead"
+    assert "1 de 3" in aviso[0]
+    # AVISO, não erro: a busca conclui normalmente e o lead foi processado.
+    assert busca.status == StatusBusca.CONCLUIDO.value
+    assert busca.total_leads_processados == 3
+    assert _erros_de_cnpj(busca) == []
+    assert resultado["status"] == StatusBusca.CONCLUIDO.value
+
+
+def test_sem_scrape_falho_nao_acrescenta_o_aviso(monkeypatch, redis_fake):
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(2))
+    monkeypatch.setattr(
+        celery_app, "process_lead_pipeline",
+        lambda cnpj, razao_social=None, cache_cnes=None: {"cnpj": cnpj, "site_scrape_sucesso": True},
+    )
+
+    celery_app.executar_busca_mensal(busca.id, db=db_session)
+    db_session.refresh(busca)
+    assert not any(e.startswith("Site não pôde ser lido") for e in busca.erros)
+
+
+def test_lead_sem_site_nao_conta_como_scrape_falho(monkeypatch, redis_fake):
+    """`None` = a etapa nem rodou (sem site). Não é falha de leitura e
+    não pode virar aviso -- senão todo lead sem site viraria alarme."""
+    db_session = _db_session_sqlite()
+    busca = _criar_admin_e_busca(db_session)
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda **kwargs: _semente(2))
+    monkeypatch.setattr(
+        celery_app, "process_lead_pipeline",
+        lambda cnpj, razao_social=None, cache_cnes=None: {"cnpj": cnpj, "site_scrape_sucesso": None},
+    )
+
+    celery_app.executar_busca_mensal(busca.id, db=db_session)
+    db_session.refresh(busca)
+    assert not any(e.startswith("Site não pôde ser lido") for e in busca.erros)

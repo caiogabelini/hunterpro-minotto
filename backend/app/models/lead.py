@@ -77,6 +77,24 @@ class Lead(Base):
 
     # --- Presença digital ---
     site: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # O Firecrawl conseguiu LER o site? Três estados, e a diferença entre
+    # os dois últimos é o ponto da coluna:
+    #   None  -> a etapa nunca rodou (lead sem site conhecido, ou
+    #            FIRECRAWL_API_KEY ausente)
+    #   True  -> leu com sucesso; campos de presença digital vazios
+    #            significam "o site não publica isso"
+    #   False -> tentou e não leu (Firecrawl devolveu success:false, ou a
+    #            etapa levantou exceção)
+    #
+    # ⚠️ Sem esta coluna, os dois últimos casos eram INDISTINGUÍVEIS no
+    # banco e no dossiê: instagram/serviços/whatsapp_site nulos podiam
+    # significar "não tem" ou "nunca lemos". São conclusões comerciais
+    # opostas -- a primeira encerra o assunto, a segunda pede nova
+    # tentativa. Achado em 23/08/2026 ao investigar por que 5 de 6 leads
+    # não tinham WhatsApp: um deles (IBEN) simplesmente nunca teve o site
+    # lido, e só deu pra descobrir por inferência indireta no
+    # `score_detalhes` (o critério `presenca_digital` zerado).
+    site_scrape_sucesso: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     instagram: Mapped[str | None] = mapped_column(String(120), nullable=True)
     linkedin_empresa: Mapped[str | None] = mapped_column(String(255), nullable=True)
     linkedin_decisor: Mapped[str | None] = mapped_column(String(255), nullable=True)

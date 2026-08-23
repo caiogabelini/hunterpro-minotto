@@ -1119,3 +1119,31 @@
   background: var(--overlay-primary-medium);
   color: var(--color-primary);
 }
+
+/* --- Aviso de site não lido (card "Presença digital") -------------------
+   Cor de ALERTA (laranja), não de perigo (vermelho): o vermelho neste
+   dossiê já significa risco de negócio (dívida ajuizada, lead perdido),
+   e um scrape que falhou não é risco -- é lacuna de dado. Mesmo token
+   `--color-alert` que o Dashboard usa pra "perto do limite do plano".
+
+   Fica ACIMA do <dl>, dentro do mesmo card: o aviso explica justamente
+   os campos logo abaixo, então separá-lo deles perderia a conexão. */
+.dossier-aviso-scrape {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgba(194, 65, 12, 0.25);
+  border-radius: 6px;
+  background: rgba(194, 65, 12, 0.07);
+  color: var(--color-alert);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* O ícone não pode encolher quando o texto quebra em duas linhas. */
+.dossier-aviso-scrape svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}

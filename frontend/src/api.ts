@@ -94,6 +94,11 @@ export interface Lead {
   emails_secundarios?: unknown;
   decisor_nome?: string | null;
   site?: string | null;
+  // O Firecrawl conseguiu ler o site? null = etapa nunca rodou (sem
+  // site), true = leu, false = tentou e não leu. A distinção entre os
+  // dois últimos é o que permite ao dossiê dizer "não conseguimos ler"
+  // em vez de mostrar campos vazios sem explicação (ver CLAUDE.md).
+  site_scrape_sucesso?: boolean | null;
   instagram?: string | null;
   linkedin_empresa?: string | null;
   linkedin_decisor?: string | null;

@@ -1338,6 +1338,27 @@ Em ordem de prioridade combinada com o cliente:
     havia outros" e grava `NULL`. Sem essa distinção, desligar a flag
     apagaria os secundários achados numa rodada anterior.
 
+29. ~~Distinguir "site lido, não publica" de "site nunca lido"~~ ✅
+    **feito** (23/08/2026) — `Lead.site_scrape_sucesso` (Boolean,
+    nullable, 12ª migration `c9f4a8e17b03`, validada contra Postgres
+    real). Três estados: `None` = a etapa nem rodou (lead sem site),
+    `True` = o Firecrawl leu, `False` = tentou e não conseguiu.
+
+    **Por que importa:** até aqui, instagram/serviços/WhatsApp-do-site
+    vazios podiam significar "a empresa não tem" ou "nunca conseguimos
+    ler o site" — conclusões comerciais opostas, indistinguíveis no
+    banco e na tela. Na busca real, 1 dos 6 leads (IBEN) caiu no segundo
+    caso, e só deu pra descobrir por inferência indireta no
+    `score_detalhes`.
+
+    Aparece em dois lugares: um aviso laranja no card "Presença digital"
+    do dossiê ("Não conseguimos ler o site desta empresa..."), e um
+    **aviso agregado em `busca.erros`** (uma linha com a contagem e até
+    5 CNPJs, visível no painel de Busca de Leads). O aviso **não** conta
+    como erro — não entra na taxa de falha nem muda o status da busca:
+    o lead foi processado e pontuado, só a presença digital ficou
+    incompleta.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

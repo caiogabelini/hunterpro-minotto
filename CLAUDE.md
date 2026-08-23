@@ -3916,6 +3916,73 @@ Badge colors are deliberately muted (neutral gray for generic, navy for
 personal): these are contact hints, not qualification signals — green/gold
 would compete with the priority/RQE badges that do indicate lead quality.
 
+### `Lead.site_scrape_sucesso` — "not published" vs "never read" (2026-08-23)
+
+Closes an observability gap found while investigating why 5 of 6 leads had
+no WhatsApp. Three were legitimate (the site really publishes no `wa.me`
+link), one had no site, and one (IBEN) **never had its site read at all** —
+discoverable only by indirect inference from `score_detalhes` (the
+`presenca_digital` criterion scored 0 despite the lead having a site).
+
+In the DB and the dossier the two cases were **indistinguishable**: null
+`instagram`/`servicos`/`whatsapp_site` could mean "doesn't have it" or "we
+never looked". Those are opposite commercial conclusions — the first closes
+the question, the second asks for a retry.
+
+**Three states, and the difference between the last two is the whole
+point:**
+
+| value | meaning |
+|---|---|
+| `None` | the step never ran (no known site, or no `FIRECRAWL_API_KEY`) |
+| `True` | read successfully — an empty field means "the site doesn't publish it" |
+| `False` | tried and failed (Firecrawl `success: false`, or the step raised) |
+
+Persisted in `_persistir_enriquecimento_lead` from the `scrape_sucesso` that
+`enrich_site_firecrawl` already returned — written **whenever the step ran,
+especially when it failed**. A malformed step return (key absent) counts as
+`False`, deliberately: the error direction must be conservative, never
+"successfully read".
+
+**Migration** `c9f4a8e17b03` (12th, chains after `d3b8f41c62a7`). Nullable
+Boolean, **no `server_default` — and here a `false` default would be
+actively wrong**, not merely unnecessary: it would mark every lead that
+never had a site as "failed to read". Validated against a real Postgres 16
+(port 5437): all twelve upgrade in chain order, `downgrade -1` reverts only
+this one (`emails_secundarios` and the closing-data columns survive),
+re-upgrade clean, column is `boolean`/nullable/no default. Cluster deleted.
+
+**Aggregated warning in `busca.erros`** (`_aviso_scrapes_falhos`), same
+channel as `_aviso_universo_suspeito` so it surfaces in the admin panel:
+- **One line, not one per lead** — `busca.erros` renders in full in the
+  panel, and 20 repetitions of the same sentence would bury the real
+  errors. Lists up to 5 CNPJs, then "e mais N".
+- **It's a warning, not an error**: it never counts toward `taxa_falha` and
+  never flips the run to `"erro"`. The lead *was* processed, persisted and
+  scored — only digital presence is incomplete.
+- Triggered by `is False`, never by `None` — otherwise every lead without a
+  site would raise an alarm.
+- ⚠️ It rides in `busca.erros` only because that's the sole channel the
+  panel renders today. If a separate "avisos" field is ever added, this and
+  the suspicious-volume warning should move there together.
+
+**Dossier** — an alert-colored line at the top of the "Presença digital"
+card (Dados tab), above the `<dl>` it explains. Orange (`--color-alert`),
+**not red**: red in this dossier means business risk (debt in court, lost
+lead), and a failed scrape is a data gap, not a risk.
+
+The display rule lives in `frontend/src/siteScrape.ts::deveAvisarSiteNaoLido`
+with its own tests, despite being a single comparison — because the
+intuitive way to write it (`!lead.site_scrape_sucesso`) would also fire on
+`null`, showing "we couldn't read the site" on every lead that never had
+one. A named function makes the three-state rule explicit.
+
+⚠️ **The conditional rendering itself is not tested** — this project has no
+component-testing setup (no jsdom, no React Testing Library; see the
+"Frontend" section). The extracted pure function is what's covered. Adding
+jsdom + RTL remains a separate, deliberate decision, not something to slip
+in as a side effect.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no
@@ -4074,6 +4141,16 @@ throwaway-cluster validation as the previous ten (port 5436): all eleven
 upgrade cleanly in chain order, `downgrade -1` reverts only this one,
 re-upgrade is clean, and the column matches the model (`json`, nullable, no
 default). Cluster stopped and deleted immediately after.
+
+A **twelfth** migration was added 2026-08-23:
+`c9f4a8e17b03_adiciona_site_scrape_sucesso_em_leads.py`
+(`down_revision="d3b8f41c62a7"`, adds `Lead.site_scrape_sucesso` — see the
+section above). Nullable Boolean, no `server_default` (a `false` default
+would misclassify every lead that never had a site). Same
+throwaway-cluster validation as the previous eleven (port 5437): all twelve
+upgrade in chain order, `downgrade -1` reverts only this one, re-upgrade is
+clean, column matches the model. Cluster stopped and deleted immediately
+after.
 
 ### Deployment note (EasyPanel)
 

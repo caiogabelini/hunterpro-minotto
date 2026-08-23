@@ -23,6 +23,7 @@ class LeadRead(BaseModel):
     emails_secundarios: list | None = None
     decisor_nome: str | None = None
     site: str | None = None
+    site_scrape_sucesso: bool | None = None
     instagram: str | None = None
     linkedin_empresa: str | None = None
     linkedin_decisor: str | None = None

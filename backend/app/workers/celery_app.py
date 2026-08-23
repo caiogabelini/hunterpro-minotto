@@ -869,6 +869,11 @@ def _persistir_enriquecimento_lead(
         lead.site = site_url
 
     if site_firecrawl is not None:
+        # Gravado SEMPRE que a etapa rodou -- inclusive (e principalmente)
+        # quando falhou. É o único jeito de o dossiê distinguir "site sem
+        # Instagram" de "site que não conseguimos ler". Ver o comentário
+        # da coluna em app/models/lead.py.
+        lead.site_scrape_sucesso = bool(site_firecrawl.get("scrape_sucesso"))
         lead.instagram = site_firecrawl.get("instagram")
         # Roda DEPOIS do bloco do Google Places de propósito: o número
         # divulgado no site vence o da central telefônica, mesma
@@ -1161,6 +1166,9 @@ def process_lead_pipeline(
             "score_total": resultado_score["score_total"],
             "prioridade": lead.prioridade,
             "telefone_origem": telefone_origem,
+            # Pra `executar_busca_mensal` conseguir agregar o aviso de
+            # scrape falho sem reconsultar o banco.
+            "site_scrape_sucesso": lead.site_scrape_sucesso,
             "breakdown": resultado_score["breakdown"],
         }
     finally:
@@ -1192,6 +1200,44 @@ _CRITERIO_ERRO_TAXA_FALHA = 0.5  # >50% dos CNPJs SELECIONADOS falharam -> statu
 # Abaixo de 10% da cota, o universo da semente é suspeito de estar
 # incompleto -- ver `_aviso_universo_suspeito`.
 _LIMIAR_UNIVERSO_SUSPEITO = 0.10
+
+
+# Quantos CNPJs com scrape falho listar nominalmente no aviso. Acima
+# disso vira "e mais N" -- a lista vai pro painel admin, e 60 CNPJs numa
+# linha só é ilegível.
+_MAX_CNPJS_NO_AVISO_SCRAPE = 5
+
+
+def _aviso_scrapes_falhos(cnpjs_sem_leitura: list[str], total_processados: int) -> str | None:
+    """
+    Devolve UM aviso agregado sobre os leads cujo site não pôde ser lido,
+    ou None se todos foram lidos (ou nenhum tinha site).
+
+    Agregado, não um aviso por lead, de propósito: `busca.erros` aparece
+    inteiro no painel de Busca de Leads, e 20 linhas repetindo a mesma
+    frase enterrariam os erros de verdade. Mesma escolha do
+    `_aviso_universo_suspeito` -- uma linha que explica e dá o número.
+
+    **Não é erro**, e por isso não entra na conta de `taxa_falha`: o lead
+    foi processado, gravado e pontuado; só a parte de presença digital
+    ficou incompleta. Entra em `busca.erros` porque é o único canal que o
+    painel exibe hoje -- se um dia existir um campo separado de "avisos",
+    é pra lá que isto e o de volume suspeito deveriam migrar juntos.
+    """
+    if not cnpjs_sem_leitura:
+        return None
+
+    amostra = ", ".join(cnpjs_sem_leitura[:_MAX_CNPJS_NO_AVISO_SCRAPE])
+    resto = len(cnpjs_sem_leitura) - _MAX_CNPJS_NO_AVISO_SCRAPE
+    if resto > 0:
+        amostra += f" e mais {resto}"
+    return (
+        f"Site não pôde ser lido em {len(cnpjs_sem_leitura)} de {total_processados} leads "
+        f"processados ({amostra}). O Firecrawl não devolveu conteúdo -- site fora do ar, "
+        "bloqueio a robôs ou URL inválida. Instagram, serviços e WhatsApp do site ficam "
+        "vazios nesses leads por falta de leitura, NÃO porque a empresa não os tenha. "
+        "Vale reprocessar esses CNPJs depois."
+    )
 
 
 def _aviso_universo_suspeito(total_encontrado: int, top_n: int, diretorio: str) -> str | None:
@@ -1535,18 +1581,28 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
 
         erros: list[str] = []
         total_processados = 0
+        cnpjs_sem_leitura_de_site: list[str] = []
         for candidato in selecionados:
             cnpj = candidato.get("cnpj")
             try:
-                process_lead_pipeline(
+                resultado_lead = process_lead_pipeline(
                     cnpj,
                     razao_social=candidato.get("razao_social"),
                     cache_cnes=cache_cnes,
                 )
                 total_processados += 1
+                # `is False` e não `not ...`: None significa "sem site pra
+                # ler", que não é falha e não deve virar aviso.
+                if (resultado_lead or {}).get("site_scrape_sucesso") is False:
+                    cnpjs_sem_leitura_de_site.append(cnpj)
             except Exception as exc:
                 logger.exception("executar_busca_mensal: CNPJ %s falhou na busca %s.", cnpj, busca_id)
                 erros.append(f"{cnpj}: {exc}")
+
+        aviso_scrape = _aviso_scrapes_falhos(cnpjs_sem_leitura_de_site, total_processados)
+        if aviso_scrape:
+            logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso_scrape)
+            avisos.append(aviso_scrape)
 
         taxa_falha = len(erros) / len(selecionados) if selecionados else 0.0
         busca.status = StatusBusca.ERRO.value if taxa_falha > _CRITERIO_ERRO_TAXA_FALHA else StatusBusca.CONCLUIDO.value

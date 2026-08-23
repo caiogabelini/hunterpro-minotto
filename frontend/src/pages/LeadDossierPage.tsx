@@ -41,6 +41,7 @@ import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
 import { getEmailsSecundarios, labelTipoEmail } from "../emailsSecundarios";
 import { getInsights } from "../insights";
+import { deveAvisarSiteNaoLido } from "../siteScrape";
 import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
 import { SIGNAL_LAYER_LABELS } from "../scoreLayers";
@@ -297,6 +298,18 @@ function AbaDados({ lead }: { lead: Lead }) {
 
         <section className="dossier-card">
           <SectionHeading icon={Globe}>Presença digital</SectionHeading>
+          {/* Regra em `siteScrape.ts` (com testes): só avisa quando o
+              scrape de fato FALHOU. `null` = a etapa nem rodou, e aí os
+              campos vazios já se explicam pela ausência de site. */}
+          {deveAvisarSiteNaoLido(lead.site_scrape_sucesso) && (
+            <p className="dossier-aviso-scrape">
+              <AlertTriangle size={14} aria-hidden="true" />
+              <span>
+                Não conseguimos ler o site desta empresa — os dados de presença digital
+                podem estar incompletos.
+              </span>
+            </p>
+          )}
           <dl>
             <Campo label="Site" valor={lead.site} link={lead.site} />
             <Campo label="Instagram" valor={lead.instagram} />
