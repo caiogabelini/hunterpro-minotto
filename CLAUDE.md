@@ -373,6 +373,67 @@ param that keeps its `iter_*` signatures symmetric).
 Verified end to end against the real 1.3 GB PGFN zip: all 6 members
 traversed, 14.5 MB peak RSS.
 
+### PGFN index memory — OOM in production, fixed (2026-08-23)
+
+`refresh_pgfn_index` was **Killed by the OOM killer** on the production VPS
+(8 GB total, 4.2 GB free at start). Profiled against the real file
+(1.3 GB zip, 45,553,971 rows, 6,432,808 CNPJs in the index) by sampling
+`/proc/self/status` — the number the OOM killer actually sees, unlike
+`resource.getrusage()` at the end, which says nothing about *when* or *in
+which phase*.
+
+| | before | after | 
+|---|---|---|
+| after `build_pgfn_index` | 4,126 MB | **1,445 MB** |
+| peak (`VmHWM`) | **4,739 MB** | **1,507 MB** |
+| vs. 4.2 GB free on the VPS | ✗ killed | ✓ fits with 2.7 GB to spare |
+
+**Two accumulators, both removed:**
+
+1. **`PgfnDebtSummary.situacoes`** — a `list[str]` appended once per
+   inscription and **never read anywhere in the project** (`save_index_to_redis`
+   serializes only `qtd_inscricoes_ativas`, `valor_total`,
+   `algum_ajuizado`). 6.4M list objects holding 28.3M pointers. Note the
+   cost was *not* the strings: only 97 distinct `SITUACAO_INSCRICAO` values
+   exist in the whole file, so those were 28.3M repeated references to ~97
+   objects.
+
+2. **`save_index_to_redis` piled all 6.4M `SET`s into one pipeline.**
+   redis-py's `pipeline()` buffers everything in `command_stack` until
+   `execute()` — measured at **713 MB** of buffer, on top of the ~4 GB
+   index still live. Now executes every `LOTE_ESCRITA_PADRAO` (5,000)
+   commands, mirroring `LOTE_LOOKUP_PADRAO` on the read side. The write
+   phase now costs **~13 MB** (1,445 → 1,458 MB) instead of 713 MB.
+   ⚠️ Not atomic — but it never was (a pipeline without `MULTI` isn't).
+   `REDIS_KEY_UPDATED_AT` is still written only after every batch, so an
+   interrupted run leaves the old stamp and `_indice_pgfn_populado` (the
+   cost gate in `executar_busca_mensal`) still reads correctly.
+
+⚠️ **The drop was far bigger than the object sizes predicted — 2,681 MB
+saved where `sys.getsizeof` accounted for 724 MB.** Two reasons, both worth
+knowing before trusting a `getsizeof`-based estimate here again:
+- **Allocator fragmentation.** Freeing the lists at runtime returned only
+  98 MB to RSS, because freed blocks stay in pymalloc arenas. Allocating
+  6.4M lists *interleaved* with 6.4M instances fragments those arenas;
+  never allocating them lets the summaries pack densely. The allocator cost
+  was ~3.7× the object cost.
+- **A measurement error in the first profiling run, corrected here.** The
+  per-instance extrapolation summed `getsizeof(instance) + getsizeof(__dict__)
+  + sizeof(each key string)`. Instance `__dict__`s are **key-sharing**
+  (PEP 412): the key strings exist once per class, not once per instance.
+  That inflated the estimate to ~3,590 MB where the real per-instance cost
+  is ~344 B (~2,213 MB), and is why the predicted post-fix peak (~3.3 GB)
+  came in pessimistic against the measured 1.5 GB.
+
+**Still on the table, not done** (wasn't needed — the fix already fits the
+VPS with room): the index is still built entirely in RAM before a single
+key is written. Streaming CNPJs straight to Redis, or `@dataclass(slots=True)`
+on `PgfnDebtSummary` (drops the per-instance `__dict__`), would cut it
+further. Both are bigger changes than the OOM required.
+
+Run time is ~18 min end to end (904 s building, 206 s writing) — unchanged
+by these fixes; they traded nothing for the memory.
+
 ### CNES data (`app/services/cnes.py`)
 
 Live HTTP client (not a downloaded file, unlike PGFN) for

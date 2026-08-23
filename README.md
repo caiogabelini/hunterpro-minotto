@@ -1379,6 +1379,27 @@ Em ordem de prioridade combinada com o cliente:
       worker subir e, horas depois, alguém editar o código e disparar
       uma busca sem reiniciar.
 
+31. ~~`refresh_pgfn_index` morrendo por OOM em produção~~ ✅ **feito**
+    (23/08/2026). A VPS (8 GB, 4,2 GB livres) matava o processo antes de
+    concluir. Perfil real (amostragem de `/proc/self/status` durante a
+    execução contra o arquivo de 1,3 GB / 45,5M linhas):
+
+    | | antes | depois |
+    |---|---|---|
+    | pico de memória | **4.739 MB** | **1.507 MB** |
+    | vs. 4,2 GB livres na VPS | ✗ morria | ✓ sobra 2,7 GB |
+
+    Duas causas, as duas removidas: (a) `PgfnDebtSummary.situacoes`, uma
+    lista preenchida a cada inscrição e **nunca lida** em lugar nenhum —
+    6,4M objetos lista com 28,3M ponteiros; (b) `save_index_to_redis`
+    empilhava os 6,4M comandos num único pipeline (713 MB de buffer) e
+    só executava no fim — agora executa a cada 5.000, espelhando o
+    `LOTE_LOOKUP_PADRAO` que a leitura já usava.
+
+    Tempo de execução inalterado (~18 min). Ainda dá pra reduzir mais
+    (o índice inteiro continua sendo montado em RAM antes da primeira
+    gravação), mas não foi preciso: já cabe com folga.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

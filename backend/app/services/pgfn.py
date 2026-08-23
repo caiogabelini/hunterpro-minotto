@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Iterator
 
@@ -234,12 +234,23 @@ class PgfnDebtSummary:
     `qtd_inscricoes_ativas` é o dado bruto que alimenta o critério de
     score (ver app/scoring/rules.py) — a conversão pra pontos NÃO
     acontece aqui.
+
+    ⚠️ **Havia aqui um campo `situacoes: list[str]`, removido em
+    23/08/2026.** Ele era preenchido a cada inscrição em
+    `build_pgfn_index` e **nunca lido em lugar nenhum do projeto** --
+    `save_index_to_redis` serializa só `qtd_inscricoes_ativas`,
+    `valor_total` e `algum_ajuizado`. No arquivo real custava ~724 MB:
+    6,4 milhões de objetos lista guardando 28,3 milhões de ponteiros.
+    (O custo não eram as strings: só existem 97 valores distintos de
+    situação no arquivo, então eram 28,3M referências repetidas a ~97
+    objetos.) Se algum dia for preciso saber QUAIS situações um CNPJ
+    tem, guardar um `set` dos 97 valores custa quase nada -- mas não
+    recriar a lista completa por inscrição.
     """
 
     cnpj: str
     qtd_inscricoes_ativas: int
     valor_total: float
-    situacoes: list[str] = field(default_factory=list)
     algum_ajuizado: bool = False
 
 
@@ -340,7 +351,6 @@ def build_pgfn_index(csv_paths: list[Path], encoding: str = DEFAULT_ENCODING, de
 
             summary.qtd_inscricoes_ativas += 1
             summary.valor_total += record.valor_consolidado
-            summary.situacoes.append(record.situacao)
             if record.ajuizado:
                 summary.algum_ajuizado = True
 
@@ -435,10 +445,43 @@ def _redis_key(cnpj: str) -> str:
     return f"{REDIS_KEY_PREFIX}{cnpj}"
 
 
-def save_index_to_redis(index: dict[str, PgfnDebtSummary], redis_client) -> int:
+# Quantos SET por pipeline na ESCRITA do índice. Espelha o
+# `LOTE_LOOKUP_PADRAO` da leitura, pelo mesmo motivo e com o mesmo valor.
+#
+# ⚠️ Medido em 23/08/2026 contra o arquivo real: empilhar os 6.432.808
+# comandos de uma vez (o comportamento até então) custava **713 MB** de
+# buffer -- em cima dos ~4 GB do índice, que continuam vivos. Era o que
+# levava o processo de 4,03 GB ao pico de 4,74 GB e o fazia ser morto por
+# OOM numa VPS com 4,2 GB livres.
+#
+# O `pipeline()` do redis-py acumula TODOS os comandos em
+# `command_stack` até o `execute()`; nada é enviado antes. Executar a
+# cada lote esvazia esse buffer e mantém o pico previsível,
+# independentemente do tamanho do índice.
+LOTE_ESCRITA_PADRAO = 5_000
+
+
+def save_index_to_redis(
+    index: dict[str, PgfnDebtSummary],
+    redis_client,
+    tamanho_lote: int = LOTE_ESCRITA_PADRAO,
+) -> int:
     """
     Persiste o índice já construído no Redis, um registro por CNPJ.
     Retorna quantos CNPJs foram salvos.
+
+    Escreve em LOTES de `tamanho_lote` comandos (ver
+    `LOTE_ESCRITA_PADRAO`) -- o mesmo padrão que `lookup_debts_from_redis`
+    já usava na leitura, por motivo de escala, não de estilo.
+
+    ⚠️ **Não é atômico, e nunca foi.** Um pipeline do Redis sem `MULTI`
+    já não dava atomicidade nem antes; o que muda é a janela: agora um
+    erro no meio deixa parte do índice atualizado e parte não. Na prática
+    isso não regride nada, porque `REDIS_KEY_UPDATED_AT` só é gravada
+    DEPOIS de todos os lotes -- então uma execução interrompida deixa o
+    carimbo antigo, e as chaves são sobrescritas por CNPJ na execução
+    seguinte. `_indice_pgfn_populado` (a trava de custo em
+    `executar_busca_mensal`) checa justamente esse carimbo.
 
     `redis_client` é injetado (não importa `redis` aqui direto) pra
     manter este módulo testável sem depender de um Redis real rodando.
@@ -446,6 +489,7 @@ def save_index_to_redis(index: dict[str, PgfnDebtSummary], redis_client) -> int:
     import time
 
     pipe = redis_client.pipeline()
+    pendentes = 0
     for cnpj, summary in index.items():
         payload = json.dumps({
             "qtd_inscricoes_ativas": summary.qtd_inscricoes_ativas,
@@ -453,6 +497,14 @@ def save_index_to_redis(index: dict[str, PgfnDebtSummary], redis_client) -> int:
             "algum_ajuizado": summary.algum_ajuizado,
         })
         pipe.set(_redis_key(cnpj), payload)
+        pendentes += 1
+        if pendentes >= tamanho_lote:
+            pipe.execute()
+            pendentes = 0
+
+    # O carimbo vai no último lote, sempre executado -- mesmo que o
+    # índice esteja vazio ou que o total seja múltiplo exato do lote
+    # (caso em que `pendentes` acabou de zerar e o pipeline está limpo).
     pipe.set(REDIS_KEY_UPDATED_AT, str(int(time.time())))
     pipe.execute()
     return len(index)
