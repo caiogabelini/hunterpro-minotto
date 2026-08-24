@@ -27,6 +27,31 @@ _STATUS_NOVO_LEAD = "novo_lead"
 _STATUS_PERDIDO = "perdido"
 _STATUS_EM_NEGOCIACAO = ("proposta_enviada", "negociacao")
 _STATUS_PGFN_NAO_ABORDADO = ("novo_lead", "qualificacao")
+
+# Lead "qualificado" pro simulador de receita = está ATIVAMENTE no meio do
+# funil: já saiu de "novo_lead" e ainda não terminou em "ganho" nem
+# "perdido". É posição no funil, não score.
+#
+# ⚠️ Corrigido em 24/08/2026. Antes o padrão contava `prioridade IN
+# ('A','B')` -- uma confusão de nomenclatura com a etapa "Qualificação" do
+# Kanban. São conceitos diferentes e independentes: `prioridade` é a
+# tradução do `score_total` (quão bom o lead parece), `kanban_status` é
+# onde ele está no processo comercial (quão longe já foi). Um lead
+# prioridade A que ninguém contatou não é um lead qualificado; um lead
+# prioridade C já em negociação é.
+#
+# ⚠️ Esta é a ÚNICA coisa que mudou: `prioridade` continua alimentando
+# normalmente os filtros de `GET /api/leads`, a Lista de Leads, o card
+# "leads de alta prioridade" das ações recomendadas e o contexto dos
+# insights de IA. A correção é só do default deste campo do simulador.
+_STATUS_QUALIFICADOS_NO_FUNIL = (
+    "qualificacao",
+    "contatado",
+    "respondeu",
+    "reuniao",
+    "proposta_enviada",
+    "negociacao",
+)
 _TIPO_CONTRATO_PONTUAL = "pontual"
 _TIPO_CONTRATO_RECORRENTE = "recorrente"
 
@@ -56,7 +81,8 @@ _LIMITE_MOTIVOS_PERDA = 10
 # premissas próprias (`User.dashboard_premissas is None`) -- taxa de
 # fechamento e ticket médio são só um chute inicial razoável (não vêm de
 # nenhum dado real), `leads_qualificados` já é calculado a partir da
-# base de leads existente (ver `_leads_qualificados_padrao`).
+# base de leads existente, por posição no funil (ver
+# `_leads_qualificados_padrao`).
 _TAXA_FECHAMENTO_PADRAO = 20.0
 _TICKET_MEDIO_PADRAO = 1500.0
 
@@ -209,8 +235,19 @@ def get_acoes_recomendadas(
 
 
 def _leads_qualificados_padrao(db: Session) -> int:
+    """
+    Quantos leads estão ativamente no meio do funil -- o palpite inicial
+    de `leads_qualificados` no simulador de receita, usado só enquanto o
+    usuário não salvar premissas próprias.
+
+    Conta por `kanban_status` (posição no funil), NÃO por `prioridade`
+    (score) -- ver `_STATUS_QUALIFICADOS_NO_FUNIL` pro porquê da
+    correção.
+    """
     return db.execute(
-        select(func.count()).select_from(Lead).where(Lead.prioridade.in_(("A", "B")))
+        select(func.count())
+        .select_from(Lead)
+        .where(Lead.kanban_status.in_(_STATUS_QUALIFICADOS_NO_FUNIL))
     ).scalar() or 0
 
 
@@ -222,9 +259,10 @@ def get_premissas(
     """
     Premissas do Simulador de Receita do usuário logado. Se nunca foram
     salvas (`dashboard_premissas is None`), devolve um padrão calculado
-    -- `leads_qualificados` a partir da base real (contagem de leads
-    prioridade A+B agora), `taxa_fechamento`/`ticket_medio` fixos (não há
-    dado histórico de conversão/ticket real ainda pra derivar isso).
+    -- `leads_qualificados` a partir da base real (leads ativamente no
+    meio do funil, ver `_STATUS_QUALIFICADOS_NO_FUNIL`),
+    `taxa_fechamento`/`ticket_medio` fixos (não há dado histórico de
+    conversão/ticket real ainda pra derivar isso).
     Nunca persiste esse padrão sozinho -- só quando o usuário confirma
     via `PUT`.
     """

@@ -268,17 +268,57 @@ def test_acoes_recomendadas_sem_token_retorna_401(client):
 
 
 def test_get_premissas_devolve_padrao_quando_nunca_salvou(client, db_session, token):
-    _criar_lead(db_session, sufixo="11", prioridade="A")
-    _criar_lead(db_session, sufixo="22", prioridade="B")
-    _criar_lead(db_session, sufixo="33", prioridade="C")
+    """`leads_qualificados` padrão = leads ATIVAMENTE no meio do funil.
+
+    ⚠️ Até 24/08/2026 esta contagem era `prioridade IN ('A','B')` -- uma
+    confusão de nomenclatura com a etapa "Qualificação" do Kanban.
+    `prioridade` é score (quão bom o lead parece); `kanban_status` é
+    posição no processo comercial (quão longe ele já foi). São
+    independentes.
+    """
+    # Os 6 status que CONTAM -- do meio do funil.
+    for i, status in enumerate(
+        ["qualificacao", "contatado", "respondeu", "reuniao", "proposta_enviada", "negociacao"]
+    ):
+        _criar_lead(db_session, sufixo=f"{i:02d}", kanban_status=status)
+
+    # Os 3 que NÃO contam: ainda não entrou no funil, e os dois desfechos.
+    _criar_lead(db_session, sufixo="90", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="91", kanban_status="ganho")
+    _criar_lead(db_session, sufixo="92", kanban_status="perdido", motivo_perda="Preço")
 
     resp = client.get("/api/dashboard/premissas", headers={"Authorization": f"Bearer {token}"})
 
     assert resp.status_code == 200
     corpo = resp.json()
-    assert corpo["leads_qualificados"] == 2  # A + B, não C
+    assert corpo["leads_qualificados"] == 6
     assert corpo["taxa_fechamento"] == 20.0
     assert corpo["ticket_medio"] == 1500.0
+
+
+def test_premissas_padrao_ignora_prioridade_e_olha_so_o_funil(client, db_session, token):
+    """Guarda direta da correção: com prioridade e funil DISCORDANDO, o
+    padrão tem que seguir o funil.
+
+    Um lead prioridade A que ninguém contatou não é um lead qualificado;
+    um lead prioridade C já em negociação é.
+    """
+    _criar_lead(db_session, sufixo="11", prioridade="A", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="22", prioridade="B", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="33", prioridade="C", kanban_status="negociacao")
+
+    resp = client.get("/api/dashboard/premissas", headers={"Authorization": f"Bearer {token}"})
+
+    # Pela regra antiga daria 2 (os A+B); pela nova dá 1 (só o de "negociacao").
+    assert resp.json()["leads_qualificados"] == 1
+
+
+def test_premissas_padrao_zero_quando_ninguem_saiu_de_novo_lead(client, db_session, token):
+    _criar_lead(db_session, sufixo="11", prioridade="A", kanban_status="novo_lead")
+    _criar_lead(db_session, sufixo="22", prioridade="A", kanban_status="novo_lead")
+
+    resp = client.get("/api/dashboard/premissas", headers={"Authorization": f"Bearer {token}"})
+    assert resp.json()["leads_qualificados"] == 0
 
 
 def test_put_premissas_persiste_e_get_devolve_o_salvo(client, db_session, token, usuario):

@@ -1422,6 +1422,25 @@ Em ordem de prioridade combinada com o cliente:
     gratuito NÃO é bloqueado** de propósito: clínica pequena usando
     Gmail como contato real é comum aqui.
 
+33. ~~"Leads qualificados" do simulador contava por prioridade, não por
+    funil~~ ✅ **feito** (24/08/2026). O padrão de `leads_qualificados`
+    em `GET /api/dashboard/premissas` contava `prioridade IN ('A','B')`
+    — confusão de nomenclatura com a etapa "Qualificação" do Kanban.
+    São conceitos independentes: `prioridade` é score (quão bom o lead
+    parece), `kanban_status` é posição no processo (quão longe ele já
+    foi). Um lead prioridade A que ninguém contatou não é qualificado;
+    um lead prioridade C já em negociação é.
+
+    Agora conta os 6 status do meio do funil (`qualificacao`,
+    `contatado`, `respondeu`, `reuniao`, `proposta_enviada`,
+    `negociacao`) — todo lead que saiu de "novo_lead" e ainda não
+    terminou em "ganho"/"perdido".
+
+    ⚠️ **Só isso mudou.** `prioridade` continua alimentando os filtros
+    de leads, o card "leads de alta prioridade ainda não contatados" e o
+    contexto dos insights de IA. E só o *padrão* é afetado: uma vez que
+    o usuário salva premissas pelo `PUT`, o valor salvo prevalece.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

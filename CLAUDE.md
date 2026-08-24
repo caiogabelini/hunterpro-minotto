@@ -2349,7 +2349,7 @@ protection level as the rest of the API, not admin-only):
   "Migrations" below, 7th migration). `GET` returns the saved value
   when one exists; when `dashboard_premissas is None` (never saved),
   it returns a **computed-on-the-fly default** — `leads_qualificados`
-  from a real `COUNT` of today's priority-A+B leads, `taxa_fechamento`
+  from a real `COUNT` of leads **actively mid-funnel**, `taxa_fechamento`
   fixed at `20`, `ticket_medio` fixed at `1500` (both literal guesses,
   there's no historical conversion/deal-size data anywhere yet to
   derive them from) — and **never persists that default itself**; only
@@ -2456,6 +2456,32 @@ authenticated screen):
   limitation as every other frontend session in this project.
   `npm run build`/`npm run lint`/`npm run test` all clean, 18 frontend
   tests (unchanged — see the "no new test file" note above).
+
+### "Leads qualificados" is funnel position, not score (2026-08-24)
+
+`GET /api/dashboard/premissas`'s default for `leads_qualificados` counted
+`prioridade IN ('A','B')`. That was a **naming collision** with the Kanban's
+"Qualificação" stage, and the two are independent concepts:
+
+- **`prioridade`** (A/B/C) is a translation of `score_total` — how good the
+  lead *looks*.
+- **`kanban_status`** is where it sits in the commercial process — how far
+  it has actually *gone*.
+
+A priority-A lead nobody has contacted is not a qualified lead; a priority-C
+lead already in negotiation is. The default now counts
+`_STATUS_QUALIFICADOS_NO_FUNIL` — the six statuses between `novo_lead` and
+the two terminal ones (`qualificacao`, `contatado`, `respondeu`, `reuniao`,
+`proposta_enviada`, `negociacao`).
+
+⚠️ **This changed exactly one thing.** `prioridade` still drives the
+`GET /api/leads` and Lista de Leads filters, the "leads de alta prioridade
+ainda não contatados" recommended-action card (`prioridade == "A"` +
+`novo_lead`), and the AI insights context — all untouched on purpose. The
+fix is scoped to this one simulator default.
+
+Only the *default* is affected: once a user saves premissas via `PUT`, the
+stored value wins and none of this runs.
 
 ### Dashboard (Fase 2) — funil de conversão, motivos de perda (follow-up session, 2026-08-21)
 
