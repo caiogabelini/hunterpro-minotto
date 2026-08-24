@@ -1460,10 +1460,12 @@ Em ordem de prioridade combinada com o cliente:
     valer dali pra frente; as mensagens antigas continuam em
     `lead_messages`.
 
-    Visibilidade: "Gerações de IA este mês" no Dashboard, dentro de
-    "Consumo do plano". ⚠️ Subestima levemente — insights não têm
-    histórico por geração, então um lead gerado 2x no mesmo mês conta 1
-    (erro máximo de 1 por lead).
+    ⚠️ **O card "Gerações de IA este mês" foi removido do Dashboard em
+    24/08/2026**, um dia depois de entrar — decisão do cliente de não
+    exibir esse número por enquanto. **Só a UI saiu**: o
+    `total_geracoes_ia_mes` continua sendo calculado e devolvido pelo
+    `GET /api/dashboard/summary` (com testes), pronto pra voltar à tela
+    se um dia quiserem. O controle de custo em si não foi tocado.
 
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o

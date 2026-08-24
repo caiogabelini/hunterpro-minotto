@@ -4272,13 +4272,22 @@ returns the `LeadMessage`, not the Lead (unlike `/gerar-insights`, which
 returns the whole Lead with `geracoes_ia` already updated, so `setLead`
 suffices there).
 
-**The Dashboard card sits in "Consumo do plano", not Resumo Executivo** —
-thematically it's consumption like the leads/month count right above it, and
-practically the KPI grid was calibrated in an earlier session to fit exactly 5
-cards in one row (`minmax(176px, 1fr)` within 976px); a 6th would drop alone
-onto a second row, the very problem that session fixed. No progress bar: there
-is no *monthly* generation quota — the limit is per lead — and a bar would
-imply a global cap that doesn't exist.
+⚠️ **The Dashboard card was REMOVED on 2026-08-24, one day after being
+added** — the user decided they don't want that number on screen for now.
+**Only the UI went**: `total_geracoes_ia_mes` is still computed by
+`get_summary`, still in the `DashboardSummary` schema, still in the `api.ts`
+type, and still covered by tests. The cost control itself is untouched and
+confirmed working in production (the limit of 2 blocks the 3rd attempt).
+
+Bringing the card back is re-adding a component — nothing to re-plumb. Two
+things that were decided when it existed, worth keeping if it returns: it
+belonged in **"Consumo do plano", not Resumo Executivo** (thematically it's
+consumption like the leads/month count; practically the KPI grid is
+calibrated for exactly 5 cards in one row — `minmax(176px, 1fr)` within
+976px — so a 6th drops alone onto a second row, the very problem an earlier
+session fixed), and it had **no progress bar** (there is no *monthly*
+generation quota — the limit is per lead — and a bar would imply a global cap
+that doesn't exist).
 
 ### Migrations (`backend/alembic/`)
 
