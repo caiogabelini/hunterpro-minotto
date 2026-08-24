@@ -338,3 +338,105 @@ def test_pipeline_persiste_prioridade_junto_do_score(monkeypatch, db_session):
     assert lead.prioridade is not None
     assert lead.prioridade == derivar_prioridade(lead.score_total)
     assert resultado["prioridade"] == lead.prioridade
+
+
+# ---------------------------------------------------------------------------
+# Senha embutida em connection string (auditoria de 24/08/2026)
+# ---------------------------------------------------------------------------
+# `redigir_segredos` só cobria `chave=valor` e valores de campos
+# `Settings` terminados em _KEY/_TOKEN/_SECRET/... -- `DATABASE_URL`,
+# `REDIS_URL` e `CELERY_BROKER_URL` ficavam de fora por terminarem em
+# `_URL`, apesar de carregarem senha.
+#
+# O caminho onde isso importa é VISÍVEL AO USUÁRIO: `executar_busca_mensal`
+# grava `f"{cnpj}: {exc}"` em `busca.erros`, renderizado no painel de
+# Busca de Leads.
+
+SENHA_DE_BANCO = "SenhaSuperSecreta123"
+
+
+@pytest.mark.parametrize("url", [
+    f"postgresql://postgres:{SENHA_DE_BANCO}@db:5432/hunterpro",
+    f"postgresql+psycopg2://user:{SENHA_DE_BANCO}@localhost/x",
+    f"redis://:{SENHA_DE_BANCO}@cache:6379/0",          # Redis: sem usuário
+    f"amqp://guest:{SENHA_DE_BANCO}@broker:5672//",
+    f"mongodb+srv://u:{SENHA_DE_BANCO}@cluster.net/db",
+])
+def test_senha_em_connection_string_e_redigida(url):
+    redigido = redigir_segredos(f"OperationalError: could not connect to {url}")
+    assert SENHA_DE_BANCO not in redigido
+    assert MARCADOR in redigido
+
+
+def test_usuario_e_host_sao_preservados():
+    """Redigir a senha não pode cegar o diagnóstico -- saber que conectou
+    com o usuário/host errado continua útil."""
+    redigido = redigir_segredos(f"postgresql://postgres:{SENHA_DE_BANCO}@db:5432/hunterpro")
+    assert "postgres" in redigido and "db:5432" in redigido and "hunterpro" in redigido
+
+
+def test_duas_urls_na_mesma_mensagem_sao_ambas_redigidas():
+    """O padrão não pode atravessar de uma URL até o `@` da seguinte,
+    engolindo o texto do meio."""
+    texto = f"falhou em postgresql://a:{SENHA_DE_BANCO}@h1/d e em redis://:outraSenha@h2/0"
+    redigido = redigir_segredos(texto)
+    assert SENHA_DE_BANCO not in redigido
+    assert "outraSenha" not in redigido
+    assert " e em " in redigido, "o texto entre as URLs tem que sobreviver"
+
+
+def test_url_sem_credencial_fica_intacta():
+    url = "https://api.hunter.io/v2/email-finder?domain=x.com"
+    assert redigir_segredos(url) == url
+
+
+def test_traceback_redigido_mantem_o_traceback_e_esconde_a_senha():
+    """O helper existe pra não ter que escolher entre depurar e vazar --
+    `logger.exception` não permite sanitizar o traceback formatado."""
+    from app.core.segredos import traceback_redigido
+
+    try:
+        raise ConnectionError(f"could not connect to postgresql://u:{SENHA_DE_BANCO}@db/x")
+    except ConnectionError:
+        saida = traceback_redigido()
+
+    assert SENHA_DE_BANCO not in saida
+    assert MARCADOR in saida
+    assert "Traceback" in saida, "o traceback tem que continuar lá"
+    assert "ConnectionError" in saida
+
+
+def test_erro_de_cnpj_no_painel_admin_sai_redigido(monkeypatch, db_session):
+    """Ponta a ponta: a string que chega em `busca.erros` (renderizada no
+    painel) não pode conter a senha do banco."""
+    from app.models.busca_leads import BuscaLeads, StatusBusca
+    from app.models.user import User, UserRole
+
+    usuario = User(email="a@b.c", senha_hash="x", role=UserRole.ADMIN.value)
+    db_session.add(usuario)
+    db_session.commit()
+    busca = BuscaLeads(iniciado_por_id=usuario.id, status=StatusBusca.EXECUTANDO.value)
+    db_session.add(busca)
+    db_session.commit()
+
+    monkeypatch.setattr(celery_app, "gerar_semente_leads", lambda: {
+        "status": "ok",
+        "estabelecimentos": [{"cnpj": "11222333000181", "razao_social": "X",
+                              "municipio_codigo_rfb": "7107", "situacao_cadastral": "02", "uf": "SP"}],
+    })
+    monkeypatch.setattr(celery_app, "_indice_pgfn_populado", lambda c: True)
+    monkeypatch.setattr(celery_app, "_carregar_municipios_rfb", lambda: {})
+    monkeypatch.setattr(celery_app, "_coletar_sinais_gratuitos",
+                        lambda ests, **kw: [{**e, "qtd_inscricoes_ativas": 1, "zona_franca": False,
+                                             "score_preliminar": 10, "fase_selecao": "divida_ativa"} for e in ests])
+
+    def _explode(cnpj, **kw):
+        raise ConnectionError(f"could not connect to postgresql://postgres:{SENHA_DE_BANCO}@db:5432/hp")
+
+    monkeypatch.setattr(celery_app, "process_lead_pipeline", _explode)
+
+    resultado = celery_app.executar_busca_mensal(busca.id, db=db_session)
+
+    texto_dos_erros = " ".join(resultado["erros"])
+    assert SENHA_DE_BANCO not in texto_dos_erros
+    assert MARCADOR in texto_dos_erros

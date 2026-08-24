@@ -83,6 +83,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator
 
+from app.core.segredos import traceback_redigido
 from app.services.arquivo_utils import ArquivoZipInvalidoError, abrir_csv_unico
 
 logger = logging.getLogger(__name__)
@@ -523,7 +524,10 @@ def build_municipios_index(
                 if codigo and descricao:
                     indice[codigo] = descricao
         except (OSError, UnicodeDecodeError, csv.Error, zipfile.BadZipFile, ArquivoZipInvalidoError):
-            logger.exception("Falha lendo a tabela de municípios da RFB em %s -- ignorando esse arquivo.", path)
+            logger.error(
+                "Falha lendo a tabela de municípios da RFB em %s -- ignorando esse arquivo.\n%s",
+                path, traceback_redigido(),
+            )
             continue
     return indice
 

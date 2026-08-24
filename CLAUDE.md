@@ -4289,6 +4289,98 @@ session fixed), and it had **no progress bar** (there is no *monthly*
 generation quota — the limit is per lead — and a bar would imply a global cap
 that doesn't exist).
 
+### Login hardening — timing oracle + rate limiting (2026-08-24)
+
+Two findings from the security audit, both on `POST /api/auth/login`.
+
+**1. Timing oracle — the generic error message was being undone by the
+clock.** `auth.py` used to read:
+
+```python
+if usuario is None or not usuario.ativo or not verify_password(...):
+```
+
+The `or` short-circuits, so a nonexistent email returned **before** bcrypt
+ever ran. Measured: **7.7 ms vs 459.4 ms** for a wrong password — **59x**.
+That's enough to enumerate which emails have accounts by stopwatch alone,
+defeating the single generic 401 the route deliberately uses to avoid
+exactly that.
+
+`_autenticar` now **always runs bcrypt exactly once**, against
+`_HASH_DUMMY` when the user doesn't exist. Inactive users don't return
+early either — that would be a third timing bucket, i.e. an oracle for
+"this account exists but is disabled". Measured after: **1.10x**.
+
+⚠️ `_HASH_DUMMY` is generated at import from a random password, **not
+hardcoded**: that way it carries exactly the cost factor `hash_password` is
+using *now*. A pasted hash would freeze the cost of the day it was pasted,
+and the timing equality — the whole point — would silently break the day
+bcrypt's parameters changed. Cost: one bcrypt (~0.25 s) per process, once.
+
+**2. No rate limiting existed at all** — no slowapi, no nginx `limit_req`,
+no attempt counter. `app/core/rate_limit.py` adds a Redis counter (`INCR` +
+`EXPIRE`), 5 attempts per email per 15 min (`LOGIN_MAX_TENTATIVAS`,
+`LOGIN_JANELA_BLOQUEIO_MINUTOS`; `<= 0` disables, same convention as
+`LIMITE_GERACOES_IA_POR_LEAD`).
+
+Redis rather than a library: the project already runs Redis, and the counter
+is literally `INCR`+`EXPIRE`. A new dependency would bring middleware, its
+own storage and a second way to configure limits — more to maintain than the
+problem asks. It also survives process restarts and works across replicas,
+which an in-memory dict wouldn't.
+
+⚠️ **Fails OPEN.** Redis down → login keeps working, unlimited, with a
+warning logged. Deliberate: failing closed would lock every user out of a
+two-user product over a Redis blip. Whoever can DoS Redis to bypass the limit
+already has a bigger lever.
+
+⚠️ **Known gaps, not oversights**: keyed by **email** (as specified), so it
+stops brute force against one account but **not password spraying** across
+many. No IP key because nginx sits in front (`X-Real-IP`) and trusting that
+header without validating the proxy chain would let anyone forge an IP and
+reset their own counter — that needs an infra decision about which proxies to
+trust, not a code change.
+
+The 429 is checked **before** touching the DB (no point spending a bcrypt on
+a request already refused). That doesn't create a new oracle: seeing the 429
+requires having caused those failures yourself on that email, which says
+nothing about whether it exists.
+
+**Email is normalized** (`strip().lower()`) for the counter key — otherwise
+alternating `A@X.com`/`a@x.com` would give unlimited attempts.
+
+### `redigir_segredos` now covers connection-string passwords (2026-08-24)
+
+Third audit finding. The redactor knew `chave=valor` params and the literal
+values of `Settings` fields ending in `_KEY`/`_TOKEN`/`_SECRET`/… —
+`DATABASE_URL`, `REDIS_URL` and `CELERY_BROKER_URL` fell through **because
+they end in `_URL`**, despite carrying passwords.
+
+⚠️ **The path where it mattered is user-visible**: `executar_busca_mensal`
+stores `f"{cnpj}: {exc}"` in `busca.erros`, which is **rendered in the Busca
+de Leads panel**. A connection error whose text included the URL would put
+the database password on screen.
+
+`_PADRAO_SENHA_EM_URL` handles `postgresql://user:pw@host`,
+`redis://:pw@host` (no user), `amqp://`, `mongodb+srv://`. **User and host
+are preserved** — knowing you connected as the wrong user is still
+diagnostic; only the password becomes the marker. The pattern can't span from
+one URL to the next `@` (it would swallow whatever sat between two URLs on
+the same line).
+
+**`traceback_redigido()`** was added so the fix didn't cost debuggability.
+`logger.exception` writes a traceback formatted by `logging` itself, which
+can't be sanitized afterward — that's why `_rodar_etapa` gave its traceback
+up in 23/08/2026. This helper formats it, redacts it, and it gets logged as
+an ordinary message: **full traceback, no secrets**. Applied at the five
+sites the audit named (`celery_app.py` Google Places / seed / free-signals /
+per-CNPJ, and `receita_federal_bulk.py` municipality table). No
+`logger.exception` remains in production code.
+
+(`_rodar_etapa` still logs without a traceback — it already redacts, so
+there's no leak to fix there; switching it to `traceback_redigido()` would be
+a debuggability improvement only, left out to keep this change scoped.)
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

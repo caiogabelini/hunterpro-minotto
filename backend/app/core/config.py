@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "changeme-in-env"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 12  # 12h
 
+    # Anti-força-bruta no login (ver app/core/rate_limit.py). Contador por
+    # e-mail no Redis. `LOGIN_MAX_TENTATIVAS <= 0` desliga a checagem --
+    # mesma convenção de LIMITE_GERACOES_IA_POR_LEAD: config zerada por
+    # engano deve liberar, não trancar todo mundo pra fora.
+    LOGIN_MAX_TENTATIVAS: int = 5
+    LOGIN_JANELA_BLOQUEIO_MINUTOS: int = 15
+
     # --- APIs de enriquecimento (mesmo stack validado no projeto SR Contábil) ---
     GOOGLE_API_KEY: str = ""
     # Quantas vezes cada lead pode ter CADA tipo de geração de IA

@@ -99,7 +99,7 @@ from celery.signals import task_prerun, worker_ready
 # justamente não depender de qual task roda primeiro.
 import app.models  # noqa: F401
 from app.core.config import settings
-from app.core.segredos import redigir_segredos
+from app.core.segredos import redigir_segredos, traceback_redigido
 from app.core.tempo import agora_utc
 
 logger = logging.getLogger(__name__)
@@ -404,9 +404,10 @@ def search_google_places(estabelecimentos: list[dict]) -> list[dict]:
             try:
                 lugar = buscar_estabelecimento(nome_busca, estabelecimento.get("uf"))
             except Exception:
-                logger.exception(
-                    "Busca no Google Places falhou pro CNPJ %s -- seguindo sem esse sinal.",
+                logger.error(
+                    "Busca no Google Places falhou pro CNPJ %s -- seguindo sem esse sinal.\n%s",
                     estabelecimento.get("cnpj"),
+                    traceback_redigido(),
                 )
 
         resultado.append({
@@ -1672,8 +1673,11 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         try:
             semente = gerar_semente_leads()
         except Exception as exc:
-            logger.exception("executar_busca_mensal: gerar_semente_leads falhou pra busca %s.", busca_id)
-            return _abortar(f"gerar_semente_leads: {exc}")
+            logger.error(
+                "executar_busca_mensal: gerar_semente_leads falhou pra busca %s.\n%s",
+                busca_id, traceback_redigido(),
+            )
+            return _abortar(f"gerar_semente_leads: {redigir_segredos(exc)}")
 
         estabelecimentos = semente.get("estabelecimentos") or []
         busca.total_cnpjs_encontrados = len(estabelecimentos)
@@ -1730,7 +1734,10 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                 municipios_por_codigo=municipios_por_codigo,
             )
         except Exception as exc:
-            logger.exception("executar_busca_mensal: coleta de sinais gratuitos falhou pra busca %s.", busca_id)
+            logger.error(
+                "executar_busca_mensal: coleta de sinais gratuitos falhou pra busca %s.\n%s",
+                busca_id, traceback_redigido(),
+            )
             return _abortar(f"pré-seleção (sinais gratuitos): {exc}")
 
         if not municipios_por_codigo:
@@ -1805,8 +1812,15 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                 if (resultado_lead or {}).get("site_scrape_sucesso") is False:
                     cnpjs_sem_leitura_de_site.append(cnpj)
             except Exception as exc:
-                logger.exception("executar_busca_mensal: CNPJ %s falhou na busca %s.", cnpj, busca_id)
-                erros.append(f"{cnpj}: {exc}")
+                # ⚠️ `redigir_segredos` obrigatório aqui: esta string vai
+                # pra `busca.erros` e é RENDERIZADA no painel de Busca de
+                # Leads. Um erro de conexão cujo texto inclua a
+                # DATABASE_URL exporia a senha do banco na tela.
+                logger.error(
+                    "executar_busca_mensal: CNPJ %s falhou na busca %s.\n%s",
+                    cnpj, busca_id, traceback_redigido(),
+                )
+                erros.append(f"{cnpj}: {redigir_segredos(exc)}")
 
         aviso_scrape = _aviso_scrapes_falhos(cnpjs_sem_leitura_de_site, total_processados)
         if aviso_scrape:

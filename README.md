@@ -1467,6 +1467,33 @@ Em ordem de prioridade combinada com o cliente:
     `GET /api/dashboard/summary` (com testes), pronto pra voltar à tela
     se um dia quiserem. O controle de custo em si não foi tocado.
 
+35. ~~Login sem rate limiting + oráculo de timing~~ ✅ **feito**
+    (24/08/2026, itens críticos da auditoria de segurança).
+    - **Timing:** o curto-circuito do `or` fazia e-mail inexistente
+      responder em 7,7 ms contra 459,4 ms de senha errada — **59x**, o
+      que permitia descobrir quais e-mails têm cadastro só cronometrando
+      (anulando a mensagem genérica que existe justo pra isso). Agora o
+      bcrypt roda **sempre**, contra um hash descartável quando o
+      usuário não existe. Medido depois: **1,10x**.
+    - **Rate limiting:** 5 tentativas por e-mail a cada 15 min, contador
+      no Redis (`LOGIN_MAX_TENTATIVAS` / `LOGIN_JANELA_BLOQUEIO_MINUTOS`,
+      `0` desliga), 429 com mensagem clara. **Falha aberto** se o Redis
+      cair — travar todo mundo pra fora por instabilidade de cache é pior
+      que ficar sem o limite temporariamente.
+    - **Redação de senha em connection string:** `redigir_segredos` não
+      cobria `DATABASE_URL`/`REDIS_URL`/`CELERY_BROKER_URL` (terminam em
+      `_URL`, não em `_KEY`). Importava porque `busca.erros` é
+      **renderizado no painel** — um erro de conexão poria a senha do
+      banco na tela. Novo `traceback_redigido()` mantém o traceback
+      inteiro e ainda assim redige.
+
+    ⚠️ **Continua em aberto da auditoria** (não bloqueante, decidir
+    depois): JWT de 12h sem revogação; `/docs` e `/openapi.json`
+    públicos (o campo `ENVIRONMENT` existe mas não é usado em lugar
+    nenhum); e **confirmar que `SECRET_KEY` e `FRONTEND_ORIGIN` em
+    produção não estão no valor de exemplo** — o `.env` local tem um
+    `SECRET_KEY` contendo "troque", padrão de placeholder.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

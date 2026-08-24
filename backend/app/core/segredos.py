@@ -25,7 +25,7 @@ como sondar alternativa daqui (a API está atrás de um Cloudflare que
 responde 403 a este ambiente). Então a chave dele vai continuar na URL, e
 o que impede o vazamento é a redação no ponto onde o texto viraria log.
 
-DUAS ESTRATÉGIAS, de propósito — uma não cobre a outra:
+TRÊS ESTRATÉGIAS, de propósito — nenhuma cobre as outras:
 
   1. **Por nome de parâmetro** (`_PADRAO_PARAM_SENSIVEL`): pega
      `?api_key=...`, `&token=...` etc. mesmo de um serviço que este
@@ -35,6 +35,21 @@ DUAS ESTRATÉGIAS, de propósito — uma não cobre a outra:
      troca por `***`. Pega o caso que a primeira não pega — a chave
      aparecendo num corpo de resposta, num header ecoado, num nome de
      parâmetro que ninguém previu.
+
+  3. **Senha dentro de connection string**
+     (`_PADRAO_SENHA_EM_URL`): `postgresql://user:senha@host/db`,
+     `redis://:senha@host:6379/0`, `amqp://user:senha@broker`. As duas
+     primeiras estratégias NÃO pegam isto: não há `chave=valor` na URL, e
+     a estratégia 2 só conhece campos de `Settings` terminados em
+     `_KEY`/`_TOKEN`/... — `DATABASE_URL`, `REDIS_URL` e
+     `CELERY_BROKER_URL` ficavam de fora justamente por terminarem em
+     `_URL`.
+
+     ⚠️ Achado na auditoria de segurança de 24/08/2026, e o caminho onde
+     importa é VISÍVEL AO USUÁRIO: `executar_busca_mensal` guarda
+     `f"{cnpj}: {exc}"` em `busca.erros`, que é renderizado no painel de
+     Busca de Leads. Um erro de conexão cujo texto inclua a URL exporia a
+     senha do banco na tela.
 
 ⚠️ Strings vazias NUNCA entram na estratégia 2 — `texto.replace("", ...)`
 insere o marcador entre cada caractere e destruiria a mensagem. É o caso
@@ -51,6 +66,19 @@ MARCADOR = "***REDIGIDO***"
 _PADRAO_PARAM_SENSIVEL = re.compile(
     r"(?i)\b(api[_-]?key|apikey|key|token|access[_-]?token|secret|password|senha|auth)"
     r"(=|%3D)([^&\s'\"]*)"
+)
+
+# Senha embutida em connection string: `<esquema>://<usuario>:<SENHA>@host`.
+#
+# O usuário é preservado (ajuda a diagnosticar "conectou com o usuário
+# errado"), só a senha vira marcador. Casa também a forma sem usuário
+# (`redis://:senha@host`), comum em Redis com requirepass.
+#
+# `[^\s:/@]*` no usuário e `[^\s/@]+` na senha impedem que o casamento
+# atravesse espaço ou barra -- sem isso, um texto com duas URLs na mesma
+# linha viraria um casamento só, engolindo o que houvesse no meio.
+_PADRAO_SENHA_EM_URL = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s:/@]*:)([^\s/@]+)(@)"
 )
 
 # Sufixos de nome de campo em `Settings` que indicam segredo. Baseado nos
@@ -99,6 +127,7 @@ def redigir_segredos(texto: object) -> str:
     um vazamento por um crash.
     """
     resultado = _PADRAO_PARAM_SENSIVEL.sub(rf"\1\2{MARCADOR}", str(texto))
+    resultado = _PADRAO_SENHA_EM_URL.sub(rf"\1{MARCADOR}\3", resultado)
 
     try:
         for valor in _valores_secretos():
@@ -107,3 +136,25 @@ def redigir_segredos(texto: object) -> str:
         pass
 
     return resultado
+
+
+def traceback_redigido() -> str:
+    """
+    O traceback da exceção em tratamento, já passado por
+    `redigir_segredos`. Use dentro de um `except`.
+
+    ⚠️ **Existe pra não ter que escolher entre depurar e vazar.**
+    `logger.exception(...)` grava o traceback formatado pelo próprio
+    `logging`, e não há como sanitizar isso depois -- foi por isso que
+    `_rodar_etapa` (app/workers/celery_app.py) abriu mão do traceback em
+    23/08/2026. Com este helper dá pra manter o traceback INTEIRO e ainda
+    assim redigir: formata-se aqui, redige-se, e loga como mensagem
+    comum (`logger.error("...: %s", traceback_redigido())`), nunca com
+    `logger.exception`.
+
+    Fora de um `except` devolve a string "NoneType: None" do próprio
+    `traceback` -- inofensiva, mas sinal de uso errado.
+    """
+    import traceback
+
+    return redigir_segredos(traceback.format_exc())
