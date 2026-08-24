@@ -4349,6 +4349,48 @@ nothing about whether it exists.
 **Email is normalized** (`strip().lower()`) for the counter key — otherwise
 alternating `A@X.com`/`a@x.com` would give unlimited attempts.
 
+⚠️ **The 429 body carries the WINDOW, not the time remaining.** It returns
+`{"detail": "Muitas tentativas de login. Tente novamente em até 15 minutos."}`
+— `LOGIN_JANELA_BLOQUEIO_MINUTOS`, i.e. the *maximum* wait, not a live
+countdown. There is no `Retry-After` header either. Returning the real
+remaining time is a small change (`TTL` on the Redis key) that nobody has
+asked for yet; if it's ever added, `erroLogin.ts` already displays whatever
+`detail` says, so the frontend needs no change.
+
+### Login error messages: 401 vs 429 on the frontend (2026-08-24)
+
+Reported from production: the login screen showed **"E-mail ou senha
+inválidos" for every failure**, including the rate-limit 429. The user kept
+retrying, thinking it was just a wrong password — and **each retry re-armed
+the block window** (`registrar_falha` re-applies the `EXPIRE` on every
+failure), making the situation worse the harder they tried.
+
+The cause was one character: `handleSubmit` used a **parameterless `catch {}`**
+that discarded the error entirely and hardcoded the credentials message. The
+backend was already sending the right text; the frontend threw it away.
+
+Now `api.ts::login` raises **`RateLimitError`** on 429 — deliberately a
+separate class from `LimiteIaError` (also a 429): different domains,
+different messages, and whoever handles one shouldn't catch the other by
+accident. `erroLogin.ts::mensagemDeErroDeLogin` maps it to a message, with
+its own vitest cases (the project has no component-testing setup — same
+convention as `siteScrape.ts`/`limitesIa.ts`).
+
+⚠️ **The 429 message shown is the backend's own `detail`, not a string
+duplicated in the frontend.** It already reads "Tente novamente em até 15
+minutos", and reproducing it here would make the frontend lie the day
+`LOGIN_JANELA_BLOQUEIO_MINUTOS` changed in `.env`. The local fallback
+(`MENSAGEM_MUITAS_TENTATIVAS`) is used only if `detail` is missing, and
+**deliberately contains no number** — a test asserts that, since a hardcoded
+count could contradict the configured window.
+
+Everything that isn't a 429 — 401, network failure, malformed response —
+keeps the credentials message, exactly as before. Changing that (e.g.
+distinguishing "server unreachable") wasn't asked for and would alter text
+for cases nobody has complained about.
+
+
+
 ### `redigir_segredos` now covers connection-string passwords (2026-08-24)
 
 Third audit finding. The redactor knew `chave=valor` params and the literal

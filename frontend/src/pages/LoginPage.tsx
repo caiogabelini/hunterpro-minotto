@@ -2,6 +2,7 @@ import { Building2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { mensagemDeErroDeLogin } from "../erroLogin";
 import "./LoginPage.css";
 
 export function LoginPage() {
@@ -29,8 +30,11 @@ export function LoginPage() {
       await login(email, senha);
       const destino = (location.state as { from?: string } | null)?.from ?? "/";
       navigate(destino, { replace: true });
-    } catch {
-      setErro("E-mail ou senha inválidos");
+    } catch (e) {
+      // `catch (e)`, não `catch {}`: a versão anterior descartava o erro
+      // e fixava a mensagem de credenciais, escondendo o 429 do limite
+      // de tentativas -- ver src/erroLogin.ts.
+      setErro(mensagemDeErroDeLogin(e));
     } finally {
       setCarregando(false);
     }

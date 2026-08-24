@@ -241,6 +241,24 @@ export class LimiteIaError extends Error {
   }
 }
 
+/** Lançada quando o backend devolve 429 no LOGIN -- limite de tentativas
+ * atingido pra aquele e-mail (ver app/core/rate_limit.py).
+ *
+ * Separada de `LimiteIaError` (que também é 429) de propósito: são
+ * limites de domínios diferentes, com mensagens e ações diferentes, e
+ * quem trata um não deve capturar o outro por acidente.
+ *
+ * `message` carrega o `detail` do backend, que já vem em português e já
+ * inclui a janela ("Tente novamente em até 15 minutos") -- a tela mostra
+ * esse texto em vez de reescrevê-lo, pra que mudar
+ * LOGIN_JANELA_BLOQUEIO_MINUTOS no `.env` não exija deploy do frontend. */
+export class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
+
 function authHeaders(token: string): HeadersInit {
   return { Authorization: `Bearer ${token}` };
 }
@@ -271,6 +289,7 @@ export async function login(email: string, senha: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, senha }),
   });
+  if (res.status === 429) throw new RateLimitError(await parseErrorDetail(res));
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   const corpo = await res.json();
   return corpo.access_token as string;

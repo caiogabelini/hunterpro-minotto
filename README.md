@@ -1494,6 +1494,24 @@ Em ordem de prioridade combinada com o cliente:
     produção não estão no valor de exemplo** — o `.env` local tem um
     `SECRET_KEY` contendo "troque", padrão de placeholder.
 
+36. ~~Login mostrava a mesma mensagem pra credenciais erradas e pra
+    limite de tentativas~~ ✅ **feito** (24/08/2026). Relatado em
+    produção: o usuário ficava tentando de novo achando que era só senha
+    errada — e **cada tentativa renovava a janela de bloqueio**, piorando
+    o problema que ele tentava resolver.
+
+    A causa era um `catch {}` sem parâmetro em `LoginPage.tsx`, que
+    descartava o erro e fixava "E-mail ou senha inválidos". O backend já
+    mandava o texto certo; o frontend jogava fora. Agora o 429 vira um
+    `RateLimitError` e a tela mostra o `detail` do backend, que já inclui
+    a janela ("Tente novamente em até 15 minutos").
+
+    ⚠️ **O 429 devolve a JANELA, não o tempo restante.** São 15 minutos
+    no máximo, não uma contagem regressiva — e não há header
+    `Retry-After`. Devolver o tempo real é uma mudança pequena (TTL da
+    chave no Redis); se for feita, o frontend não precisa mudar, porque
+    ele já exibe o que vier no `detail`.
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar
