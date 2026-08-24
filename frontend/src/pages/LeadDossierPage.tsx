@@ -30,6 +30,7 @@ import {
   fetchMensagens,
   gerarAbordagemCanal,
   gerarInsights,
+  LimiteIaError,
   UnauthorizedError,
   type CanalAbordagem,
   type InsightsIA,
@@ -41,6 +42,7 @@ import { useAuth } from "../context/AuthContext";
 import { formatarNumeroWhatsapp, formatCurrencyBRL, formatDate, formatRelative } from "../format";
 import { getEmailsSecundarios, labelTipoEmail } from "../emailsSecundarios";
 import { getInsights } from "../insights";
+import { MENSAGEM_LIMITE_ATINGIDO, statusLimiteIa } from "../limitesIa";
 import { deveAvisarSiteNaoLido } from "../siteScrape";
 import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import { getScoreBreakdown } from "../leadScore";
@@ -88,6 +90,26 @@ export function LeadDossierPage() {
 
   function registrarNovaMensagem(mensagem: LeadMessage) {
     setMensagens((atuais) => [mensagem, ...atuais.filter((m) => m.canal !== mensagem.canal)]);
+    // Incrementa a contagem local do canal pra que o botão desabilite
+    // sozinho ao bater o limite, sem exigir um refetch do lead.
+    //
+    // `POST /gerar-abordagem/{canal}` devolve o LeadMessage criado, não o
+    // Lead -- diferente de `POST /gerar-insights`, que devolve o Lead
+    // inteiro já com `geracoes_ia` atualizado (por isso lá basta
+    // `setLead`). O incremento aqui espelha o que o backend acabou de
+    // contar; na próxima carga do dossiê o valor vem do servidor de novo.
+    setLead((atual) => {
+      if (!atual) return atual;
+      const anteriores =
+        typeof atual.geracoes_ia === "object" && atual.geracoes_ia !== null
+          ? (atual.geracoes_ia as Record<string, number>)
+          : null;
+      if (!anteriores) return atual;
+      return {
+        ...atual,
+        geracoes_ia: { ...anteriores, [mensagem.canal]: (anteriores[mensagem.canal] ?? 0) + 1 },
+      };
+    });
   }
 
   return (
@@ -122,6 +144,7 @@ export function LeadDossierPage() {
               telefone={lead.telefone}
               mensagens={mensagens}
               onGerada={registrarNovaMensagem}
+              geracoesIa={lead.geracoes_ia}
             />
           )}
 
@@ -131,6 +154,7 @@ export function LeadDossierPage() {
               insights={getInsights(lead.insights_ia)}
               geradoEm={lead.insights_gerado_em}
               onGerado={setLead}
+              geracoesIa={lead.geracoes_ia}
             />
           )}
         </>
@@ -609,6 +633,7 @@ function SecaoAbordagem({
   telefone,
   mensagens,
   onGerada,
+  geracoesIa,
 }: {
   leadId: string;
   email?: string | null;
@@ -616,6 +641,7 @@ function SecaoAbordagem({
   telefone?: string | null;
   mensagens: LeadMessage[];
   onGerada: (mensagem: LeadMessage) => void;
+  geracoesIa: unknown;
 }) {
   const mostrarEmail = !!email;
   // WhatsApp aqui exige o sinal *confirmado ativo* (whatsapp_ativo),
@@ -644,6 +670,7 @@ function SecaoAbordagem({
             mensagem={mensagens.find((m) => m.canal === "email") ?? null}
             onGerada={onGerada}
             email={email}
+            geracoesIa={geracoesIa}
           />
         )}
         {mostrarWhatsapp && (
@@ -654,6 +681,7 @@ function SecaoAbordagem({
             mensagem={mensagens.find((m) => m.canal === "whatsapp") ?? null}
             onGerada={onGerada}
             telefone={telefone}
+            geracoesIa={geracoesIa}
           />
         )}
       </div>
@@ -669,6 +697,7 @@ function CanalAbordagemCard({
   onGerada,
   email,
   telefone,
+  geracoesIa,
 }: {
   leadId: string;
   canal: CanalAbordagem;
@@ -677,6 +706,7 @@ function CanalAbordagemCard({
   onGerada: (mensagem: LeadMessage) => void;
   email?: string | null;
   telefone?: string | null;
+  geracoesIa: unknown;
 }) {
   const { token, logout } = useAuth();
   const [gerando, setGerando] = useState(false);
@@ -694,11 +724,17 @@ function CanalAbordagemCard({
         logout();
         return;
       }
-      setErro("Não foi possível gerar a mensagem agora. Tente novamente.");
+      setErro(
+        e instanceof LimiteIaError
+          ? e.message
+          : "Não foi possível gerar a mensagem agora. Tente novamente.",
+      );
     } finally {
       setGerando(false);
     }
   }
+
+  const limite = statusLimiteIa(geracoesIa, canal);
 
   const numeroWhatsapp = formatarNumeroWhatsapp(telefone);
 
@@ -735,23 +771,31 @@ function CanalAbordagemCard({
                 <span>Enviar mensagem gerada</span>
               </a>
             )}
-            <button
-              type="button"
-              className="dossier-abordagem-btn-secundario"
-              onClick={gerar}
-              disabled={gerando}
-              aria-busy={gerando}
-            >
-              {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
-            </button>
+            {limite.atingido ? (
+              <p className="dossier-limite-ia">{MENSAGEM_LIMITE_ATINGIDO}</p>
+            ) : (
+              <button
+                type="button"
+                className="dossier-abordagem-btn-secundario"
+                onClick={gerar}
+                disabled={gerando}
+                aria-busy={gerando}
+              >
+                {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
+              </button>
+            )}
           </div>
         </>
       ) : (
         <>
           <p className="dossier-muted">Mensagem ainda não gerada.</p>
-          <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
-            {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar mensagem com IA"}
-          </button>
+          {limite.atingido ? (
+            <p className="dossier-limite-ia">{MENSAGEM_LIMITE_ATINGIDO}</p>
+          ) : (
+            <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
+              {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar mensagem com IA"}
+            </button>
+          )}
         </>
       )}
       {erro && <p className="dossier-abordagem-erro">{erro}</p>}
@@ -790,11 +834,13 @@ function AbaInsights({
   insights,
   geradoEm,
   onGerado,
+  geracoesIa,
 }: {
   leadId: string;
   insights: InsightsIA | null;
   geradoEm?: string | null;
   onGerado: (lead: Lead) => void;
+  geracoesIa: unknown;
 }) {
   const { token, logout } = useAuth();
   const [gerando, setGerando] = useState(false);
@@ -812,11 +858,17 @@ function AbaInsights({
         logout();
         return;
       }
-      setErro("Não foi possível gerar os insights agora. Tente novamente.");
+      setErro(
+        e instanceof LimiteIaError
+          ? e.message
+          : "Não foi possível gerar os insights agora. Tente novamente.",
+      );
     } finally {
       setGerando(false);
     }
   }
+
+  const limite = statusLimiteIa(geracoesIa, "insights");
 
   if (!insights) {
     return (
@@ -826,9 +878,13 @@ function AbaInsights({
           Ainda não geramos uma análise estratégica pra este lead. A IA olha pro score, dívida PGFN, RQE,
           presença digital e outros sinais já coletados e sugere como priorizar a abordagem.
         </p>
-        <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
-          {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar Insights com IA"}
-        </button>
+        {limite.atingido ? (
+          <p className="dossier-limite-ia">{MENSAGEM_LIMITE_ATINGIDO}</p>
+        ) : (
+          <button type="button" className="dossier-abordagem-btn" onClick={gerar} disabled={gerando} aria-busy={gerando}>
+            {gerando ? <Loader2 size={15} className="spin" aria-label="Gerando..." /> : "Gerar Insights com IA"}
+          </button>
+        )}
         {erro && <p className="dossier-abordagem-erro">{erro}</p>}
       </section>
     );
@@ -838,15 +894,19 @@ function AbaInsights({
     <section className="dossier-card dossier-insights">
       <div className="dossier-insights-header">
         <SectionHeading icon={Lightbulb}>Insights estratégicos</SectionHeading>
-        <button
-          type="button"
-          className="dossier-abordagem-btn-secundario"
-          onClick={gerar}
-          disabled={gerando}
-          aria-busy={gerando}
-        >
-          {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
-        </button>
+        {limite.atingido ? (
+          <p className="dossier-limite-ia">{MENSAGEM_LIMITE_ATINGIDO}</p>
+        ) : (
+          <button
+            type="button"
+            className="dossier-abordagem-btn-secundario"
+            onClick={gerar}
+            disabled={gerando}
+            aria-busy={gerando}
+          >
+            {gerando ? <Loader2 size={14} className="spin" aria-label="Gerando..." /> : "Gerar novamente"}
+          </button>
+        )}
       </div>
 
       {geradoEm && <p className="dossier-insights-data">Gerado {formatRelative(geradoEm)}</p>}

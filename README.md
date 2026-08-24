@@ -1441,6 +1441,30 @@ Em ordem de prioridade combinada com o cliente:
     contexto dos insights de IA. E só o *padrão* é afetado: uma vez que
     o usuário salva premissas pelo `PUT`, o valor salvo prevalece.
 
+34. ~~Controle de custo nas gerações de IA do dossiê~~ ✅ **feito**
+    (24/08/2026). Os botões "Gerar mensagem"/"Gerar Insights" eram
+    clicáveis sem limite — cada clique é uma chamada paga à Anthropic, e
+    a tela vai pra usuários "client".
+
+    Agora cada lead tem **2 gerações por tipo** (e-mail, WhatsApp,
+    insights) antes de exigir liberação. Limite configurável em
+    `LIMITE_GERACOES_IA_POR_LEAD` (`0` desliga a checagem). Backend
+    devolve **429** antes de qualquer chamada à IA; o dossiê troca o
+    botão pela mensagem "Limite de gerações atingido — contate um
+    administrador". Admin libera em
+    `POST /api/admin/leads/{lead_id}/resetar-limite-ia/{tipo}` (403 pra
+    "client" — quem é limitado não pode ser quem libera).
+
+    ⚠️ **O reset não apaga histórico**: pra e-mail/WhatsApp ele grava
+    uma marca d'água (`Lead.ia_limite_resetado_em`) e a contagem passa a
+    valer dali pra frente; as mensagens antigas continuam em
+    `lead_messages`.
+
+    Visibilidade: "Gerações de IA este mês" no Dashboard, dentro de
+    "Consumo do plano". ⚠️ Subestima levemente — insights não têm
+    histórico por geração, então um lead gerado 2x no mesmo mês conta 1
+    (erro máximo de 1 por lead).
+
 **Nota operacional:** o download do arquivo trimestral da PGFN em si (via
 navegador, de dadosabertos.pgfn.gov.br) ainda é manual — colocar o
 arquivo em `PGFN_DADOS_ABERTOS_DIR` (ver `.env`) e rodar

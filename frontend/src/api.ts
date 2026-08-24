@@ -123,6 +123,12 @@ export interface Lead {
   mensagem_abordagem?: string | null;
   insights_ia?: InsightsIA | null;
   insights_gerado_em?: string | null;
+  insights_geracoes_count?: number;
+  // Contagem de gerações de IA por tipo + limite vigente
+  // ({email, whatsapp, insights, limite}). Só `GET /api/leads/{id}`
+  // preenche -- as rotas de lista deixam null (evita N+1). Lido via
+  // `statusLimiteIa` (defensivo), nunca direto.
+  geracoes_ia?: unknown;
   created_at: string;
   updated_at: string;
 }
@@ -134,6 +140,7 @@ export interface DashboardSummary {
   score_medio: number;
   leads_em_negociacao: number;
   taxa_conversao: number;
+  total_geracoes_ia_mes: number;
   receita_fechada_pontual: number;
   receita_fechada_recorrente_mensal: number;
   receita_fechada_total: number;
@@ -220,6 +227,17 @@ export class ConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ConflictError";
+  }
+}
+
+/** Lançada quando o backend devolve 429 -- limite de gerações de IA
+ * atingido pro lead (ver app/api/routes/limites_ia.py). Na prática rara:
+ * a tela já desabilita o botão antes. Existe pro caso de corrida (duas
+ * abas abertas) e pra não virar um "erro genérico" sem explicação. */
+export class LimiteIaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LimiteIaError";
   }
 }
 
@@ -323,6 +341,7 @@ export async function gerarAbordagemCanal(token: string, leadId: string, canal: 
     headers: authHeaders(token),
   });
   if (res.status === 401) throw new UnauthorizedError();
+  if (res.status === 429) throw new LimiteIaError(await parseErrorDetail(res));
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   return res.json();
 }
@@ -333,6 +352,7 @@ export async function gerarInsights(token: string, leadId: string): Promise<Lead
     headers: authHeaders(token),
   });
   if (res.status === 401) throw new UnauthorizedError();
+  if (res.status === 429) throw new LimiteIaError(await parseErrorDetail(res));
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   return res.json();
 }

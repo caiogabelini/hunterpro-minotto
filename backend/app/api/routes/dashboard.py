@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.tempo import agora_utc
 from app.models.lead import Lead
+from app.models.lead_message import LeadMessage
 from app.models.user import User
 from app.schemas.dashboard import AcaoRecomendada, DashboardPremissas, DashboardSummary, FunilEtapa, MotivoPerda
 
@@ -166,6 +167,7 @@ def get_summary(
         score_medio=score_medio,
         leads_em_negociacao=leads_em_negociacao,
         taxa_conversao=taxa_conversao,
+        total_geracoes_ia_mes=_total_geracoes_ia_mes(db, _inicio_do_mes_atual()),
         receita_fechada_pontual=receita_fechada_pontual,
         receita_fechada_recorrente_mensal=receita_fechada_recorrente_mensal,
         receita_fechada_total=receita_fechada_pontual + receita_fechada_recorrente_mensal,
@@ -232,6 +234,41 @@ def get_acoes_recomendadas(
     ]
 
     return [acao for acao in candidatas if acao.quantidade > 0]
+
+
+def _total_geracoes_ia_mes(db: Session, inicio_do_mes: datetime) -> int:
+    """
+    Quantas gerações de IA aconteceram no mês corrente, somando os três
+    tipos. Só visibilidade de custo no Dashboard -- não alimenta nenhuma
+    decisão nem trava nada (o limite é por lead, ver
+    app/api/routes/limites_ia.py).
+
+    ⚠️ **APROXIMADO POR BAIXO, e de propósito.** E-mail e WhatsApp são
+    exatos: cada geração é uma linha em `lead_messages`, com
+    `gerado_em`. Insights NÃO tem histórico -- `Lead.insights_ia` é
+    sobrescrito e só resta `insights_gerado_em` (a ÚLTIMA geração). Então
+    um lead gerado duas vezes no mesmo mês conta 1 aqui, não 2.
+
+    O erro é limitado: no máximo `LIMITE_GERACOES_IA_POR_LEAD - 1` por
+    lead (hoje, 1). Contar exato exigiria uma tabela de histórico de
+    insights, que é mudança bem maior do que um número de visibilidade
+    justifica. Preferido subestimar a inventar -- somar
+    `insights_geracoes_count` inteiro contaria gerações de meses
+    anteriores, o que seria pior que o arredondamento pra baixo.
+    """
+    mensagens = db.execute(
+        select(func.count())
+        .select_from(LeadMessage)
+        .where(LeadMessage.gerado_em >= inicio_do_mes)
+    ).scalar() or 0
+
+    insights = db.execute(
+        select(func.count())
+        .select_from(Lead)
+        .where(Lead.insights_gerado_em >= inicio_do_mes)
+    ).scalar() or 0
+
+    return mensagens + insights
 
 
 def _leads_qualificados_padrao(db: Session) -> int:

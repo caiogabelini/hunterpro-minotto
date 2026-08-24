@@ -4194,6 +4194,92 @@ scraping that same Instagram URL, and nothing stops `Lead.site` from being
 an Instagram link. Both are separate decisions (an Instagram page *is* a
 real digital-presence signal), just not an email domain.
 
+### AI generation limits — cost control (2026-08-24)
+
+Every "Gerar mensagem"/"Gerar Insights" in the dossier is a paid Anthropic
+call, and the buttons were clickable without limit. With the screen going to
+"client" users (Douglas/Sulamita), that's real uncontrolled spend.
+
+**`app/api/routes/limites_ia.py` is the single source of the rule** — the two
+generation routes, the admin reset, `GET /api/leads/{id}` and the Dashboard
+all go through it. Duplicating the count per call site is how frontend and
+backend end up disagreeing about how many generations are left.
+
+**Two ways of counting, because the two data shapes differ:**
+- **email/WhatsApp**: each generation is a `lead_messages` row (history,
+  never overwritten) → `COUNT(*)` by `lead_id` + `canal`.
+- **insights**: `Lead.insights_ia` is *overwritten* each time, no history →
+  hence the new `Lead.insights_geracoes_count`.
+
+⚠️ **Reset never destroys history.** Zeroing the email/WhatsApp counter by
+deleting `lead_messages` rows would destroy exactly what that table exists
+for. Instead the reset stamps `Lead.ia_limite_resetado_em[tipo]`, and
+counting only considers generations *after* that instant. Insights (no
+history) really does zero the integer, and still records the stamp as an
+audit trail of when an admin released it.
+
+**Endpoints**: both generation routes return **429** with a single shared
+`detail` when the limit is hit — checked **before** any AI call, since the
+whole point is not to spend. `POST /api/admin/leads/{lead_id}/resetar-limite-ia/{tipo}`
+is `require_admin`: whoever is limited can't be whoever lifts it (a "client"
+gets 403).
+
+**A failed generation doesn't consume quota** — `insights_geracoes_count` is
+incremented only after the 502 check, so an AI failure the user never saw
+doesn't cost them a try.
+
+**`settings.LIMITE_GERACOES_IA_POR_LEAD`** (default 2) lives in settings, not
+as a literal, so it's tunable without a deploy. **`<= 0` disables the check
+rather than blocking everything** — a config accidentally zeroed should
+release, not brick the product. The frontend reads the limit from the API
+payload (`geracoes_ia.limite`) for the same reason: hardcoding `2` there
+would make the two disagree the day someone changes the env var.
+
+**`LeadRead.geracoes_ia`** (`{email, whatsapp, insights, limite}`) is
+populated **only by `GET /api/leads/{id}`** — list routes leave it `None` on
+purpose: it needs a `COUNT` on `lead_messages` per lead, and doing that in a
+paginated list would be an N+1 for data no list screen uses.
+
+**Dashboard `total_geracoes_ia_mes`** ⚠️ **is approximate, low by design.**
+Messages are exact (`lead_messages.gerado_em`). Insights have no per-generation
+history — only `insights_gerado_em` (the *last* one) — so a lead generated
+twice in a month counts 1. Error is bounded at
+`LIMITE_GERACOES_IA_POR_LEAD - 1` per lead (today: 1). Counting exactly would
+need an insights history table, a far bigger change than a visibility number
+justifies; summing `insights_geracoes_count` outright would be *worse*, since
+it would include generations from previous months.
+
+**Migration** `e2c17d4a9f68` (13th). `insights_geracoes_count` is **NOT NULL
+with `server_default "0"`** — unusual for this project, and deliberate: NULL
+would have no meaning here (a lead that never generated has *zero*, not
+"unknown"), and the server_default is what backfills existing rows — without
+it the `ALTER` on a populated table would fail. Same call as `kanban_status`.
+Verified against real Postgres 16 (port 5438/5439): the 13 upgrade in chain
+order, `downgrade -1` reverts only this one, re-upgrade is clean, **and a row
+inserted *before* the migration came out with `0`, not NULL**.
+
+**Frontend**: `statusLimiteIa` (`src/limitesIa.ts`, 9 vitest cases) decides
+whether the button is replaced by "Limite de gerações atingido — contate um
+administrador". It **replaces** the button rather than disabling it in place —
+a visible-but-dead button gets clicked before it gets read. On an unreadable
+payload it **fails open** (button stays), because the backend is what actually
+prevents the spend; bricking the screen over an unreadable counter would turn
+a display bug into a broken product.
+
+After generating a message, `registrarNovaMensagem` bumps the local counter so
+the button disables itself without a refetch — `POST /gerar-abordagem/{canal}`
+returns the `LeadMessage`, not the Lead (unlike `/gerar-insights`, which
+returns the whole Lead with `geracoes_ia` already updated, so `setLead`
+suffices there).
+
+**The Dashboard card sits in "Consumo do plano", not Resumo Executivo** —
+thematically it's consumption like the leads/month count right above it, and
+practically the KPI grid was calibrated in an earlier session to fit exactly 5
+cards in one row (`minmax(176px, 1fr)` within 976px); a 6th would drop alone
+onto a second row, the very problem that session fixed. No progress bar: there
+is no *monthly* generation quota — the limit is per lead — and a bar would
+imply a global cap that doesn't exist.
+
 ### Migrations (`backend/alembic/`)
 
 **`alembic/versions/` was empty before 2026-08-20** — there was no

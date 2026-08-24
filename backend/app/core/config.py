@@ -29,6 +29,17 @@ class Settings(BaseSettings):
 
     # --- APIs de enriquecimento (mesmo stack validado no projeto SR Contábil) ---
     GOOGLE_API_KEY: str = ""
+    # Quantas vezes cada lead pode ter CADA tipo de geração de IA
+    # (e-mail, WhatsApp, insights) antes de exigir liberação do admin --
+    # ver app/api/routes/limites_ia.py. Controle de custo: cada geração é
+    # uma chamada paga à Anthropic, e a tela vai ficar acessível a
+    # usuários "client".
+    #
+    # `0` (ou negativo) DESLIGA o limite em vez de bloquear tudo -- o
+    # sentido do erro numa configuração zerada por engano é liberar, não
+    # travar o produto inteiro.
+    LIMITE_GERACOES_IA_POR_LEAD: int = 2
+
     HUNTER_API_KEY: str = ""
     # 🔴 DESLIGADO POR PADRÃO -- LIGAR SÓ DEPOIS DE FAZER UPGRADE DO PLANO.
     #

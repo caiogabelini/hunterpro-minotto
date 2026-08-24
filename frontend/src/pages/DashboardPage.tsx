@@ -11,6 +11,7 @@ import {
   PartyPopper,
   Percent,
   SlidersHorizontal,
+  Sparkles,
   Target,
   ThumbsDown,
   Trophy,
@@ -283,7 +284,44 @@ function SecaoConsumoPlano({ summary }: { summary: DashboardSummary }) {
           </p>
         )}
       </div>
+
+      <CardGeracoesIa total={summary.total_geracoes_ia_mes} />
     </section>
+  );
+}
+
+/**
+ * Gerações de IA (e-mail + WhatsApp + insights) no mês corrente. Só
+ * visibilidade de custo -- sem ação, sem barra de progresso.
+ *
+ * ⚠️ **Fica em "Consumo do plano", não no Resumo Executivo, por dois
+ * motivos.** Tema: é consumo, igual à contagem de leads/mês logo acima --
+ * as duas respondem "quanto já gastamos este mês". E layout: o grid do
+ * Resumo Executivo foi calibrado numa sessão anterior pra caber
+ * exatamente 5 cards numa linha (`minmax(176px, 1fr)` dentro dos 976px
+ * de largura útil da página); um 6º card estouraria a conta e cairia
+ * sozinho numa segunda linha -- que é justamente o problema que aquela
+ * sessão corrigiu.
+ *
+ * Sem barra de progresso de propósito: não existe "limite mensal de
+ * gerações". O limite é POR LEAD (settings.LIMITE_GERACOES_IA_POR_LEAD),
+ * então uma barra aqui insinuaria uma cota global que não existe.
+ *
+ * ⚠️ O número subestima levemente: insights não têm histórico por
+ * geração, então um lead com insights gerados 2x no mesmo mês conta 1.
+ * Ver `_total_geracoes_ia_mes` no backend.
+ */
+function CardGeracoesIa({ total }: { total: number }) {
+  return (
+    <div className="dashboard-card dashboard-geracoes-ia-card">
+      <div className="dashboard-geracoes-ia-icone">
+        <Sparkles size={18} />
+      </div>
+      <div>
+        <div className="dashboard-geracoes-ia-valor">{total}</div>
+        <div className="dashboard-geracoes-ia-label">Gerações de IA este mês</div>
+      </div>
+    </div>
   );
 }
 

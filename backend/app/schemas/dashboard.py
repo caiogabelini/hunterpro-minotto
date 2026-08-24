@@ -7,6 +7,9 @@ class DashboardSummary(BaseModel):
     score_medio: float
     leads_em_negociacao: int
     taxa_conversao: float
+    # Gerações de IA no mês corrente (e-mail + WhatsApp + insights).
+    # ⚠️ Aproximado por baixo pros insights -- ver `get_summary`.
+    total_geracoes_ia_mes: int
     # Receita FECHADA (leads "ganho" reais), não a estimativa do
     # Simulador de Receita -- ver app/api/routes/dashboard.py::get_summary
     # pro porquê de `_total` ser só uma "visão geral" que soma naturezas

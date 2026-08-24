@@ -48,6 +48,15 @@ class LeadRead(BaseModel):
     mensagem_abordagem: str | None = None
     insights_ia: dict | None = None
     insights_gerado_em: datetime | None = None
+    insights_geracoes_count: int = 0
+    # Contagem de gerações de IA por tipo + o limite vigente, no formato
+    # {"email": n, "whatsapp": n, "insights": n, "limite": n}.
+    #
+    # ⚠️ Só `GET /api/leads/{id}` (o dossiê) preenche isto -- as rotas de
+    # LISTA deixam None de propósito: calcular exige um COUNT em
+    # `lead_messages` por lead, e fazer isso numa lista paginada seria um
+    # N+1 pra um dado que nenhuma tela de lista usa.
+    geracoes_ia: dict[str, int] | None = None
     created_at: datetime
     updated_at: datetime
 

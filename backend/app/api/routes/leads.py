@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.tempo import agora_utc
 from app.models.lead import KanbanStatus, Lead
 from app.models.lead_message import CanalMensagem, LeadMessage
+from app.api.routes.limites_ia import TIPO_INSIGHTS, limite_atingido, resumo_geracoes
 from app.models.user import User
 from app.schemas.lead import LeadListaResponse, LeadRead, LeadStatusUpdate
 from app.schemas.lead_message import LeadMessageRead
@@ -206,7 +207,13 @@ def get_lead(
     lead = db.get(Lead, lead_id)
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
-    return lead
+
+    # `geracoes_ia` não sai do ORM -- depende de um COUNT em
+    # `lead_messages`. Preenchido só aqui (ver a ressalva no schema sobre
+    # por que as rotas de lista deixam None).
+    resposta = LeadRead.model_validate(lead)
+    resposta.geracoes_ia = resumo_geracoes(db, lead)
+    return resposta
 
 
 @router.patch("/{lead_id}/status", response_model=LeadRead)
@@ -282,6 +289,27 @@ def update_lead_status(
     return lead
 
 
+# Mensagem única pro 429 das duas rotas de geração -- o frontend mostra
+# `detail` como veio, então divergir o texto entre elas seria só ruído.
+_DETALHE_LIMITE_IA = (
+    "Limite de gerações atingido para este lead. "
+    "Contate um administrador para liberar mais."
+)
+
+
+def _barrar_se_limite_atingido(db: Session, lead: Lead, tipo: str) -> None:
+    """429 quando o lead já esgotou as gerações deste tipo.
+
+    Chamado ANTES de qualquer chamada à IA -- o ponto do limite é não
+    gastar, então validar depois de gerar não serviria pra nada.
+    """
+    if limite_atingido(db, lead, tipo):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=_DETALHE_LIMITE_IA,
+        )
+
+
 @router.post("/{lead_id}/gerar-abordagem/{canal}", response_model=LeadMessageRead)
 def gerar_abordagem(
     lead_id: str,
@@ -301,6 +329,10 @@ def gerar_abordagem(
     app/models/lead.py).
 
     422 pra canal fora de `CanalMensagem`. 404 se o lead não existir.
+    429 se o lead já atingiu `settings.LIMITE_GERACOES_IA_POR_LEAD`
+    gerações deste canal (controle de custo -- ver
+    app/api/routes/limites_ia.py; um admin libera via
+    `POST /api/admin/leads/{lead_id}/resetar-limite-ia/{tipo}`).
     502 se a IA não conseguir gerar nada — `gerar_mensagem_abordagem`
     nunca lança, devolve `conteudo=""` tanto em erro de rede/HTTP quanto
     em resposta vazia/malformada; é aqui que isso vira um erro explícito
@@ -316,6 +348,8 @@ def gerar_abordagem(
     lead = db.get(Lead, lead_id)
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    _barrar_se_limite_atingido(db, lead, canal)
 
     resultado = gerar_mensagem_abordagem(_montar_dados_lead(lead), canal=canal)
 
@@ -350,7 +384,9 @@ def gerar_insights(
     `gerar_abordagem`, não mantém histórico (não foi pedido; cada geração
     substitui a anterior, mesmo padrão de "Gerar novamente"). Requer
     autenticação (qualquer papel), mesma proteção do resto das rotas de
-    lead. 404 se o lead não existir.
+    lead. 404 se o lead não existir. 429 se o lead já atingiu
+    `settings.LIMITE_GERACOES_IA_POR_LEAD` gerações de insights (ver
+    app/api/routes/limites_ia.py).
 
     502 se a IA não conseguir gerar nada -- `gerar_insights_estrategicos`
     nunca lança, devolve `{}` tanto em erro de rede/HTTP quanto em
@@ -360,6 +396,8 @@ def gerar_insights(
     lead = db.get(Lead, lead_id)
     if lead is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    _barrar_se_limite_atingido(db, lead, TIPO_INSIGHTS)
 
     resultado = gerar_insights_estrategicos(_montar_dados_lead_insights(lead))
 
@@ -371,9 +409,16 @@ def gerar_insights(
 
     lead.insights_ia = resultado
     lead.insights_gerado_em = agora_utc()
+    # Incrementado só APÓS o 502 acima: uma geração que falhou não gastou
+    # cota do usuário. `insights_ia` não tem histórico (é sobrescrito), e
+    # é este contador que sustenta o limite.
+    lead.insights_geracoes_count = (lead.insights_geracoes_count or 0) + 1
     db.commit()
     db.refresh(lead)
-    return lead
+
+    resposta = LeadRead.model_validate(lead)
+    resposta.geracoes_ia = resumo_geracoes(db, lead)
+    return resposta
 
 
 @router.get("/{lead_id}/mensagens", response_model=list[LeadMessageRead])

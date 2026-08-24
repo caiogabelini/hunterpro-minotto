@@ -161,6 +161,23 @@ class Lead(Base):
     # histórico, diferente de LeadMessage -- não foi pedido).
     insights_ia: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     insights_gerado_em: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Quantas vezes os insights já foram gerados pra este lead. Cada
+    # geração é uma chamada paga à API da Anthropic, e `insights_ia` é
+    # SOBRESCRITO a cada uma (não há histórico, diferente de
+    # `lead_messages`) -- sem este contador não haveria como saber quantas
+    # aconteceram. Ver `app/api/routes/limites_ia.py`.
+    insights_geracoes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Marca d'água de liberação do limite de IA, por tipo:
+    # {"email": "<iso>", "whatsapp": "<iso>", "insights": "<iso>"}.
+    #
+    # ⚠️ Existe porque e-mail/WhatsApp contam gerações pelas LINHAS de
+    # `lead_messages`, e resetar o limite deletando essas linhas destruiria
+    # o histórico -- que é a razão de aquela tabela existir. Em vez disso,
+    # o reset grava um instante, e a contagem passa a considerar só as
+    # gerações POSTERIORES a ele. Pra `insights` o reset zera
+    # `insights_geracoes_count` e o carimbo aqui fica só como trilha de
+    # auditoria (quando um admin liberou).
+    ia_limite_resetado_em: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=agora_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=agora_utc, onupdate=agora_utc)

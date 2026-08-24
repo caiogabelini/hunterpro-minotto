@@ -1147,3 +1147,23 @@
   flex-shrink: 0;
   margin-top: 1px;
 }
+
+/* --- Limite de gerações de IA atingido ---------------------------------
+   Substitui o BOTÃO (não fica ao lado dele) -- se o botão continuasse
+   visível, mesmo desabilitado, o usuário tentaria clicar antes de ler.
+   Ocupa o mesmo lugar, então a explicação chega junto com a ausência da
+   ação.
+
+   Cor de alerta (laranja), não de perigo: bater a cota não é erro do
+   usuário nem risco de negócio, é um limite administrativo -- mesmo
+   token do aviso de site não lido e do consumo de plano no Dashboard. */
+.dossier-limite-ia {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgba(194, 65, 12, 0.25);
+  border-radius: 6px;
+  background: rgba(194, 65, 12, 0.07);
+  color: var(--color-alert);
+  font-size: 12px;
+  line-height: 1.45;
+}
