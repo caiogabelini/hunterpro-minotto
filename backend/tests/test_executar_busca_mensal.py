@@ -94,7 +94,7 @@ def sem_tabela_de_municipios(monkeypatch, tmp_path):
 # Prefixos das mensagens que são AVISO de degradação, não erro de CNPJ.
 # `busca.erros` carrega os dois; os testes de caminho feliz só se importam
 # com os erros de verdade.
-_PREFIXOS_DE_AVISO = ("Tabela de municípios", "Volume suspeito", "Site não pôde ser lido")
+_PREFIXOS_DE_AVISO = ("Tabela de municípios", "Volume suspeito", "Site não pôde ser lido", "Lote incompleto")
 
 
 def _erros_de_cnpj(busca) -> list[str]:

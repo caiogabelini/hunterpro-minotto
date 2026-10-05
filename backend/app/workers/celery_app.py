@@ -1601,6 +1601,80 @@ def _indice_pgfn_populado(redis_client) -> bool:
     return redis_client.get(REDIS_KEY_UPDATED_AT) is not None
 
 
+def _cnpjs_ja_na_base(db_session) -> set[str]:
+    """
+    Todo CNPJ que já existe em `leads`, normalizado (só dígitos), de
+    QUALQUER `kanban_status` -- inclusive "ganho" e "perdido". Ver
+    `excluir_cnpjs_ja_na_base` em app/scoring/pre_selecao.py pro porquê.
+
+    Carrega a coluna inteira de uma vez: a tabela tem dezenas/centenas de
+    linhas (50 leads por mês), não o universo da semente.
+    """
+    from sqlalchemy import select
+
+    from app.models.lead import Lead
+    from app.scoring.pre_selecao import normalizar_cnpj
+
+    return {n for n in (normalizar_cnpj(c) for c in db_session.execute(select(Lead.cnpj)).scalars()) if n}
+
+
+def montar_selecao_da_busca(estabelecimentos: list[dict], redis_client, db_session, top_n: int) -> dict:
+    """
+    FASE 1b inteira, sem nenhuma chamada paga e SEM gravar nada: sinais
+    gratuitos -> exclusão de quem já está na base -> corte no top N.
+
+    Existe como função separada para que `executar_busca_mensal` e o
+    dry-run (`scripts/simular_selecao.py`) rodem EXATAMENTE o mesmo
+    caminho -- um simulador com lógica própria poderia dizer "0
+    repetidos" enquanto a busca real repete.
+
+    A ordem importa: a exclusão vem ANTES de
+    `selecionar_melhores_candidatos`, pra cota ser preenchida com
+    candidatos novos em vez de encolher (ver `excluir_cnpjs_ja_na_base`).
+
+    Não checa se o índice PGFN está populado -- isso é de quem chama
+    (a task aborta, o script avisa e sai).
+    """
+    from app.scoring.pre_selecao import (
+        excluir_cnpjs_ja_na_base,
+        resumir_composicao,
+        selecionar_melhores_candidatos,
+    )
+
+    municipios_por_codigo = _carregar_municipios_rfb()
+    candidatos = _coletar_sinais_gratuitos(
+        estabelecimentos,
+        redis_client=redis_client,
+        municipios_por_codigo=municipios_por_codigo,
+    )
+    candidatos_novos, excluidos = excluir_cnpjs_ja_na_base(candidatos, _cnpjs_ja_na_base(db_session))
+    selecionados = selecionar_melhores_candidatos(candidatos_novos, top_n)
+    return {
+        "municipios_por_codigo": municipios_por_codigo,
+        "total_candidatos": len(candidatos),
+        "excluidos_ja_na_base": excluidos,
+        "total_candidatos_novos": len(candidatos_novos),
+        "selecionados": selecionados,
+        "composicao": resumir_composicao(selecionados, excluidos_ja_na_base=excluidos),
+    }
+
+
+def _aviso_lote_incompleto(selecionados: int, top_n: int, excluidos: int) -> str | None:
+    """
+    Aviso (não erro) quando, depois de tirar quem já está na base, não
+    sobram candidatos novos suficientes pra encher a cota. Com o universo
+    nacional isso não deve acontecer tão cedo; se acontecer, é o sinal de
+    que o filtro da semente ficou estreito demais pra quantidade de
+    buscas já feitas.
+    """
+    if top_n <= 0 or selecionados >= top_n:
+        return None
+    return (
+        f"Lote incompleto: só {selecionados} candidatos novos para uma cota de {top_n} "
+        f"({excluidos} candidatos do universo foram excluídos por já estarem na base de leads)."
+    )
+
+
 @celery_app.task(name="executar_busca_mensal")
 def executar_busca_mensal(busca_id: str, db=None) -> dict:
     """
@@ -1615,8 +1689,10 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         chamada de API paga.
 
       FASE 2 -- pago, só nos selecionados:
-        `selecionar_melhores_candidatos` ranqueia por score preliminar e
-        corta nos `_top_n_pre_selecao()` melhores (60 no padrão).
+        `excluir_cnpjs_ja_na_base` tira todo CNPJ que já está em `leads`
+        (qualquer etapa do Kanban), e só DEPOIS
+        `selecionar_melhores_candidatos` corta nos `_top_n_pre_selecao()`
+        melhores (60 no padrão) -- ver `montar_selecao_da_busca`.
         `process_lead_pipeline` roda SÓ nesses -- é aqui que Google
         Places, Firecrawl, Anthropic, Hunter.io e ZeroBounce são
         acionados.
@@ -1648,7 +1724,6 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
     CNPJs -- não há CNPJ que tenha falhado, e não se gastou nada.
     """
     from app.models.busca_leads import BuscaLeads, StatusBusca
-    from app.scoring.pre_selecao import resumir_composicao, selecionar_melhores_candidatos
 
     db_session, owns_session = _get_db_session(db)
     try:
@@ -1727,18 +1802,21 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                     "ranquear os candidatos e a busca gastaria API num conjunto praticamente aleatório."
                 )
 
-            municipios_por_codigo = _carregar_municipios_rfb()
-            candidatos = _coletar_sinais_gratuitos(
-                estabelecimentos,
-                redis_client=redis_client,
-                municipios_por_codigo=municipios_por_codigo,
-            )
+            # Inclui a leitura dos CNPJs já na base: se ela falhar, ABORTA
+            # em vez de seguir sem exclusão -- seguir significaria gastar
+            # API pra reprocessar (e sobrescrever) leads que o cliente já
+            # está trabalhando.
+            selecao = montar_selecao_da_busca(estabelecimentos, redis_client, db_session, top_n)
         except Exception as exc:
             logger.error(
                 "executar_busca_mensal: coleta de sinais gratuitos falhou pra busca %s.\n%s",
                 busca_id, traceback_redigido(),
             )
-            return _abortar(f"pré-seleção (sinais gratuitos): {exc}")
+            return _abortar(f"pré-seleção (sinais gratuitos): {redigir_segredos(exc)}")
+
+        municipios_por_codigo = selecao["municipios_por_codigo"]
+        selecionados = selecao["selecionados"]
+        composicao = selecao["composicao"]
 
         if not municipios_por_codigo:
             # Degradação real, registrada onde o admin vê. Sem a tabela de
@@ -1752,18 +1830,18 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso)
             avisos.append(aviso)
 
-        selecionados = selecionar_melhores_candidatos(candidatos, top_n)
         busca.total_cnpjs_selecionados = len(selecionados)
         db_session.commit()
 
-        composicao = resumir_composicao(selecionados)
         logger.info(
-            "executar_busca_mensal (%s): %s candidatos no universo -> %s selecionados (cota %s). "
+            "executar_busca_mensal (%s): %s candidatos no universo, %s excluídos por já estarem na base "
+            "-> %s selecionados (cota %s). "
             "FASE 1: %s por dívida ativa (de %s a %s inscrições). "
             "FASE 2: %s para completar cota, sem dívida. "
             "%s em Zona Franca. Score preliminar de %.1f a %.1f.",
             busca_id,
-            len(candidatos),
+            selecao["total_candidatos"],
+            selecao["excluidos_ja_na_base"],
             len(selecionados),
             top_n,
             composicao["por_divida_ativa"],
@@ -1786,6 +1864,10 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                 composicao["por_divida_ativa"],
                 composicao["para_completar_cota"],
             )
+        aviso_lote = _aviso_lote_incompleto(len(selecionados), top_n, selecao["excluidos_ja_na_base"])
+        if aviso_lote:
+            logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso_lote)
+            avisos.append(aviso_lote)
 
         # --- FASE 2: enriquecimento pago, só nos selecionados -----------------
         # Cache de município do CNES compartilhado por TODA esta execução e

@@ -134,6 +134,46 @@ def pontuar_candidato(candidato: dict) -> float:
     )
 
 
+def normalizar_cnpj(cnpj) -> str:
+    """
+    Só os dígitos do CNPJ (`"12.345.678/0001-90"` -> `"12345678000190"`).
+
+    A semente da Receita sempre traz 14 dígitos crus, mas `Lead.cnpj` é
+    `String(18)` -- cabe a versão com máscara, e linhas semeadas à mão ou
+    vindas de outra origem podem estar assim. Comparar sem normalizar os
+    DOIS lados deixaria passar justamente o CNPJ repetido que a exclusão
+    existe pra barrar. `None`/vazio vira `""`.
+    """
+    return "".join(ch for ch in str(cnpj or "") if ch.isdigit())
+
+
+def excluir_cnpjs_ja_na_base(candidatos: list[dict], cnpjs_na_base) -> tuple[list[dict], int]:
+    """
+    Remove dos candidatos todo CNPJ que já existe na tabela `leads`.
+    Devolve `(candidatos_novos, quantidade_excluida)`, sem mutar a entrada.
+
+    ⚠️ Tem que rodar ANTES de `selecionar_melhores_candidatos`, nunca
+    depois. Se a exclusão viesse depois do corte, cada CNPJ repetido
+    abriria um buraco no lote (60 selecionados - 8 já na base = 52
+    processados); vindo antes, o corte enxerga só candidatos novos e a
+    cota continua sendo preenchida inteira.
+
+    Por que excluir TODO `kanban_status`, inclusive "ganho" e "perdido":
+    reprocessar um lead existente não só gasta API paga pra entregar um
+    lead que o cliente já tem -- o upsert por CNPJ de
+    `_persistir_enriquecimento_lead` sobrescreve os dados enriquecidos, o
+    score e a prioridade de um lead que alguém já está trabalhando no
+    Kanban. Um lead "perdido" voltar como "novo" do mês é exatamente o
+    que a busca mensal não pode entregar.
+
+    A comparação normaliza os dois lados com `normalizar_cnpj` (só
+    dígitos) -- quem chama pode passar o conjunto cru do banco.
+    """
+    base = {n for n in (normalizar_cnpj(c) for c in cnpjs_na_base) if n}
+    novos = [c for c in candidatos if normalizar_cnpj(c.get("cnpj")) not in base]
+    return novos, len(candidatos) - len(novos)
+
+
 FASE_DIVIDA_ATIVA = "divida_ativa"
 FASE_COMPLETAR_COTA = "completar_cota"
 
@@ -271,7 +311,7 @@ def selecionar_melhores_candidatos(candidatos: list[dict], top_n: int) -> list[d
     return selecionados
 
 
-def resumir_composicao(selecionados: list[dict]) -> dict:
+def resumir_composicao(selecionados: list[dict], excluidos_ja_na_base: int = 0) -> dict:
     """
     Conta de onde veio cada candidato do lote -- quantos entraram pela
     FASE 1 (dívida ativa) e quantos pela FASE 2 (completar cota), quantos
@@ -286,10 +326,16 @@ def resumir_composicao(selecionados: list[dict]) -> dict:
     `executar_busca_mensal` loga este resumo e o devolve no resultado da
     task, pra que a composição do lote apareça já na primeira execução
     real em vez de só depois de alguém abrir os 60 leads um a um.
+
+    `excluidos_ja_na_base` é só repassado (vem de
+    `excluir_cnpjs_ja_na_base`, que roda antes do corte) -- fica aqui pra
+    que a composição responda também "quantos o filtro de repetidos
+    tirou do universo".
     """
     if not selecionados:
         return {
             "total": 0,
+            "excluidos_ja_na_base": excluidos_ja_na_base,
             "por_divida_ativa": 0,
             "para_completar_cota": 0,
             "com_zona_franca": 0,
@@ -306,6 +352,7 @@ def resumir_composicao(selecionados: list[dict]) -> dict:
 
     return {
         "total": len(selecionados),
+        "excluidos_ja_na_base": excluidos_ja_na_base,
         "por_divida_ativa": len(por_divida),
         "para_completar_cota": sum(1 for c in selecionados if c.get("fase_selecao") == FASE_COMPLETAR_COTA),
         "com_zona_franca": sum(1 for c in selecionados if c.get("zona_franca")),

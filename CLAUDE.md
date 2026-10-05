@@ -3691,6 +3691,40 @@ process everything.
 now computed over the **selected** batch, not the universe — otherwise 60
 processed out of 300k would always read as near-total failure.
 
+### Already-known CNPJs are excluded before the cut (2026-10-05)
+
+Before the second monthly search, an audit found **no exclusion at all**:
+`executar_busca_mensal` went seed → free signals →
+`selecionar_melhores_candidatos` with no look at `leads`. Since the
+selection is deterministic (debt desc, then CNPJ), a second run over a
+similar universe would have re-picked most of the first 60. Re-processing
+an existing lead spends paid API calls on a lead the client already has
+**and** the CNPJ upsert overwrites its enrichment fields, `score_total`,
+`score_detalhes` and `prioridade` (and blanks `email` if Hunter finds
+nothing this time). Kanban/closing fields, `lead_messages`, `insights_ia`
+and the AI-limit counters were never touched by the upsert.
+
+Now `montar_selecao_da_busca` (celery_app.py) runs the whole free phase:
+signals → `excluir_cnpjs_ja_na_base` (pre_selecao.py, pure) → cut.
+- ⚠️ **Exclusion runs BEFORE the cut**, so the quota fills with 60 *new*
+  candidates; excluding after would shrink the batch.
+- **Every `kanban_status`** is excluded, including `ganho`/`perdido`.
+- Both sides normalized with `normalizar_cnpj` (digits only) — `Lead.cnpj`
+  is `String(18)` and can hold a masked CNPJ.
+- Failure reading `leads` **aborts** the search (no spend) rather than
+  continuing without exclusion.
+- `composicao_selecao.excluidos_ja_na_base` records the count; a
+  "Lote incompleto" warning goes to `busca.erros` when fewer than `top_n`
+  new candidates remain (warning, not error).
+
+**Dry-run: `python scripts/simular_selecao.py`** — same function as the
+task, no paid calls, nothing written (Postgres transaction set `READ ONLY`).
+Prints universe, excluded count, the selected CNPJs with PGFN inscription
+count, and the intersection with `leads` via an *independent* query (raw +
+masked spellings). Exit 0 = intersection 0; 1 = intersection found (don't
+fire the search); 2 = PGFN index not populated. Run it in production
+before every monthly search. Tests: `tests/test_exclusao_cnpjs_ja_na_base.py`.
+
 ### `anos_mercado` is informational — NOT a scoring criterion (2026-08-22)
 
 Confirmed by audit against the code and with the client. `anos_mercado`
