@@ -3725,6 +3725,25 @@ masked spellings). Exit 0 = intersection 0; 1 = intersection found (don't
 fire the search); 2 = PGFN index not populated. Run it in production
 before every monthly search. Tests: `tests/test_exclusao_cnpjs_ja_na_base.py`.
 
+### Occupational-medicine candidates excluded by name (2026-10-14)
+
+Douglas doesn't want medicina ocupacional / saúde e segurança do trabalho;
+the production dry-run had 12+ of them among the 60. There's no dedicated
+CNAE (they sit in 8630-5/03, /99 like regular clinics), so the filter is
+textual: `excluir_por_termos_de_nome` (pre_selecao.py, pure) runs in
+`montar_selecao_da_busca` **after** the already-in-base exclusion and
+**before** the cut, so the quota still fills with 60.
+- Terms: `settings.TERMOS_EXCLUSAO_NOME_CANDIDATO` (per-client list,
+  JSON in `.env`; empty disables). Checked against `razao_social` **and**
+  `nome_fantasia`, accent/case-insensitive, punctuation → space, matched as
+  **whole words/phrases** (`OCUPACIONAL` ≠ `PREOCUPACIONAL`/`OCUPACIONAIS`).
+- `composicao_selecao.excluidos_por_termo_no_nome` is separate from
+  `excluidos_ja_na_base`; a CNPJ that is both counts only as already-in-base.
+- `simular_selecao.py` prints the term-excluded candidates that **would
+  have made the batch** (CNPJ, PGFN, CNAE, matched term) for false-positive
+  review, plus a CNAE histogram of excluded vs. selected.
+- Never touches existing `leads` rows. Tests: `tests/test_exclusao_medicina_ocupacional.py`.
+
 ### `anos_mercado` is informational — NOT a scoring criterion (2026-08-22)
 
 Confirmed by audit against the code and with the client. `anos_mercado`

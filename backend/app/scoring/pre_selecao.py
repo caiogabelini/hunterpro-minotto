@@ -85,6 +85,9 @@ da dependência (hoje o scoring é que é o topo da pilha). Como o que este
 módulo faz é atribuir pontos usando os pesos fechados com o cliente, ele
 é scoring, e mora junto de `rules.py`/`compute_lead_score.py`.
 """
+import re
+import unicodedata
+
 from app.scoring.compute_lead_score import zona_franca_points
 from app.scoring.rules import get_criterion, pgfn_points
 
@@ -172,6 +175,74 @@ def excluir_cnpjs_ja_na_base(candidatos: list[dict], cnpjs_na_base) -> tuple[lis
     base = {n for n in (normalizar_cnpj(c) for c in cnpjs_na_base) if n}
     novos = [c for c in candidatos if normalizar_cnpj(c.get("cnpj")) not in base]
     return novos, len(candidatos) - len(novos)
+
+
+def normalizar_texto_para_termos(texto) -> str:
+    """
+    Maiúsculas, sem acento, e todo caractere que não é letra/dígito vira
+    espaço (espaços repetidos colapsados). `"Saúde-Ocupacional Ltda."` ->
+    `"SAUDE OCUPACIONAL LTDA"`; `"SEG. E MED."` -> `"SEG E MED"`.
+
+    Pontuação vira separador de propósito: razão social da Receita usa
+    hífen, ponto e barra como espaço ("MED - OCUPACIONAL", "SEG.E MED.").
+    """
+    sem_acento = unicodedata.normalize("NFKD", str(texto or ""))
+    sem_acento = "".join(ch for ch in sem_acento if not unicodedata.combining(ch))
+    return " ".join(re.sub(r"[^0-9A-Za-z]+", " ", sem_acento).upper().split())
+
+
+def termo_que_casa(textos, termos) -> str | None:
+    """
+    Primeiro termo (já normalizado) que aparece como palavra/trecho
+    INTEIRO em algum dos textos, ou `None`.
+
+    "Inteiro" = delimitado por início/fim ou espaço, depois da
+    normalização. Assim `OCUPACIONAL` casa em "MED - OCUPACIONAL" e em
+    "SAUDE OCUPACIONAL LTDA", mas não em "PREOCUPACIONAL" nem
+    "OCUPACIONAIS" -- substring solta casaria qualquer palavra que
+    contivesse as letras, e o custo de um falso positivo aqui é perder um
+    lead bom sem ninguém perceber.
+    """
+    termos_norm = [t for t in (normalizar_texto_para_termos(t) for t in termos) if t]
+    if not termos_norm:
+        return None
+    for texto in textos:
+        alvo = f" {normalizar_texto_para_termos(texto)} "
+        if not alvo.strip():
+            continue
+        for termo in termos_norm:
+            if f" {termo} " in alvo:
+                return termo
+    return None
+
+
+def excluir_por_termos_de_nome(candidatos: list[dict], termos) -> tuple[list[dict], list[dict]]:
+    """
+    Tira os candidatos cuja `razao_social` ou `nome_fantasia` contém algum
+    dos `termos` (ver `termo_que_casa`). Devolve `(mantidos, excluidos)`;
+    cada excluído é uma cópia rasa com `termo_exclusao` dizendo qual termo
+    casou -- é o que o dry-run mostra pra revisar falso positivo. Não muta
+    a entrada.
+
+    Hoje a lista é a de medicina ocupacional / segurança do trabalho
+    (`settings.TERMOS_EXCLUSAO_NOME_CANDIDATO`), perfil que o cliente não
+    quer prospectar e que não tem CNAE próprio pra filtrar na semente.
+
+    ⚠️ Mesma regra de `excluir_cnpjs_ja_na_base`: tem que rodar ANTES de
+    `selecionar_melhores_candidatos`, senão cada excluído abre um buraco
+    no lote em vez de ceder a vaga ao próximo do ranking.
+
+    `termos` vazio não exclui ninguém.
+    """
+    mantidos: list[dict] = []
+    excluidos: list[dict] = []
+    for candidato in candidatos:
+        termo = termo_que_casa((candidato.get("razao_social"), candidato.get("nome_fantasia")), termos)
+        if termo is None:
+            mantidos.append(candidato)
+        else:
+            excluidos.append({**candidato, "termo_exclusao": termo})
+    return mantidos, excluidos
 
 
 FASE_DIVIDA_ATIVA = "divida_ativa"
@@ -311,7 +382,11 @@ def selecionar_melhores_candidatos(candidatos: list[dict], top_n: int) -> list[d
     return selecionados
 
 
-def resumir_composicao(selecionados: list[dict], excluidos_ja_na_base: int = 0) -> dict:
+def resumir_composicao(
+    selecionados: list[dict],
+    excluidos_ja_na_base: int = 0,
+    excluidos_por_termo_no_nome: int = 0,
+) -> dict:
     """
     Conta de onde veio cada candidato do lote -- quantos entraram pela
     FASE 1 (dívida ativa) e quantos pela FASE 2 (completar cota), quantos
@@ -331,11 +406,18 @@ def resumir_composicao(selecionados: list[dict], excluidos_ja_na_base: int = 0) 
     `excluir_cnpjs_ja_na_base`, que roda antes do corte) -- fica aqui pra
     que a composição responda também "quantos o filtro de repetidos
     tirou do universo".
+
+    `excluidos_por_termo_no_nome` idem, vindo de
+    `excluir_por_termos_de_nome` (medicina ocupacional etc.). Contado
+    SEPARADO de `excluidos_ja_na_base`: um CNPJ que está na base e também
+    casa um termo conta só em `excluidos_ja_na_base` (essa exclusão roda
+    primeiro).
     """
     if not selecionados:
         return {
             "total": 0,
             "excluidos_ja_na_base": excluidos_ja_na_base,
+            "excluidos_por_termo_no_nome": excluidos_por_termo_no_nome,
             "por_divida_ativa": 0,
             "para_completar_cota": 0,
             "com_zona_franca": 0,
@@ -353,6 +435,7 @@ def resumir_composicao(selecionados: list[dict], excluidos_ja_na_base: int = 0) 
     return {
         "total": len(selecionados),
         "excluidos_ja_na_base": excluidos_ja_na_base,
+        "excluidos_por_termo_no_nome": excluidos_por_termo_no_nome,
         "por_divida_ativa": len(por_divida),
         "para_completar_cota": sum(1 for c in selecionados if c.get("fase_selecao") == FASE_COMPLETAR_COTA),
         "com_zona_franca": sum(1 for c in selecionados if c.get("zona_franca")),

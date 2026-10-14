@@ -131,6 +131,31 @@ class Settings(BaseSettings):
     # permite ajustar este número com dado em vez de palpite.
     LEADS_MARGEM_PRE_SELECAO: float = 1.2
 
+    # Termos que tiram um candidato da pré-seleção quando aparecem na
+    # razão social OU no nome fantasia (14/10/2026). Hoje: medicina
+    # ocupacional / saúde e segurança do trabalho, que o Douglas NÃO quer
+    # prospectar -- no dry-run de produção eram 12+ dos 60 selecionados.
+    #
+    # Filtro por texto porque não existe CNAE exclusivo pra esse perfil:
+    # essas empresas caem nas mesmas subclasses das clínicas comuns
+    # (8630-5/03, 8630-5/99...).
+    #
+    # Comparação sem acento, em maiúsculas e por palavra/trecho INTEIRO
+    # (não substring solta) -- ver `excluir_por_termos_de_nome` em
+    # app/scoring/pre_selecao.py. Pode escrever com ou sem acento aqui.
+    #
+    # Lista por cliente: outro cliente sobrescreve no .env como JSON, ex.
+    # TERMOS_EXCLUSAO_NOME_CANDIDATO='["ESTETICA", "VETERINARIA"]'.
+    # Lista vazia desliga o filtro.
+    TERMOS_EXCLUSAO_NOME_CANDIDATO: list[str] = [
+        "OCUPACIONAL",
+        "MEDICINA DO TRABALHO",
+        "SEGURANCA DO TRABALHO",
+        "SAUDE E SEGURANCA",
+        "MEDICINA E SEGURANCA",
+        "SEG E MED",
+    ]
+
     # --- Dashboard ---
     # Limite de leads/mês do plano contratado -- hoje um valor fixo (não
     # há ainda um conceito de "plano" por cliente/usuário), usado só pra

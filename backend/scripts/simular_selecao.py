@@ -4,7 +4,9 @@ Dry-run da pré-seleção da busca mensal — HunterPro Minotto Contabilidade.
 
 Roda EXATAMENTE a fase gratuita de `executar_busca_mensal` (semente da
 Receita + índice PGFN no Redis + Zona Franca + exclusão de quem já está
-em `leads` + corte no top N) e imprime o lote que SERIA processado.
+em `leads` + exclusão por termo no nome, ex. medicina ocupacional + corte
+no top N) e imprime o lote que SERIA processado -- e, pra revisar falso
+positivo, os excluídos por termo que teriam entrado no lote, com CNAE.
 
   - NENHUMA chamada paga: não chama `process_lead_pipeline` nem nenhuma
     etapa de enriquecimento (Google Places, Firecrawl, Anthropic,
@@ -42,7 +44,7 @@ import app.models  # noqa: F401, E402  (registra todos os modelos -- ver app/mod
 from app.core.config import settings  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.models.lead import Lead  # noqa: E402
-from app.scoring.pre_selecao import normalizar_cnpj  # noqa: E402
+from app.scoring.pre_selecao import normalizar_cnpj, selecionar_melhores_candidatos  # noqa: E402
 from app.workers import celery_app  # noqa: E402
 
 
@@ -69,6 +71,41 @@ def contar_intersecao_com_leads(db, cnpjs: list[str]) -> list[str]:
     return sorted(encontrados)
 
 
+def excluidos_por_termo_que_seriam_selecionados(
+    selecionados: list[dict], excluidos_por_termo: list[dict], top_n: int
+) -> list[dict]:
+    """
+    Dos candidatos que o filtro de nome (medicina ocupacional etc.) tirou,
+    quais teriam entrado no lote se o filtro não existisse -- é o que vale
+    revisar em busca de falso positivo; um excluído que estava no fim do
+    ranking não mudaria nada.
+
+    Re-ranqueia `selecionados ∪ excluidos_por_termo` com a MESMA função do
+    corte. Basta esse conjunto, não o universo inteiro: um candidato
+    elegível que ficou fora do top N já tinha N elegíveis à frente, e
+    continua fora com os excluídos de volta. Em ordem de ranking.
+    """
+    if not excluidos_por_termo:
+        return []
+    cnpjs_excluidos = {c.get("cnpj") for c in excluidos_por_termo}
+    termo_por_cnpj = {c.get("cnpj"): c.get("termo_exclusao") for c in excluidos_por_termo}
+    sem_filtro = selecionar_melhores_candidatos(selecionados + excluidos_por_termo, top_n)
+    return [
+        {**c, "termo_exclusao": termo_por_cnpj[c.get("cnpj")]}
+        for c in sem_filtro
+        if c.get("cnpj") in cnpjs_excluidos
+    ]
+
+
+def contar_por_cnae(candidatos: list[dict]) -> dict[str, int]:
+    """CNAE fiscal principal -> quantidade, do mais frequente pro menos."""
+    contagem: dict[str, int] = {}
+    for c in candidatos:
+        cnae = c.get("cnae_fiscal_principal") or "?"
+        contagem[cnae] = contagem.get(cnae, 0) + 1
+    return dict(sorted(contagem.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
 def simular(db, redis_client, top_n: int, semente: dict | None = None) -> dict:
     """
     Núcleo testável do dry-run. `semente=None` lê os arquivos da Receita
@@ -89,6 +126,13 @@ def simular(db, redis_client, top_n: int, semente: dict | None = None) -> dict:
         "total_universo": len(estabelecimentos),
         "total_candidatos": selecao["total_candidatos"],
         "excluidos_ja_na_base": selecao["excluidos_ja_na_base"],
+        "excluidos_por_termo_no_nome": selecao["excluidos_por_termo_no_nome"],
+        "termos_exclusao": list(settings.TERMOS_EXCLUSAO_NOME_CANDIDATO),
+        "excluidos_por_termo_que_seriam_selecionados": excluidos_por_termo_que_seriam_selecionados(
+            selecionados, selecao["candidatos_excluidos_por_termo"], top_n
+        ),
+        "cnae_dos_excluidos_por_termo": contar_por_cnae(selecao["candidatos_excluidos_por_termo"]),
+        "cnae_dos_selecionados": contar_por_cnae(selecionados),
         "total_candidatos_novos": selecao["total_candidatos_novos"],
         "top_n": top_n,
         "tabela_municipios_encontrada": bool(selecao["municipios_por_codigo"]),
@@ -105,6 +149,7 @@ def _imprimir(r: dict) -> None:
     print(f"Semente (status):                   {r['status_semente']}")
     print(f"Total de candidatos no universo:    {r['total_candidatos']}")
     print(f"Excluídos por já estarem na base:   {r['excluidos_ja_na_base']}")
+    print(f"Excluídos por termo no nome:        {r['excluidos_por_termo_no_nome']}  (medicina ocupacional etc.)")
     print(f"Candidatos novos:                   {r['total_candidatos_novos']}")
     print(f"Cota (top N):                       {r['top_n']}")
     print(f"Selecionados:                       {len(r['selecionados'])}")
@@ -127,12 +172,46 @@ def _imprimir(r: dict) -> None:
             f"{(cand.get('razao_social') or '')[:40]}"
         )
     print("-" * 78)
+    _imprimir_excluidos_por_termo(r)
+    print("-" * 78)
     intersecao = r["intersecao_com_leads"]
     print(f"Interseção do lote com a tabela leads: {len(intersecao)}  (deve ser 0)")
     if intersecao:
         print("🔴 CNPJs do lote que JÁ estão na base -- NÃO dispare a busca:")
         for cnpj in intersecao:
             print(f"   {cnpj}")
+
+
+def _formatar_cnae(cnae: str) -> str:
+    digitos = "".join(ch for ch in (cnae or "") if ch.isdigit())
+    if len(digitos) != 7:
+        return cnae or "?"
+    return f"{digitos[:4]}-{digitos[4]}/{digitos[5:]}"
+
+
+def _imprimir_excluidos_por_termo(r: dict) -> None:
+    termos = ", ".join(r["termos_exclusao"]) or "(nenhum -- filtro desligado)"
+    print(f"Termos excluídos no nome: {termos}")
+    seriam = r["excluidos_por_termo_que_seriam_selecionados"]
+    print(f"Excluídos por termo que ENTRARIAM no lote sem o filtro: {len(seriam)}  (revise falso positivo)")
+    if seriam:
+        print(f"{'CNPJ':<14}  {'PGFN':>5}  {'CNAE':<10}  {'termo':<22}  razão social / nome fantasia")
+        for cand in seriam:
+            nome = cand.get("razao_social") or ""
+            if cand.get("nome_fantasia"):
+                nome = f"{nome} / {cand['nome_fantasia']}"
+            print(
+                f"{cand.get('cnpj', ''):<14}  {cand.get('qtd_inscricoes_ativas', 0):>5}  "
+                f"{_formatar_cnae(cand.get('cnae_fiscal_principal', '')):<10}  "
+                f"{cand.get('termo_exclusao', ''):<22}  {nome[:60]}"
+            )
+    # Pra responder "o CNAE separa esse grupo?": se os CNAEs dos excluídos
+    # também aparecem entre os selecionados, não separa -- o filtro por
+    # texto é necessário.
+    print("CNAE -- todos os excluídos por termo x selecionados:")
+    selecionados = r["cnae_dos_selecionados"]
+    for cnae, qtd in r["cnae_dos_excluidos_por_termo"].items():
+        print(f"   {_formatar_cnae(cnae):<10}  excluídos: {qtd:>6}   no lote: {selecionados.get(cnae, 0):>3}")
 
 
 def main() -> int:

@@ -1621,22 +1621,29 @@ def _cnpjs_ja_na_base(db_session) -> set[str]:
 def montar_selecao_da_busca(estabelecimentos: list[dict], redis_client, db_session, top_n: int) -> dict:
     """
     FASE 1b inteira, sem nenhuma chamada paga e SEM gravar nada: sinais
-    gratuitos -> exclusão de quem já está na base -> corte no top N.
+    gratuitos -> exclusão de quem já está na base -> exclusão por termo
+    no nome (medicina ocupacional etc.) -> corte no top N.
 
     Existe como função separada para que `executar_busca_mensal` e o
     dry-run (`scripts/simular_selecao.py`) rodem EXATAMENTE o mesmo
     caminho -- um simulador com lógica própria poderia dizer "0
     repetidos" enquanto a busca real repete.
 
-    A ordem importa: a exclusão vem ANTES de
+    A ordem importa: as DUAS exclusões vêm ANTES de
     `selecionar_melhores_candidatos`, pra cota ser preenchida com
-    candidatos novos em vez de encolher (ver `excluir_cnpjs_ja_na_base`).
+    candidatos novos e dentro do nicho em vez de encolher (ver
+    `excluir_cnpjs_ja_na_base`).
+
+    `candidatos_excluidos_por_termo` sai no resultado (lista de dicts, com
+    `termo_exclusao`) só pra o dry-run poder mostrar quais deles teriam
+    entrado no lote -- a task ignora.
 
     Não checa se o índice PGFN está populado -- isso é de quem chama
     (a task aborta, o script avisa e sai).
     """
     from app.scoring.pre_selecao import (
         excluir_cnpjs_ja_na_base,
+        excluir_por_termos_de_nome,
         resumir_composicao,
         selecionar_melhores_candidatos,
     )
@@ -1648,18 +1655,30 @@ def montar_selecao_da_busca(estabelecimentos: list[dict], redis_client, db_sessi
         municipios_por_codigo=municipios_por_codigo,
     )
     candidatos_novos, excluidos = excluir_cnpjs_ja_na_base(candidatos, _cnpjs_ja_na_base(db_session))
-    selecionados = selecionar_melhores_candidatos(candidatos_novos, top_n)
+    candidatos_no_nicho, excluidos_por_termo = excluir_por_termos_de_nome(
+        candidatos_novos, settings.TERMOS_EXCLUSAO_NOME_CANDIDATO
+    )
+    selecionados = selecionar_melhores_candidatos(candidatos_no_nicho, top_n)
     return {
         "municipios_por_codigo": municipios_por_codigo,
         "total_candidatos": len(candidatos),
         "excluidos_ja_na_base": excluidos,
+        "excluidos_por_termo_no_nome": len(excluidos_por_termo),
+        "candidatos_excluidos_por_termo": excluidos_por_termo,
         "total_candidatos_novos": len(candidatos_novos),
+        "total_candidatos_elegiveis": len(candidatos_no_nicho),
         "selecionados": selecionados,
-        "composicao": resumir_composicao(selecionados, excluidos_ja_na_base=excluidos),
+        "composicao": resumir_composicao(
+            selecionados,
+            excluidos_ja_na_base=excluidos,
+            excluidos_por_termo_no_nome=len(excluidos_por_termo),
+        ),
     }
 
 
-def _aviso_lote_incompleto(selecionados: int, top_n: int, excluidos: int) -> str | None:
+def _aviso_lote_incompleto(
+    selecionados: int, top_n: int, excluidos: int, excluidos_por_termo: int = 0
+) -> str | None:
     """
     Aviso (não erro) quando, depois de tirar quem já está na base, não
     sobram candidatos novos suficientes pra encher a cota. Com o universo
@@ -1671,7 +1690,8 @@ def _aviso_lote_incompleto(selecionados: int, top_n: int, excluidos: int) -> str
         return None
     return (
         f"Lote incompleto: só {selecionados} candidatos novos para uma cota de {top_n} "
-        f"({excluidos} candidatos do universo foram excluídos por já estarem na base de leads)."
+        f"({excluidos} candidatos do universo foram excluídos por já estarem na base de leads"
+        f" e {excluidos_por_termo} por termo excluído no nome, ex.: medicina ocupacional)."
     )
 
 
@@ -1834,7 +1854,8 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
         db_session.commit()
 
         logger.info(
-            "executar_busca_mensal (%s): %s candidatos no universo, %s excluídos por já estarem na base "
+            "executar_busca_mensal (%s): %s candidatos no universo, %s excluídos por já estarem na base, "
+            "%s excluídos por termo no nome (medicina ocupacional etc.) "
             "-> %s selecionados (cota %s). "
             "FASE 1: %s por dívida ativa (de %s a %s inscrições). "
             "FASE 2: %s para completar cota, sem dívida. "
@@ -1842,6 +1863,7 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
             busca_id,
             selecao["total_candidatos"],
             selecao["excluidos_ja_na_base"],
+            selecao["excluidos_por_termo_no_nome"],
             len(selecionados),
             top_n,
             composicao["por_divida_ativa"],
@@ -1864,7 +1886,9 @@ def executar_busca_mensal(busca_id: str, db=None) -> dict:
                 composicao["por_divida_ativa"],
                 composicao["para_completar_cota"],
             )
-        aviso_lote = _aviso_lote_incompleto(len(selecionados), top_n, selecao["excluidos_ja_na_base"])
+        aviso_lote = _aviso_lote_incompleto(
+            len(selecionados), top_n, selecao["excluidos_ja_na_base"], selecao["excluidos_por_termo_no_nome"]
+        )
         if aviso_lote:
             logger.warning("executar_busca_mensal (%s): %s", busca_id, aviso_lote)
             avisos.append(aviso_lote)
