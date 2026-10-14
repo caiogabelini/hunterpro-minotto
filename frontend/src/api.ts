@@ -295,8 +295,15 @@ export async function login(email: string, senha: string): Promise<string> {
   return corpo.access_token as string;
 }
 
-export async function fetchLeads(token: string): Promise<Lead[]> {
-  const res = await fetch(`${API_URL}/api/leads`, { headers: authHeaders(token) });
+/** Teto de `limit` em GET /api/leads -- espelha `LIMITE_MAXIMO_LIST_LEADS`
+ * em backend/app/api/routes/leads.py (nada sincroniza os dois). O Kanban
+ * pede exatamente isso e avisa quando recebe esse tanto (ver
+ * kanbanLimite.ts). Sem `limit` explícito o backend usa 50 e o Kanban
+ * escondia o resto sem aviso. */
+export const LIMITE_LEADS_KANBAN = 1000;
+
+export async function fetchLeads(token: string, limit: number = LIMITE_LEADS_KANBAN): Promise<Lead[]> {
+  const res = await fetch(`${API_URL}/api/leads?limit=${limit}`, { headers: authHeaders(token) });
   if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok) throw new Error(`Erro ao buscar leads: ${res.status}`);
   return res.json();

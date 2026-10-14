@@ -1,10 +1,13 @@
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { useEffect, useState } from "react";
-import { fetchLeads, updateLeadStatus, UnauthorizedError, type DadosFechamento, type Lead } from "../api";
+import { AlertTriangle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { fetchLeads, LIMITE_LEADS_KANBAN, updateLeadStatus, UnauthorizedError, type DadosFechamento, type Lead } from "../api";
 import { FechamentoModal } from "../components/FechamentoModal";
 import { KanbanColumn } from "../components/KanbanColumn";
 import { LossReasonModal } from "../components/LossReasonModal";
 import { useAuth } from "../context/AuthContext";
+import { kanbanPodeEstarIncompleto } from "../kanbanLimite";
 import { KANBAN_COLUMNS, STATUS_GANHO, STATUS_PERDIDO } from "../kanbanStatuses";
 import "./KanbanPage.css";
 
@@ -20,7 +23,7 @@ export function KanbanPage() {
 
   useEffect(() => {
     if (!token) return;
-    fetchLeads(token)
+    fetchLeads(token, LIMITE_LEADS_KANBAN)
       .then(setLeads)
       .catch((e) => {
         if (e instanceof UnauthorizedError) {
@@ -98,6 +101,16 @@ export function KanbanPage() {
 
       {erro && <p className="kanban-erro">{erro}</p>}
       {carregando && <p className="kanban-carregando">Carregando leads...</p>}
+
+      {!carregando && kanbanPodeEstarIncompleto(leads.length, LIMITE_LEADS_KANBAN) && (
+        <div className="kanban-aviso-limite" role="status">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <p>
+            Há mais leads no banco do que os {leads.length} exibidos aqui, e os contadores das colunas podem estar
+            incompletos. Para ver todos, consulte a <Link to="/leads">Lista de Leads</Link>.
+          </p>
+        </div>
+      )}
 
       {!carregando && (
         <DndContext sensors={sensors} onDragEnd={handleDragEnd}>

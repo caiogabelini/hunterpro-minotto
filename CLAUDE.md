@@ -872,6 +872,20 @@ PERDIDO else None`, never leaves a stale reason from a previous loss).
 same pattern as `prioridade`/`zona_franca`. Tests in
 `tests/test_leads_routes.py` (9 new).
 
+**`GET /api/leads` limit + ordering (2026-10-14).** With 120 leads in
+production the Kanban showed 50: it sent no `limit`, the default is 50, and
+the column counters (`leads.length`) were silently wrong. Now `limit` is
+`ge=1, le=LIMITE_MAXIMO_LIST_LEADS` (1000, default still 50), ordering is
+deterministic (`score_total DESC NULLS LAST, created_at DESC, id` — without
+the tiebreak, tied leads at the cutoff varied between loads), and the Kanban
+requests `LIMITE_LEADS_KANBAN` (`api.ts`, mirrors the backend constant, no
+automatic sync) and shows a warning pointing to the Lista de Leads when it
+receives exactly that many (`kanbanLimite.ts::kanbanPodeEstarIncompleto`).
+⚠️ Deploy the backend **before** the frontend: the new frontend sends
+`limit=1000`, which the old backend (`le=200`) rejects with 422. Per-column
+pagination (counters from `/api/dashboard/funil`) is the next step if the
+base ever approaches 1000.
+
 `GET /api/leads/{lead_id}` (added 2026-08-20, alongside the lead dossier
 screen — see below) is a separate route from both of the above: single-
 lead detail, same `get_current_user` protection. Added because

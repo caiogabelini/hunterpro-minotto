@@ -78,6 +78,11 @@ def _montar_dados_lead_insights(lead: Lead) -> dict:
     }
 
 
+# Teto de `limit` em GET /api/leads. O frontend (`LIMITE_LEADS_KANBAN` em
+# api.ts) espelha este número -- nada sincroniza os dois automaticamente.
+LIMITE_MAXIMO_LIST_LEADS = 1000
+
+
 @router.get("", response_model=list[LeadRead])
 def list_leads(
     db: Session = Depends(get_db),
@@ -85,7 +90,7 @@ def list_leads(
     prioridade: str | None = Query(default=None, description="Filtrar por A, B ou C"),
     zona_franca: bool | None = Query(default=None),
     kanban_status: str | None = Query(default=None, description="Filtrar por coluna do Kanban"),
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, ge=1, le=LIMITE_MAXIMO_LIST_LEADS),
 ):
     """
     Lista leads, com filtros básicos. Ordenado por score decrescente.
@@ -97,6 +102,18 @@ def list_leads(
     CNES...) ainda não está implementada — isso é o próximo passo,
     via workers do Celery. Este endpoint já deixa pronta a forma como
     o frontend vai consumir os leads assim que existirem no banco.
+
+    Quem consome de verdade é o Kanban, que pede `limit` igual ao teto
+    (`LIMITE_MAXIMO_LIST_LEADS`) e avisa na tela quando recebe exatamente
+    esse tanto -- sinal de que há mais leads no banco do que os exibidos.
+    O default continua 50 pra não mudar outros chamadores. (14/10/2026:
+    antes o teto era 200 e o Kanban não passava `limit`, então com 120
+    leads no banco ele mostrava 50 e escondia o resto sem aviso.)
+
+    Ordenação DETERMINÍSTICA: score desc, depois `created_at` desc, depois
+    `id`. Só por score, leads empatados na fronteira do `limit` vinham em
+    ordem arbitrária do banco -- um lead podia sumir e voltar do Kanban
+    entre dois carregamentos sem ninguém mexer nele.
     """
     stmt = select(Lead)
     if prioridade:
@@ -105,7 +122,11 @@ def list_leads(
         stmt = stmt.where(Lead.zona_franca == zona_franca)
     if kanban_status:
         stmt = stmt.where(Lead.kanban_status == kanban_status)
-    stmt = stmt.order_by(Lead.score_total.desc().nullslast()).limit(limit)
+    stmt = stmt.order_by(
+        Lead.score_total.desc().nullslast(),
+        Lead.created_at.desc(),
+        Lead.id,
+    ).limit(limit)
 
     return db.execute(stmt).scalars().all()
 
